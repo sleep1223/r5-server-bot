@@ -36,3 +36,15 @@ build/
 dist/
 *.egg-info/
 
+scripts/start2.ps1
+services/nonebot_service/pyproject.toml
+services/nonebot_service/uv.lock
+services/nonebot_service/src/plugins/r5/__init__.py
+services/nonebot_service/src/plugins/r5/api_client.py
+services/nonebot_service/src/plugins/r5/config.py
+services/nonebot_service/src/plugins/r5/services/admin.py
+services/nonebot_service/src/plugins/r5/services/common.py
+services/nonebot_service/src/plugins/r5/services/help.py
+services/nonebot_service/src/plugins/r5/services/kd.py
+services/nonebot_service/src/plugins/r5/services/query.py
+services/nonebot_service/src/plugins/r5/services/status.py

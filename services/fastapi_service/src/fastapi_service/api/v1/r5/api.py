@@ -19,12 +19,41 @@ from .netcon_client import R5NetConsole
 # 全局服务器缓存: "host:port" -> server_status_dict (包含 players, _server 等信息)
 global_server_cache: dict[str, dict] = {}
 
+# 原始服务器列表缓存
+raw_server_response_cache: dict[str, Any] = {}
+
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def generate_hash(data: str) -> str:
     hash_obj = SHA512.new(data.encode("utf-8"))
     return hash_obj.hexdigest()[:32]
+
+
+async def fetch_server_list_raw_task():
+    """持续调用 POST https://r5r-sl.ugniushosting.com/server 并缓存结果"""
+    logger.info("Starting raw server list sync task...")
+    url = "https://r5r-sl.ugniushosting.com/servers"
+    
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                response = await client.post(url, timeout=10.0)
+                if response.status_code == 200:
+                    data = response.json()
+                    raw_server_response_cache.clear()
+                    if isinstance(data, dict):
+                        raw_server_response_cache.update(data)
+                    else:
+                        # 如果返回的是列表或其他，包装一下或者存储在特定key
+                        raw_server_response_cache["data"] = data
+                    logger.debug("Raw server list updated")
+                else:
+                    logger.warning(f"Failed to fetch raw server list: {response.status_code}")
+            except Exception as e:
+                logger.error(f"Error fetching raw server list: {e}")
+            
+            await asyncio.sleep(5)
 
 
 async def sync_players_task():
@@ -230,6 +259,12 @@ async def verify_token(credentials: HTTPAuthorizationCredentials | None = Depend
 
 
 router = APIRouter()
+
+
+@router.get("/server")
+async def get_raw_server_list():
+    """获取原始服务器列表缓存数据，无需鉴权"""
+    return {"code": "0000", "data": raw_server_response_cache, "msg": "Raw server list retrieved"}
 
 
 @router.get("/server/info", dependencies=[Depends(verify_token)])

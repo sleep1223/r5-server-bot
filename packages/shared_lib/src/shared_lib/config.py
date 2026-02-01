@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     # FastAPI Service settings
     fastapi_host: str = "0.0.0.0"
     fastapi_port: int = 8000
+    fastapi_cors_origins: list[str] = ["*"]
     fastapi_access_tokens: list[str] = []
 
     # R5 Service settings
