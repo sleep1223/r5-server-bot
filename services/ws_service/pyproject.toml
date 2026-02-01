@@ -1,0 +1,17 @@
+[project]
+name = "ws-service"
+version = "0.1.0"
+description = "WebSocket Ingest Service"
+requires-python = ">=3.12"
+dependencies = [
+    "shared-lib",
+    "websockets>=16.0",
+    "uvicorn",
+]
+
+[tool.uv.sources]
+shared-lib = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

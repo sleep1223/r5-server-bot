@@ -1,0 +1,23 @@
+[project]
+name = "my-project-root"
+version = "0.1.0"
+description = "Monorepo root for WS and API services"
+requires-python = ">=3.12"
+dependencies = [
+    "aerich>=0.7.2",
+]
+
+[tool.uv.workspace]
+members = [
+    "packages/shared_lib",
+    "services/ws_service",
+    "services/fastapi_service"
+]
+exclude = [
+    "services/nonebot_service"
+]
+
+[tool.aerich]
+tortoise_orm = "shared_lib.database.TORTOISE_ORM"
+location = "./packages/shared_lib/migrations"
+src_folder = "./packages/shared_lib/src"
