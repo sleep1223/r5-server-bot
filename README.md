@@ -40,7 +40,7 @@ ws_port=7771
 # FastAPI 服务设置
 fastapi_host="0.0.0.0"
 fastapi_port=8000
-api_tokens='["your_api_token"]'
+fastapi_access_tokens='["your_api_token"]'
 ```
 
 ### 2. 游戏服务器配置

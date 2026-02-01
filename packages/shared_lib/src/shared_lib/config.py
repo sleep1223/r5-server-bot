@@ -14,14 +14,14 @@ class Settings(BaseSettings):
     # FastAPI Service settings
     fastapi_host: str = "0.0.0.0"
     fastapi_port: int = 8000
+    fastapi_access_tokens: list[str] = []
 
     # R5 Service settings
     r5_servers_url: str = "https://r5r-sl.ugniushosting.com/servers"
     r5_target_keys: list[str] = []
     r5_rcon_key: str = ""
     r5_rcon_password: str = ""
-
-    api_tokens: list[str] = []
+    
 
     @property
     def tortoise_orm(self) -> dict:

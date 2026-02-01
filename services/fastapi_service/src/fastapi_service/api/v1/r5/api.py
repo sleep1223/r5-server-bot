@@ -211,7 +211,7 @@ security_scheme = HTTPBearer(auto_error=False)
 
 
 async def verify_token(credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme)):
-    if not settings.api_tokens:
+    if not settings.fastapi_access_tokens:
         return
     if not credentials:
         raise HTTPException(
@@ -220,7 +220,7 @@ async def verify_token(credentials: HTTPAuthorizationCredentials | None = Depend
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if credentials.credentials not in settings.api_tokens:
+    if credentials.credentials not in settings.fastapi_access_tokens:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication token",
@@ -229,10 +229,10 @@ async def verify_token(credentials: HTTPAuthorizationCredentials | None = Depend
     return credentials
 
 
-router = APIRouter(dependencies=[Depends(verify_token)])
+router = APIRouter()
 
 
-@router.get("/server/info")
+@router.get("/server/info", dependencies=[Depends(verify_token)])
 async def get_server_info():
     # 优先使用缓存
     if not global_server_cache:
@@ -290,7 +290,7 @@ async def get_server_status(server_name: str | None = None):
     return {"code": "0000", "data": results, "msg": f"Server status for {len(results)} servers"}
 
 
-@router.get("/players")
+@router.get("/players", dependencies=[Depends(verify_token)])
 async def get_players(status: Literal["online", "offline", "banned", "kicked"] | None = "online", name: str | None = None, nucleus_id: int | None = None, limit: int = 100, offset: int = 0):
     query = Player.all()
     if status:
@@ -418,7 +418,7 @@ def get_online_location(player: Player) -> tuple[dict | None, dict | None]:
     return None, {"code": "4004", "data": None, "msg": f"Player {player.name} is not online"}
 
 
-@router.post("/players/{nucleus_id_or_player_name}/kick")
+@router.post("/players/{nucleus_id_or_player_name}/kick", dependencies=[Depends(verify_token)])
 async def kick_player(nucleus_id_or_player_name: int | str):
     player, error = await get_player_by_identifier(nucleus_id_or_player_name)
     if error:
@@ -461,7 +461,7 @@ async def kick_player(nucleus_id_or_player_name: int | str):
         return {"code": "3000", "data": None, "msg": f"Failed to kick player {player.nucleus_id}"}
 
 
-@router.post("/players/{nucleus_id_or_player_name}/ban")
+@router.post("/players/{nucleus_id_or_player_name}/ban", dependencies=[Depends(verify_token)])
 async def ban_player(nucleus_id_or_player_name: int | str):
     player, error = await get_player_by_identifier(nucleus_id_or_player_name)
     if error:
@@ -504,7 +504,7 @@ async def ban_player(nucleus_id_or_player_name: int | str):
         return {"code": "3000", "data": None, "msg": f"Failed to ban player {player.nucleus_id}"}
 
 
-@router.post("/players/{nucleus_id_or_player_name}/unban")
+@router.post("/players/{nucleus_id_or_player_name}/unban", dependencies=[Depends(verify_token)])
 async def unban_player(nucleus_id_or_player_name: int | str):
     player, error = await get_player_by_identifier(nucleus_id_or_player_name)
     if error:
