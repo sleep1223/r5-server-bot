@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 from shared_lib.config import settings
+from tortoise.exceptions import IntegrityError
 from tortoise.expressions import Q
 from tortoise.functions import Count
 
@@ -34,7 +35,7 @@ async def fetch_server_list_raw_task():
     """持续调用 POST https://r5r-sl.ugniushosting.com/server 并缓存结果"""
     logger.info("Starting raw server list sync task...")
     url = "https://r5r-sl.ugniushosting.com/servers"
-    
+
     async with httpx.AsyncClient() as client:
         while True:
             try:
@@ -52,7 +53,7 @@ async def fetch_server_list_raw_task():
                     logger.warning(f"Failed to fetch raw server list: {response.status_code}")
             except Exception as e:
                 logger.error(f"Error fetching raw server list: {e}")
-            
+
             await asyncio.sleep(5)
 
 
@@ -159,7 +160,8 @@ async def sync_players_task():
                                 # 匹配玩家对象
                                 matched_player = None
                                 for p in all_players:
-                                    if p.nucleus_id == r_nucleus_id or p.nucleus_hash == r_nucleus_hash:
+                                    # 兼容 int/str 类型比较
+                                    if str(p.nucleus_id) == str(r_nucleus_id) or p.nucleus_hash == r_nucleus_hash:
                                         matched_player = p
                                         break
 
@@ -185,9 +187,19 @@ async def sync_players_task():
                                     # 创建新玩家
                                     update_dict["online_at"] = datetime.now(CN_TZ)
                                     p_data["online_at"] = update_dict["online_at"]
-                                    new_player = await Player.create(**update_dict)
-                                    logger.info(f"Created new player {new_player.name} ({new_player.nucleus_id})")
-                                    all_players.append(new_player)
+                                    try:
+                                        new_player = await Player.create(**update_dict)
+                                        logger.info(f"Created new player {new_player.name} ({new_player.nucleus_id})")
+                                        all_players.append(new_player)
+                                    except IntegrityError:
+                                        logger.warning(f"Player {r_nucleus_id} already exists (race condition), fetching from DB...")
+                                        existing_p = await Player.get_or_none(Q(nucleus_id=r_nucleus_id) | Q(nucleus_hash=r_nucleus_hash))
+                                        if existing_p:
+                                            await existing_p.update_from_dict(update_dict).save()
+                                            p_data["online_at"] = update_dict["online_at"]
+                                            all_players.append(existing_p)
+                                        else:
+                                            logger.error(f"Failed to recover from IntegrityError for player {r_nucleus_id}")
 
                             # 如果到达此处，说明同步成功
                             current_server_cache[f"{s_ip}:{s_port}"] = status_data
