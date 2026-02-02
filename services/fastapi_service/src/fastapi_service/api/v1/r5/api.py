@@ -1,252 +1,18 @@
-import asyncio
-import os
-from datetime import datetime, time, timedelta
+import re
+from datetime import datetime
 from typing import Any, Literal
-from zoneinfo import ZoneInfo
 
-import httpx
-from Cryptodome.Hash import SHA512
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 from shared_lib.config import settings
-from tortoise.exceptions import IntegrityError
+from shared_lib.models import Player, PlayerKilled
 from tortoise.expressions import Q
 from tortoise.functions import Count
 
-from .models import Player, PlayerKilled
+from .cache import global_server_cache, raw_server_response_cache
 from .netcon_client import R5NetConsole
-
-# 全局服务器缓存: "host:port" -> server_status_dict (包含 players, _server 等信息)
-global_server_cache: dict[str, dict] = {}
-
-# 原始服务器列表缓存
-raw_server_response_cache: dict[str, Any] = {}
-
-CN_TZ = ZoneInfo("Asia/Shanghai")
-
-
-def generate_hash(data: str) -> str:
-    hash_obj = SHA512.new(data.encode("utf-8"))
-    return hash_obj.hexdigest()[:32]
-
-
-async def fetch_server_list_raw_task():
-    """持续调用 POST https://r5r-sl.ugniushosting.com/server 并缓存结果"""
-    logger.info("Starting raw server list sync task...")
-    url = "https://r5r-sl.ugniushosting.com/servers"
-
-    async with httpx.AsyncClient() as client:
-        while True:
-            try:
-                response = await client.post(url, timeout=10.0)
-                if response.status_code == 200:
-                    data = response.json()
-                    raw_server_response_cache.clear()
-                    if isinstance(data, dict):
-                        raw_server_response_cache.update(data)
-                    else:
-                        # 如果返回的是列表或其他，包装一下或者存储在特定key
-                        raw_server_response_cache["data"] = data
-                    logger.debug("Raw server list updated")
-                else:
-                    logger.warning(f"Failed to fetch raw server list: {response.status_code}")
-            except Exception as e:
-                logger.error(f"Error fetching raw server list: {e}")
-
-            await asyncio.sleep(5)
-
-
-async def sync_players_task():
-    """定期从 RCON 获取状态并更新玩家数据库。"""
-    logger.info("Starting player sync background task...")
-
-    target_keys = set(settings.r5_target_keys or [])
-    rcon_key = settings.r5_rcon_key
-    rcon_pwd = settings.r5_rcon_password
-    servers_url = settings.r5_servers_url
-
-    if not rcon_key or not rcon_pwd:
-        logger.warning("RCON sync disabled because r5_rcon_key or r5_rcon_password is empty")
-        return
-
-    while True:
-        try:
-            # --- 服务器列表更新开始 ---
-            server_list = None
-            try:
-
-                async def fetch_servers():
-                    async with httpx.AsyncClient() as client:
-                        response = await client.post(servers_url)
-                        response.raise_for_status()
-                        return response.json()["servers"]
-
-                server_list = await fetch_servers()
-            except Exception as e:
-                logger.error(f"Failed to fetch server list: {e}")
-
-            if server_list is not None:
-                try:
-                    # 过滤服务器
-                    filtered_servers = []
-                    for s in server_list:
-                        name = s.get("name", "")
-                        key = s.get("key", "")
-                        if "CN" in name and (not target_keys or key in target_keys):
-                            filtered_servers.append(s)
-
-                    # 预取所有玩家以优化匹配
-                    all_players = await Player.all()
-
-                    # 当前周期的临时缓存
-                    current_server_cache = {}
-
-                    # 跟踪当前周期的在线玩家以进行离线检测
-                    online_nucleus_ids = set()
-
-                    # 跟踪是否有服务器查询失败
-                    any_server_failed = False
-
-                    for s in filtered_servers:
-                        s_ip = s.get("ip")
-                        try:
-                            s_port = int(s.get("port"))
-                        except (ValueError, TypeError):
-                            continue
-
-                        if not s_ip or not s_port:
-                            continue
-
-                        # 新建
-                        client = R5NetConsole(s_ip, s_port, rcon_key)
-                        setattr(client, "rcon_password", rcon_pwd)
-
-                        try:
-                            # 连接 / 认证
-                            await client.connect()
-                            await client.authenticate_and_start(rcon_pwd)
-
-                            # 同步玩家
-                            status_data = await client.get_status()
-                            players_data = status_data.get("players", [])
-
-                            # 为状态数据添加元数据
-                            status_data["_server"] = f"{s_ip}:{s_port}"
-                            status_data["_api_name"] = s.get("name", "Unknown Server")
-
-                            for p_data in players_data:
-                                r_nucleus_id = p_data.get("uniqueid")
-                                if not r_nucleus_id:
-                                    continue
-
-                                r_nucleus_hash = generate_hash(r_nucleus_id)
-                                online_nucleus_ids.add(r_nucleus_id)
-
-                                # 修正 ping 值 (除以 2)
-                                raw_ping = p_data.get("ping", 0)
-                                real_ping = raw_ping // 2
-                                p_data["ping"] = real_ping
-
-                                update_dict: dict[str, Any] = dict(
-                                    nucleus_id=r_nucleus_id,
-                                    nucleus_hash=r_nucleus_hash,
-                                    ip=p_data.get("ip"),
-                                    ping=real_ping,
-                                    loss=p_data.get("loss", 0),
-                                    status="online",
-                                )
-
-                                # 匹配玩家对象
-                                matched_player = None
-                                for p in all_players:
-                                    # 兼容 int/str 类型比较
-                                    if str(p.nucleus_id) == str(r_nucleus_id) or p.nucleus_hash == r_nucleus_hash:
-                                        matched_player = p
-                                        break
-
-                                if p_data.get("name"):
-                                    update_dict["name"] = p_data.get("name")
-
-                                # 注入 online_at 到缓存数据中
-                                if matched_player and matched_player.online_at:
-                                    # 如果玩家已在线，使用数据库中的时间
-                                    p_data["online_at"] = matched_player.online_at
-                                else:
-                                    # 否则认为是新上线
-                                    p_data["online_at"] = datetime.now(CN_TZ)
-
-                                if matched_player:
-                                    if matched_player.status != "online" or not matched_player.online_at:
-                                        update_dict["online_at"] = datetime.now(CN_TZ)
-                                        # 也要更新缓存中的时间
-                                        p_data["online_at"] = update_dict["online_at"]
-
-                                    await matched_player.update_from_dict(update_dict).save()
-                                else:
-                                    # 创建新玩家
-                                    update_dict["online_at"] = datetime.now(CN_TZ)
-                                    p_data["online_at"] = update_dict["online_at"]
-                                    try:
-                                        new_player = await Player.create(**update_dict)
-                                        logger.info(f"Created new player {new_player.name} ({new_player.nucleus_id})")
-                                        all_players.append(new_player)
-                                    except IntegrityError:
-                                        logger.warning(f"Player {r_nucleus_id} already exists (race condition), fetching from DB...")
-                                        existing_p = await Player.get_or_none(Q(nucleus_id=r_nucleus_id) | Q(nucleus_hash=r_nucleus_hash))
-                                        if existing_p:
-                                            await existing_p.update_from_dict(update_dict).save()
-                                            p_data["online_at"] = update_dict["online_at"]
-                                            all_players.append(existing_p)
-                                        else:
-                                            logger.error(f"Failed to recover from IntegrityError for player {r_nucleus_id}")
-
-                            # 如果到达此处，说明同步成功
-                            current_server_cache[f"{s_ip}:{s_port}"] = status_data
-
-                        except Exception as e:
-                            logger.error(f"Error syncing players from {client.host}: {e}")
-                            any_server_failed = True
-                        finally:
-                            await client.close()
-
-                    # 更新全局缓存
-                    global_server_cache.clear()
-                    global_server_cache.update(current_server_cache)
-
-                    # 处理离线玩家
-                    # 如果有任何服务器查询失败，我们跳过离线检测以避免错误地将玩家标记为离线
-                    if not any_server_failed:
-                        for p in all_players:
-                            if p.nucleus_id and str(p.nucleus_id) not in online_nucleus_ids:
-                                if p.status == "online":
-                                    p.status = "offline"
-                                    p.online_at = None
-                                    await p.save()
-                                elif p.status == "banned":
-                                    pass  # 保持封禁状态
-
-                                if str(p.nucleus_id) not in online_nucleus_ids:
-                                    if p.status not in ("offline", "banned"):
-                                        p.status = "offline"
-                                        p.online_at = None
-                                        await p.save()
-                    else:
-                        logger.warning("Skipping offline detection due to server sync failures")
-
-                    logger.info(f"Player sync cycle completed. Active servers: {len(global_server_cache)}")
-
-                except Exception as e:
-                    logger.error(f"Error updating rcon clients: {e}")
-
-        except asyncio.CancelledError:
-            logger.info("Player sync task cancelled")
-            break
-        except Exception as e:
-            logger.error(f"Error in sync_players_task: {e}")
-
-        await asyncio.sleep(10)
-
+from .utils import CN_TZ, get_date_range
 
 security_scheme = HTTPBearer(auto_error=False)
 
@@ -311,24 +77,47 @@ async def get_server_status(server_name: str | None = None):
             if server_name and server_name.lower() not in full_name.lower():
                 continue
 
-            # 缩写名称
-            # 规则："[CN(Shanghai)] PWLA 1v1 server..." -> "[CN(Shanghai)]"
-            # 正则表达式以查找开头的 [...]
-            import re
-
-            match = re.match(r"^(\[.*?\])", full_name)
-            short_name = match.group(1) if match else full_name
+            # 从缓存获取数据
+            short_name = server_cache.get("short_name")
+            if not short_name:
+                # Fallback if cache outdated
+                match = re.match(r"^(\[.*?\])", full_name)
+                short_name = match.group(1) if match else full_name
 
             player_count = len(server_cache.get("players", []))
 
-            # 对于 ping，R5NetConsole 在我看到的片段中似乎没有明确测量它。
-            # 我们将使用占位符，或者如果 `status` 有它。
-            server_ping = 0  # 占位符
+            host_str = server_cache.get("_server", "")
+            host_ip = server_cache.get("ip")
+            if not host_ip and host_str:
+                host_ip = host_str.split(":")[0]
+
+            host_port = server_cache.get("port")
+            if not host_port and host_str and ":" in host_str:
+                try:
+                    host_port = int(host_str.split(":")[1])
+                except Exception:
+                    host_port = 0
+
+            country = server_cache.get("country")
+            region = server_cache.get("region")
+            server_ping = server_cache.get("server_ping", 0)
 
             # 获取玩家列表
             player_list = [p.get("name", "Unknown") for p in server_cache.get("players", [])]
 
-            results.append({"name": short_name, "full_name": full_name, "player_count": player_count, "ping": server_ping, "host": server_cache.get("_server"), "players": player_list})
+            results.append({
+                "name": full_name,
+                "short_name": short_name,
+                "full_name": full_name,
+                "player_count": player_count,
+                "ping": server_ping,
+                "ip": host_ip,
+                "port": host_port,
+                "country": country,
+                "region": region,
+                "host": host_str,
+                "players": player_list,
+            })
 
         except Exception as e:
             logger.error(f"Error processing status for {server_cache.get('_server')}: {e}")
@@ -338,7 +127,15 @@ async def get_server_status(server_name: str | None = None):
 
 
 @router.get("/players", dependencies=[Depends(verify_token)])
-async def get_players(status: Literal["online", "offline", "banned", "kicked"] | None = "online", name: str | None = None, nucleus_id: int | None = None, limit: int = 100, offset: int = 0):
+async def get_players(
+    status: Literal["online", "offline", "banned", "kicked"] | None = "online",
+    name: str | None = None,
+    nucleus_id: int | None = None,
+    country: str | None = None,
+    region: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+):
     query = Player.all()
     if status:
         query = query.filter(status=status)
@@ -348,6 +145,12 @@ async def get_players(status: Literal["online", "offline", "banned", "kicked"] |
 
     if nucleus_id:
         query = query.filter(nucleus_id=nucleus_id)
+
+    if country:
+        query = query.filter(country__icontains=country)
+
+    if region:
+        query = query.filter(region__icontains=region)
 
     total = await query.count()
     players = await query.limit(limit).offset(offset).values()
@@ -360,6 +163,7 @@ async def query_player(q: int | str):
     通过 nucleus_id (int/str) 或名称 (模糊搜索) 查询玩家。
     返回匹配的玩家列表及其在线状态。
     """
+
     # 1. 构建过滤器
     filter_q = Q(Q(nucleus_hash=q) | Q(name__icontains=q))
     if str(q).isdigit():
@@ -396,6 +200,11 @@ async def query_player(q: int | str):
                             "server_port": port,
                             "online_at": p_data.get("online_at"),
                             "ping": p_data.get("ping", 0),
+                            # Cached metadata
+                            "short_name": s_status.get("short_name"),
+                            "country": s_status.get("country"),
+                            "region": s_status.get("region"),
+                            "server_ping": s_status.get("server_ping", 0),
                         }
                         found_in_server = True
                         break
@@ -409,7 +218,26 @@ async def query_player(q: int | str):
 
         if target_loc:
             is_online = True
-            server_info = {"name": target_loc.get("server_name"), "host": target_loc.get("server_host"), "port": target_loc.get("server_port")}
+
+            server_full_name = target_loc.get("server_name")
+
+            # Short name fallback
+            short_name = target_loc.get("short_name")
+            if not short_name:
+                match = re.match(r"^(\[.*?\])", server_full_name)
+                short_name = match.group(1) if match else server_full_name
+
+            server_info = {
+                "name": server_full_name,
+                "short_name": short_name,
+                "host": target_loc.get("server_host"),
+                "port": target_loc.get("server_port"),
+                "ip": target_loc.get("server_host"),
+                "country": target_loc.get("country"),
+                "region": target_loc.get("region"),
+                "ping": target_loc.get("server_ping"),
+            }
+
             ping = target_loc.get("ping", 0)
             online_at = target_loc.get("online_at")
             if online_at:
@@ -427,7 +255,15 @@ async def query_player(q: int | str):
             "server": server_info,
             "duration_seconds": int(duration) if duration is not None else 0,
             "ping": ping,
-            "player": {"name": player.name, "nucleus_id": player.nucleus_id, "status": player.status, "ban_count": player.ban_count, "kick_count": player.kick_count},
+            "player": {
+                "name": player.name,
+                "nucleus_id": player.nucleus_id,
+                "status": player.status,
+                "ban_count": player.ban_count,
+                "kick_count": player.kick_count,
+                "country": player.country,
+                "region": player.region,
+            },
         })
 
     return {"code": "0000", "data": results, "msg": f"Found {len(results)} players"}
@@ -593,30 +429,6 @@ async def unban_player(nucleus_id_or_player_name: int | str):
         if not global_server_cache:
             return {"code": "3000", "data": None, "msg": "No online servers found to execute unban"}
         return {"code": "3000", "data": None, "msg": f"Failed to unban player {player.nucleus_id}"}
-
-
-def get_date_range(range_type: str):
-    now = datetime.now(CN_TZ)
-    start_time = None
-    end_time = None
-
-    if range_type == "today":
-        start_time = datetime.combine(now.date(), time.min, tzinfo=CN_TZ)
-        end_time = now
-    elif range_type == "yesterday":
-        yesterday = now - timedelta(days=1)
-        start_time = datetime.combine(yesterday.date(), time.min, tzinfo=CN_TZ)
-        end_time = datetime.combine(yesterday.date(), time.max, tzinfo=CN_TZ)
-    elif range_type == "week":
-        # 周一作为一周的开始
-        start_of_week = now.date() - timedelta(days=now.weekday())
-        start_time = datetime.combine(start_of_week, time.min, tzinfo=CN_TZ)
-        end_time = now
-    elif range_type == "month":
-        start_time = datetime.combine(now.date().replace(day=1), time.min, tzinfo=CN_TZ)
-        end_time = now
-
-    return start_time, end_time
 
 
 @router.get("/leaderboard/kd")

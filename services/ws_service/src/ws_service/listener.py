@@ -45,7 +45,14 @@ class LiveAPIListener:
             return None
 
         try:
-            player, created = await Player.update_or_create(nucleus_hash=player_msg.nucleusHash, defaults={"name": player_msg.name, "hardware_name": player_msg.hardwareName})
+            defaults = {"name": player_msg.name, "hardware_name": player_msg.hardwareName}
+            # 如果 LiveAPI 提供 IP 和 ping 信息，这里可以一起更新
+            if getattr(player_msg, "ip", None):
+                defaults["ip"] = player_msg.ip
+            # if getattr(player_msg, "ping", None):
+            #     defaults["ping"] = player_msg.ping
+
+            player, created = await Player.update_or_create(nucleus_hash=player_msg.nucleusHash, defaults=defaults)
             return player
         except Exception as e:
             logger.error(f"Error updating player: {e}")

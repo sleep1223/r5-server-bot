@@ -20,6 +20,8 @@ class Player(models.Model):
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)
 
+    ip_infos: fields.ReverseRelation["IpInfo"]
+
     class Meta:
         table = "players"
 
@@ -99,3 +101,19 @@ class PlayerKilled(BaseEvent):
 
     class Meta:
         table = "player_killed"
+
+
+class IpInfo(models.Model):
+    id = fields.IntField(pk=True)
+    ip = fields.CharField(max_length=50, unique=True, db_index=True)
+    country = fields.TextField(null=True)
+    region = fields.TextField(null=True)
+    ping = fields.IntField(default=0)
+    is_resolved = fields.BooleanField(default=False)
+    created_at = fields.DatetimeField(auto_now_add=True)
+    updated_at = fields.DatetimeField(auto_now=True)
+
+    players = fields.ManyToManyField(model_name="models.Player", related_name="ip_infos", through="player_ip_links")
+
+    class Meta:
+        table = "ip_info"
