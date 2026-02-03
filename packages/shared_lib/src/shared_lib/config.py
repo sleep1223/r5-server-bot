@@ -22,7 +22,9 @@ class Settings(BaseSettings):
     r5_target_keys: list[str] = []
     r5_rcon_key: str = ""
     r5_rcon_password: str = ""
-    
+
+    # Data settings
+    qqwry_path: str = "services/fastapi_service/data/qqwry.dat"
 
     @property
     def tortoise_orm(self) -> dict:

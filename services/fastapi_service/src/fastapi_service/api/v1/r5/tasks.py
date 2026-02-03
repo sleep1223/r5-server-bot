@@ -7,6 +7,7 @@ import httpx
 from loguru import logger
 from shared_lib.config import settings
 from shared_lib.models import IpInfo, Player
+from shared_lib.utils.ip import resolve_ip
 from tortoise.exceptions import IntegrityError
 from tortoise.expressions import Q
 
@@ -84,11 +85,8 @@ async def ip_resolution_task():
                             info.region = data.get("region")
                             info.is_resolved = True
                             await info.save()
-                        players_with_ip = await Player.filter(ip=ip).all()
-                        for p in players_with_ip:
-                            p.country = data.get("country")
-                            p.region = data.get("region")
-                            await p.save()
+
+                        await Player.filter(ip=ip).update(country=data.get("country"), region=data.get("region"))
                     except Exception as e:
                         logger.error(f"Error saving IP info for {ip}: {e}")
             for ip in server_ips:
@@ -184,6 +182,16 @@ async def sync_players_task():
                                 update_dict: dict[str, Any] = dict(
                                     nucleus_id=r_nucleus_id, nucleus_hash=r_nucleus_hash, ip=p_data.get("ip"), ping=real_ping, loss=p_data.get("loss", 0), status="online"
                                 )
+
+                                # Resolve IP
+                                if p_data.get("ip"):
+                                    ip_info_res = resolve_ip(p_data.get("ip"))
+                                    if ip_info_res:
+                                        if ip_info_res.get("country"):
+                                            update_dict["country"] = ip_info_res["country"]
+                                        if ip_info_res.get("region"):
+                                            update_dict["region"] = ip_info_res["region"]
+
                                 matched_player = None
                                 for p in all_players:
                                     if str(p.nucleus_id) == str(r_nucleus_id) or p.nucleus_hash == r_nucleus_hash:
