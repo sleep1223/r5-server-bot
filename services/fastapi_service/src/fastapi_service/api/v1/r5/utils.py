@@ -1,12 +1,9 @@
 import asyncio
-import os
 import platform
 import re
 from datetime import datetime, time, timedelta
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
-import httpx
 from Cryptodome.Hash import SHA512
 from loguru import logger
 from shared_lib.utils.ip import resolve_ips_batch as _resolve_ips_batch
