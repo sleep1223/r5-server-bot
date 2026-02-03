@@ -10,7 +10,8 @@ dependencies = [
     "aiosqlite>=0.17.0",
     "protobuf>=6.33.4",
     "loguru>=0.7.3",
-    "pycryptodomex>=3.23.0"
+    "pycryptodomex>=3.23.0",
+    "qqwry-py3>=1.2.1"
 ]
 
 [project.optional-dependencies]

@@ -12,7 +12,6 @@ dependencies = [
     "pycryptodomex>=3.23.0",
     "tortoise-orm[asyncpg]>=0.25.3",
     "schedule>=1.2.2",
-    "qqwry-py3>=1.2.1",
 ]
 
 [tool.uv.sources]
