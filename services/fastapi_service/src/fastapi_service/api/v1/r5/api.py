@@ -336,9 +336,8 @@ async def kick_player(nucleus_id_or_player_name: int | str):
 
     if success:
         if player:
-            player.kick_count += 1
-            player.status = "kicked"
-            await player.save()
+            # 改为原子锁+1
+            await Player.filter(nucleus_id=player.nucleus_id).update(kick_count=Player.kick_count + 1, status="kicked")
         return {"code": "0000", "data": None, "msg": f"Player {player.nucleus_id} kicked from {target_loc['server_name']}"}
     else:
         return {"code": "3000", "data": None, "msg": f"Failed to kick player {player.nucleus_id}"}
@@ -379,9 +378,8 @@ async def ban_player(nucleus_id_or_player_name: int | str):
 
     if success:
         if player:
-            player.ban_count += 1
-            player.status = "banned"
-            await player.save()
+            # 改为原子锁+1
+            await Player.filter(nucleus_id=player.nucleus_id).update(ban_count=Player.ban_count + 1, status="banned")
         return {"code": "0000", "data": None, "msg": f"Player {player.nucleus_id} banned on {target_loc['server_name']}"}
     else:
         return {"code": "3000", "data": None, "msg": f"Failed to ban player {player.nucleus_id}"}
@@ -576,4 +574,76 @@ async def get_player_vs_all_stats(nucleus_id_or_player_name: int | str):
     # 按 KD 降序排序
     results.sort(key=lambda x: (x["kd"], x["kills"]), reverse=True)
 
-    return {"code": "0000", "data": results, "msg": f"KD Leaderboard for {nucleus_id_or_player_name}"}
+    # Calculate Summary
+    total_kills = len(kills_list)
+    total_deaths = len(deaths_list)
+    total_kd = 0.0
+    if total_deaths > 0:
+        total_kd = round(total_kills / total_deaths, 2)
+    else:
+        total_kd = float(total_kills)
+
+    # Find Nemesis (宿敌) - High interaction, KD close to 1
+    # Definition: 0.6 <= KD <= 1.6, Max (Kills + Deaths)
+    nemesis = None
+    max_interaction = 0
+    
+    # Find Worst Enemy (被暴打) - Highest Enemy KD (Deaths / Kills)
+    worst_enemy = None
+    
+    # Calculate Enemy KD for all results
+    for r in results:
+        k = r["kills"]
+        d = r["deaths"]
+        if k == 0:
+            # If kills is 0, enemy kd is infinite. We use a large number + deaths for sorting
+            r["enemy_kd"] = float(d) * 10000.0 
+            r["enemy_kd_display"] = float(d) # For display purposes if needed, or just use d
+        else:
+            r["enemy_kd"] = round(d / k, 2)
+            r["enemy_kd_display"] = r["enemy_kd"]
+
+    # Sort by Enemy KD desc, then Deaths desc
+    sorted_by_worst = sorted(results, key=lambda x: (x["enemy_kd"], x["deaths"]), reverse=True)
+    
+    # Try to find worst enemy with at least 5 deaths, then 2, then any
+    candidates = [r for r in sorted_by_worst if r["deaths"] >= 5]
+    if not candidates:
+        candidates = [r for r in sorted_by_worst if r["deaths"] >= 2]
+    if not candidates:
+        candidates = sorted_by_worst
+        
+    if candidates:
+        worst_enemy = candidates[0]
+        # Ensure the dict has the enemy_kd value
+        # Note: 'results' items are modified in place above, so they already have 'enemy_kd'
+
+    # Logic for Nemesis
+    for r in results:
+        k = r["kills"]
+        d = r["deaths"]
+        kd = r["kd"]
+        interaction = k + d
+        
+        # Check KD range (Close to 1)
+        if 0.6 <= kd <= 1.66:
+            if interaction > max_interaction:
+                max_interaction = interaction
+                nemesis = r
+
+    summary = {
+        "total_kills": total_kills,
+        "total_deaths": total_deaths,
+        "kd": total_kd,
+        "nemesis": nemesis,
+        "worst_enemy": worst_enemy
+    }
+
+    player_info = {
+        "name": player.name,
+        "nucleus_id": player.nucleus_id,
+        "country": player.country,
+        "region": player.region
+    }
+
+    return {"code": "0000", "data": results, "summary": summary, "player": player_info, "msg": f"KD Leaderboard for {nucleus_id_or_player_name}"}
