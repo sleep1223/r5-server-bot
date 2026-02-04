@@ -117,3 +117,16 @@ class IpInfo(models.Model):
 
     class Meta:
         table = "ip_info"
+
+
+class Donation(models.Model):
+    id = fields.IntField(pk=True)
+    donor_name = fields.CharField(max_length=255, null=True, db_index=True)
+    amount = fields.DecimalField(max_digits=10, decimal_places=2)
+    currency = fields.CharField(max_length=10, default="CNY")
+    message = fields.TextField(null=True)
+    created_at = fields.DatetimeField(auto_now_add=True)
+    updated_at = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "donations"
