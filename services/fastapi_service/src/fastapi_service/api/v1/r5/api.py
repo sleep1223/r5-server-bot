@@ -303,11 +303,11 @@ def get_online_location(player: Player) -> tuple[dict | None, dict | None]:
 
 @router.post("/players/{nucleus_id_or_player_name}/kick", dependencies=[Depends(verify_token)])
 async def kick_player(nucleus_id_or_player_name: int | str):
-    player, error = await get_player_by_identifier(nucleus_id_or_player_name)
+    player_obj, error = await get_player_by_identifier(nucleus_id_or_player_name)
     if error:
         return error
 
-    target_loc, error = get_online_location(player)
+    target_loc, error = get_online_location(player_obj)
     if error:
         return error
 
@@ -327,7 +327,7 @@ async def kick_player(nucleus_id_or_player_name: int | str):
     try:
         await client.connect()
         await client.authenticate_and_start(rcon_pwd)
-        if await client.kick(player.nucleus_id):
+        if await client.kick(player_obj.nucleus_id):
             success = True
     except Exception as e:
         logger.error(f"Failed to kick player on {target_host}:{target_port}: {e}")
@@ -335,21 +335,21 @@ async def kick_player(nucleus_id_or_player_name: int | str):
         await client.close()
 
     if success:
-        if player:
+        if player_obj:
             # 改为原子锁+1
-            await Player.filter(nucleus_id=player.nucleus_id).update(kick_count=Player.kick_count + 1, status="kicked")
-        return {"code": "0000", "data": None, "msg": f"Player {player.nucleus_id} kicked from {target_loc['server_name']}"}
+            await Player.filter(nucleus_id=player_obj.nucleus_id).update(kick_count=player_obj.kick_count + 1, status="kicked")
+        return {"code": "0000", "data": None, "msg": f"Player {player_obj.nucleus_id} kicked from {target_loc['server_name']}"}
     else:
-        return {"code": "3000", "data": None, "msg": f"Failed to kick player {player.nucleus_id}"}
+        return {"code": "3000", "data": None, "msg": f"Failed to kick player {player_obj.nucleus_id}"}
 
 
 @router.post("/players/{nucleus_id_or_player_name}/ban", dependencies=[Depends(verify_token)])
 async def ban_player(nucleus_id_or_player_name: int | str):
-    player, error = await get_player_by_identifier(nucleus_id_or_player_name)
+    player_obj, error = await get_player_by_identifier(nucleus_id_or_player_name)
     if error:
         return error
 
-    target_loc, error = get_online_location(player)
+    target_loc, error = get_online_location(player_obj)
     if error:
         return error
 
@@ -369,7 +369,7 @@ async def ban_player(nucleus_id_or_player_name: int | str):
     try:
         await client.connect()
         await client.authenticate_and_start(rcon_pwd)
-        if await client.ban(player.nucleus_id):
+        if await client.ban(player_obj.nucleus_id):
             success = True
     except Exception as e:
         logger.error(f"Failed to ban player on {target_host}:{target_port}: {e}")
@@ -377,17 +377,17 @@ async def ban_player(nucleus_id_or_player_name: int | str):
         await client.close()
 
     if success:
-        if player:
+        if player_obj:
             # 改为原子锁+1
-            await Player.filter(nucleus_id=player.nucleus_id).update(ban_count=Player.ban_count + 1, status="banned")
-        return {"code": "0000", "data": None, "msg": f"Player {player.nucleus_id} banned on {target_loc['server_name']}"}
+            await Player.filter(nucleus_id=player_obj.nucleus_id).update(ban_count=player_obj.ban_count + 1, status="banned")
+        return {"code": "0000", "data": None, "msg": f"Player {player_obj.nucleus_id} banned on {target_loc['server_name']}"}
     else:
-        return {"code": "3000", "data": None, "msg": f"Failed to ban player {player.nucleus_id}"}
+        return {"code": "3000", "data": None, "msg": f"Failed to ban player {player_obj.nucleus_id}"}
 
 
 @router.post("/players/{nucleus_id_or_player_name}/unban", dependencies=[Depends(verify_token)])
 async def unban_player(nucleus_id_or_player_name: int | str):
-    player, error = await get_player_by_identifier(nucleus_id_or_player_name)
+    player_obj, error = await get_player_by_identifier(nucleus_id_or_player_name)
     if error:
         return error
 
@@ -409,7 +409,7 @@ async def unban_player(nucleus_id_or_player_name: int | str):
             try:
                 await client.connect()
                 await client.authenticate_and_start(rcon_pwd)
-                if await client.unban(player.nucleus_id):
+                if await client.unban(player_obj.nucleus_id):
                     success = True
             finally:
                 await client.close()
@@ -418,15 +418,15 @@ async def unban_player(nucleus_id_or_player_name: int | str):
             continue
 
     if success:
-        if player:
-            player.status = "offline"  # 或者其他默认值
-            await player.save()
-        return {"code": "0000", "data": None, "msg": f"Player {player.nucleus_id} unbanned"}
+        if player_obj:
+            player_obj.status = "offline"  # 或者其他默认值
+            await player_obj.save()
+        return {"code": "0000", "data": None, "msg": f"Player {player_obj.nucleus_id} unbanned"}
     else:
         # 如果没有任何成功，可能是因为没有在线服务器，或者都不成功
         if not global_server_cache:
             return {"code": "3000", "data": None, "msg": "No online servers found to execute unban"}
-        return {"code": "3000", "data": None, "msg": f"Failed to unban player {player.nucleus_id}"}
+        return {"code": "3000", "data": None, "msg": f"Failed to unban player {player_obj.nucleus_id}"}
 
 
 @router.get("/leaderboard/kd")
