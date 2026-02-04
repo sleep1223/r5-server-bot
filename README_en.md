@@ -8,16 +8,22 @@ This guide introduces how to configure the environment and start the various ser
 
 ### 1. Configure pip Mirror (Optional)
 To accelerate the download of dependency packages, it is recommended to configure a domestic mirror source:
-```powershell
+```shell
 pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
 ```
 
 ### 2. Install uv
 This project uses `uv` for dependency management and execution:
-```powershell
+```shell
 pip install uv
 ```
 *Note: After installation, please restart the terminal to ensure the `uv` command takes effect.*
+
+### 3. Install nb-cli
+It is recommended to install the `nb-cli` tool for managing NoneBot:
+```shell
+uv tool install nb-cli
+```
 
 ## Configuration
 
@@ -70,7 +76,7 @@ The following steps assume you have entered the project root directory in your t
 
 ### 1. Install Dependencies
 Install all packages in the workspace:
-```powershell
+```shell
 uv sync --all-packages
 ```
 
@@ -78,28 +84,21 @@ uv sync --all-packages
 Please start the following services in **three different terminal windows**.
 
 #### Window 1: Start WebSocket Service
-```powershell
+```shell
 uv run python -m ws_service.main
 ```
 
 #### Window 2: Start FastAPI Service
-```powershell
+```shell
 uv run python -m fastapi_service.main
 ```
 
 #### Window 3: Start NoneBot Service
 **Note**: The NoneBot service depends on the FastAPI service, please ensure the FastAPI service has started successfully.
 
-Enter the NoneBot service directory and start:
-```powershell
+Enter the NoneBot service directory, sync dependencies, and start:
+```shell
 cd services\nonebot_service
-```
-
-Start using either of the following commands:
-```powershell
-# Method 1: Use uvx (Recommended, no manual installation of nb-cli required)
-uvx --from nb-cli nb.exe run
-
-# Method 2: If nb-cli is already installed
-# uv run nb run
+uv sync
+nb run
 ```
