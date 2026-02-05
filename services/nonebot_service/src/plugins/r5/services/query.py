@@ -58,6 +58,9 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
             msg += (
                 f"   状态: {status_str} | 封禁: {ban_count} | 踢出: {kick_count}\n"
             )
+            country = p.get("country") or "未知"
+            region = p.get("region") or "未知"
+            msg += f"   地区: {country} / {region}\n"
 
             if is_online:
                 msg += f"   Ping: {ping}ms\n"
