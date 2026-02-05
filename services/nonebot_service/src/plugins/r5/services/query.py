@@ -55,9 +55,7 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
                 status_icon = "🚫"
 
             msg += f"{status_icon} {p.get('name')} (ID: {p.get('nucleus_id')})\n"
-            msg += (
-                f"   状态: {status_str} | 封禁: {ban_count} | 踢出: {kick_count}\n"
-            )
+            msg += f"   状态: {status_str} | 封禁: {ban_count} | 踢出: {kick_count}\n"
             country = p.get("country") or "未知"
             region = p.get("region") or "未知"
             msg += f"   地区: {country} / {region}\n"
@@ -65,7 +63,8 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
             if is_online:
                 msg += f"   Ping: {ping}ms\n"
                 if server:
-                    msg += f"   服务器: {server.get('name')}\n"
+                    server_name = server.get("short_name") or server.get("name")
+                    msg += f"   服务器: {server_name}\n"
                 duration = item.get("duration_seconds", 0)
                 msg += f"   在线时长: {duration // 60} 分钟\n"
 

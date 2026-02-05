@@ -117,10 +117,12 @@ async def handle_check_kd(args: Message = CommandArg()) -> None:
         if not data:
             await check_kd.finish(f"ℹ️ 玩家 {target} 暂无对战记录")
 
-        # Format message
-        msg = f"📊 {target} 对战数据\n"
-
         player_info = req.get("player")
+        player_name = player_info.get("name") or target
+
+        # Format message
+        msg = f"📊 {player_name} 对战数据\n"
+
         if player_info:
             country = player_info.get("country") or "未知"
             region = player_info.get("region") or "未知"
@@ -172,7 +174,7 @@ async def handle_check_kd(args: Message = CommandArg()) -> None:
         if len(data) > 20:
             msg += f"\n... 以及其他 {len(data) - 20} 名玩家"
 
-        msg += "\n🖥️ 在线服务器面板: https://r5.sleep0.de"
+        msg += f"\n🖥️ 详细数据: https://r5.sleep0.de/player/{player_name}"
         await check_kd.finish(msg.strip())
 
     except FinishedException:
