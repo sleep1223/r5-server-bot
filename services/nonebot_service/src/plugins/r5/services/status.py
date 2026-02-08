@@ -47,8 +47,9 @@ async def handle_server_status(args: Message = CommandArg()) -> None:
         for s in data:
             name = s.get("short_name") or s.get("name", "Unknown")
             count = s.get("player_count", 0)
+            max_players = s.get("max_players", 0)
             ping = s.get("ping", 0)
-            msg += f"[{name}] 👥 在线: {count} | 📶 Ping: {ping}\n"
+            msg += f"[{name}] 👥 在线: {count}/{max_players} | 📶 Ping: {ping}\n"
 
         await server_status.finish(msg.strip())
 

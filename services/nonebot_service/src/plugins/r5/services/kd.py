@@ -58,7 +58,7 @@ async def handle_kd_rank(args: Message = CommandArg()) -> None:
     try:
         resp = await api_client.get_kd_leaderboard(
             range_type=params.get("range"),
-            limit=params.get("limit"),
+            page_size=params.get("limit"),
             sort=params.get("sort"),
             min_kills=params.get("min_kills"),
             timeout=3.0,

@@ -31,16 +31,18 @@ class R5NetConsole:
         self.console_log_queue: asyncio.Queue[str] = asyncio.Queue()
         self._read_task: asyncio.Task[None] | None = None
 
-    async def connect(self, timeout: float = 10.0) -> None:  # noqa: ASYNC109
+    async def connect(self, timeout: float = 10.0) -> bool:
         logger.info(f"正在连接到 {self.host}:{self.port}...")
         try:
             self.reader, self.writer = await asyncio.wait_for(asyncio.open_connection(self.host, self.port), timeout=timeout)
             self.connected = True
             logger.success("已连接。")
+            return True
             # 不要在此时启动后台读取器，以避免与 authenticate() 发生竞争条件
         except TimeoutError:
             logger.error(f"连接到 {self.host}:{self.port} 超时，耗时 {timeout}秒。")
             raise
+        return False
 
     async def close(self) -> None:
         self.connected = False
@@ -234,14 +236,20 @@ class R5NetConsole:
     async def kick(self, nucleus_id: str | int, reason: str = "") -> bool:
         cmd = f"kickid {nucleus_id}"
         if reason:
-            cmd += f' "{reason}"'
+            # User requested format: kickid <uid> #<REASON>
+            if not reason.startswith("#"):
+                reason = f"#{reason}"
+            cmd += f" {reason}"
         resp = await self.exec_command(cmd)
         return f"Kicked '{nucleus_id}' from server" in resp
 
     async def ban(self, nucleus_id: str | int, reason: str = "") -> bool:
-        cmd = f"banid {nucleus_id}"
+        cmd = f"bannid {nucleus_id}"
         if reason:
-            cmd += f' "{reason}"'
+            # User requested format: banid <uid> #<REASON>
+            if not reason.startswith("#"):
+                reason = f"#{reason}"
+            cmd += f" {reason}"
         resp = await self.exec_command(cmd)
         return f"Added '{nucleus_id}' to banned list" in resp
 
@@ -268,7 +276,7 @@ class R5NetConsole:
         return ip_str
 
     def _parse_status(self, raw_output: str) -> dict[str, Any]:
-        result = {"raw": raw_output, "details": {}, "players": []}
+        result = {"raw": raw_output, "details": {}, "players": [], "max_players": 0}
 
         lines = raw_output.splitlines()
         player_section = False
@@ -285,6 +293,12 @@ class R5NetConsole:
                 key = parts[0].strip()
                 val = parts[1].strip()
                 result["details"][key] = val
+
+                # Parse max players from "players : X humans, Y bots (Z max)"
+                # if key == "players":
+                #     match = re.search(r"\((\d+) max\)", val)
+                #     if match:
+                #         result["max_players"] = int(match.group(1))
 
             # 检查玩家部分头部
             if line.startswith("#") and "userid" in line and "name" in line:
