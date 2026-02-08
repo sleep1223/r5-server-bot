@@ -29,8 +29,8 @@ async def handle_help(args: Message = CommandArg()) -> None:
 • /查询玩家 <NID/名字> - 查询玩家在线状态
 
 🛠️ 管理指令 (Admin):
-• /ban <NID/名字> - 封禁玩家
-• /kick <NID/名字> - 踢出玩家
+• /ban <NID/名字> [原因] - 封禁玩家 (默认: NO_COVER)
+• /kick <NID/名字> [原因] - 踢出玩家 (默认: NO_COVER)
 • /unban <NID/名字> - 解封玩家
 • /捐赠新增 <名字> <金额> [备注]
 • /捐赠删除 <序号>

@@ -34,12 +34,14 @@ async def handle_view():
         if not donations:
             await cmd_view.finish("ℹ️ 暂无捐赠记录。")
 
-        msg = "💰 捐赠列表\n"
+        msg = "💰 捐赠列表\n❤️ 捐赠地址 https://afdian.com/a/Sleep1223\n"
         # API returns: id, donor_name, amount, currency, message, created_at
         for idx, d in enumerate(donations, 1):
             # Format date: 2023-10-27T10:00:00+08:00 -> 2023-10-27
             date_str = d.get("created_at", "")[:10]
             note = d.get("message") or "无"
+            if len(note) > 20:
+                note = note[:20] + "..."
             msg += f"{idx}. [{date_str}] {d['donor_name']} 捐赠了 {d['amount']} {d['currency']} (备注: {note})\n"
 
         await cmd_view.finish(msg.strip())

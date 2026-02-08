@@ -14,6 +14,8 @@ ban_service = admin_service.create_subservice("ban")
 kick_service = admin_service.create_subservice("kick")
 unban_service = admin_service.create_subservice("unban")
 
+ALLOWED_REASONS = ["NO_COVER", "BE_POLITE", "CHEAT", "RULES"]
+
 # Matchers
 cmd_ban = on_command("ban", priority=5, block=True)
 cmd_kick = on_command("kick", priority=5, block=True)
@@ -23,12 +25,22 @@ cmd_unban = on_command("unban", priority=5, block=True)
 @cmd_ban.handle()
 @ban_service.patch_handler()
 async def handle_ban(args: Message = CommandArg()) -> None:
-    target = args.extract_plain_text().strip()
-    if not target:
-        await cmd_ban.finish("⚠️ 用法: /ban <玩家名或ID>")
+    text = args.extract_plain_text().strip()
+    parts = text.split()
+    
+    if not parts:
+        await cmd_ban.finish(f"⚠️ 用法: /ban <玩家名或ID> [原因]\n默认原因: NO_COVER\n可选原因: {', '.join(ALLOWED_REASONS)}")
+
+    target = parts[0]
+    reason = "NO_COVER"
+    if len(parts) > 1:
+        reason = parts[1].upper()
+
+    if reason not in ALLOWED_REASONS:
+        await cmd_ban.finish(f"❌ 原因不合法。\n可选原因: {', '.join(ALLOWED_REASONS)}")
 
     try:
-        resp = await api_client.ban_player(target, timeout=5.0)
+        resp = await api_client.ban_player(target, reason, timeout=5.0)
         res = resp.json()
 
         if res.get("code") == "0000":
@@ -46,12 +58,22 @@ async def handle_ban(args: Message = CommandArg()) -> None:
 @cmd_kick.handle()
 @kick_service.patch_handler()
 async def handle_kick(args: Message = CommandArg()) -> None:
-    target = args.extract_plain_text().strip()
-    if not target:
-        await cmd_kick.finish("⚠️ 用法: /kick <玩家名或ID>")
+    text = args.extract_plain_text().strip()
+    parts = text.split()
+
+    if not parts:
+        await cmd_kick.finish(f"⚠️ 用法: /kick <玩家名或ID> [原因]\n默认原因: NO_COVER\n可选原因: {', '.join(ALLOWED_REASONS)}")
+
+    target = parts[0]
+    reason = "NO_COVER"
+    if len(parts) > 1:
+        reason = parts[1].upper()
+
+    if reason not in ALLOWED_REASONS:
+        await cmd_kick.finish(f"❌ 原因不合法。\n可选原因: {', '.join(ALLOWED_REASONS)}")
 
     try:
-        resp = await api_client.kick_player(target, timeout=5.0)
+        resp = await api_client.kick_player(target, reason, timeout=5.0)
         res = resp.json()
 
         if res.get("code") == "0000":

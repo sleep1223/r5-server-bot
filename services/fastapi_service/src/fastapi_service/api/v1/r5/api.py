@@ -2,11 +2,11 @@ import re
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
 from shared_lib.config import settings
-from shared_lib.models import Player, PlayerKilled
+from shared_lib.models import BanRecord, Player, PlayerKilled
 from tortoise.expressions import Q
 from tortoise.functions import Count
 
@@ -15,6 +15,7 @@ from .netcon_client import R5NetConsole
 from .utils import CN_TZ, get_date_range
 
 security_scheme = HTTPBearer(auto_error=False)
+ALLOWED_REASONS = ["NO_COVER", "BE_POLITE", "CHEAT", "RULES"]
 
 
 async def verify_token(credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme)):
@@ -59,12 +60,22 @@ async def get_server_info():
 
 
 @router.get("/server/status")
-async def get_server_status(server_name: str | None = None):
+async def get_server_status(
+    server_name: str | None = None,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
+):
     """
     获取所有已连接服务器或特定服务器的状态。
     返回服务器名称（缩写）、在线玩家数量和 Ping。
     缩写规则：提取第一个 [] 内的内容，例如 "[CN(Shanghai)] PWLA..." -> "[CN(Shanghai)]"
     """
+    # Check admin permission
+    is_admin = False
+    if not settings.fastapi_access_tokens:
+        is_admin = True
+    elif credentials and credentials.credentials in settings.fastapi_access_tokens:
+        is_admin = True
+
     results = []
 
     # 从全局缓存中读取
@@ -102,14 +113,25 @@ async def get_server_status(server_name: str | None = None):
             region = server_cache.get("region")
             server_ping = server_cache.get("server_ping", 0)
 
+            max_players = server_cache.get("max_players", 0)
+
             # 获取玩家列表
-            player_list = [p.get("name", "Unknown") for p in server_cache.get("players", [])]
+            player_list = []
+            for p in server_cache.get("players", []):
+                p_info = {
+                    "name": p.get("name", "Unknown"),
+                }
+                p_info["country"] = p.get("country")
+                if is_admin:
+                    p_info["region"] = p.get("region")
+                player_list.append(p_info)
 
             results.append({
                 "name": full_name,
                 "short_name": short_name,
                 "full_name": full_name,
                 "player_count": player_count,
+                "max_players": max_players,
                 "ping": server_ping,
                 "ip": host_ip,
                 "port": host_port,
@@ -133,8 +155,8 @@ async def get_players(
     nucleus_id: int | None = None,
     country: str | None = None,
     region: str | None = None,
-    limit: int = 100,
-    offset: int = 0,
+    page_no: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
 ):
     query = Player.all()
     if status:
@@ -153,12 +175,17 @@ async def get_players(
         query = query.filter(region__icontains=region)
 
     total = await query.count()
-    players = await query.limit(limit).offset(offset).values()
+    offset = (page_no - 1) * page_size
+    players = await query.limit(page_size).offset(offset).values()
     return {"code": "0000", "data": players, "total": total, "msg": "Players retrieved"}
 
 
 @router.get("/players/query")
-async def query_player(q: int | str):
+async def query_player(
+    q: int | str,
+    page_no: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=20, description="Items per page"),
+):
     """
     通过 nucleus_id (int/str) 或名称 (模糊搜索) 查询玩家。
     返回匹配的玩家列表及其在线状态。
@@ -172,7 +199,8 @@ async def query_player(q: int | str):
         filter_q |= Q(nucleus_id=int(q))
 
     # 2. 获取玩家
-    players = await Player.filter(filter_q).limit(20)  # 限制数量以避免结果过多
+    offset = (page_no - 1) * page_size
+    players = await Player.filter(filter_q).offset(offset).limit(page_size)
 
     if not players:
         return {"code": "4001", "data": [], "msg": f"No players found matching '{q}'"}
@@ -302,7 +330,13 @@ def get_online_location(player: Player) -> tuple[dict | None, dict | None]:
 
 
 @router.post("/players/{nucleus_id_or_player_name}/kick", dependencies=[Depends(verify_token)])
-async def kick_player(nucleus_id_or_player_name: int | str):
+async def kick_player(
+    nucleus_id_or_player_name: int | str,
+    reason: str = Query(..., description=f"Reason for kick. Allowed: {ALLOWED_REASONS}"),
+):
+    if reason not in ALLOWED_REASONS:
+        raise HTTPException(status_code=400, detail=f"Invalid reason. Allowed: {ALLOWED_REASONS}")
+
     player_obj, error = await get_player_by_identifier(nucleus_id_or_player_name)
     if error:
         return error
@@ -327,7 +361,7 @@ async def kick_player(nucleus_id_or_player_name: int | str):
     try:
         await client.connect()
         await client.authenticate_and_start(rcon_pwd)
-        if await client.kick(player_obj.nucleus_id):
+        if await client.kick(player_obj.nucleus_id, f"KICK_REASON_{reason}"):
             success = True
     except Exception as e:
         logger.error(f"Failed to kick player on {target_host}:{target_port}: {e}")
@@ -338,13 +372,20 @@ async def kick_player(nucleus_id_or_player_name: int | str):
         if player_obj:
             # 改为原子锁+1
             await Player.filter(nucleus_id=player_obj.nucleus_id).update(kick_count=player_obj.kick_count + 1, status="kicked")
-        return {"code": "0000", "data": None, "msg": f"Player {player_obj.nucleus_id} kicked from {target_loc['server_name']}"}
+        return {"code": "0000", "data": None, "msg": f"Player {player_obj.nucleus_id} kicked from {target_loc['server_name']} for {reason}"}
     else:
         return {"code": "3000", "data": None, "msg": f"Failed to kick player {player_obj.nucleus_id}"}
 
 
 @router.post("/players/{nucleus_id_or_player_name}/ban", dependencies=[Depends(verify_token)])
-async def ban_player(nucleus_id_or_player_name: int | str):
+async def ban_player(
+    nucleus_id_or_player_name: int | str,
+    reason: str = Query(..., description=f"Reason for ban. Allowed: {ALLOWED_REASONS}"),
+    credentials: HTTPAuthorizationCredentials | None = Depends(verify_token),
+):
+    if reason not in ALLOWED_REASONS:
+        raise HTTPException(status_code=400, detail=f"Invalid reason. Allowed: {ALLOWED_REASONS}")
+
     player_obj, error = await get_player_by_identifier(nucleus_id_or_player_name)
     if error:
         return error
@@ -369,7 +410,7 @@ async def ban_player(nucleus_id_or_player_name: int | str):
     try:
         await client.connect()
         await client.authenticate_and_start(rcon_pwd)
-        if await client.ban(player_obj.nucleus_id):
+        if await client.ban(player_obj.nucleus_id, f"BAN_REASON_{reason}"):
             success = True
     except Exception as e:
         logger.error(f"Failed to ban player on {target_host}:{target_port}: {e}")
@@ -378,9 +419,13 @@ async def ban_player(nucleus_id_or_player_name: int | str):
 
     if success:
         if player_obj:
+            # Record ban
+            operator_name = "admin" if credentials else "system"
+            await BanRecord.create(player=player_obj, reason=reason, operator=operator_name)
+
             # 改为原子锁+1
             await Player.filter(nucleus_id=player_obj.nucleus_id).update(ban_count=player_obj.ban_count + 1, status="banned")
-        return {"code": "0000", "data": None, "msg": f"Player {player_obj.nucleus_id} banned on {target_loc['server_name']}"}
+        return {"code": "0000", "data": None, "msg": f"Player {player_obj.nucleus_id} banned on {target_loc['server_name']} for {reason}"}
     else:
         return {"code": "3000", "data": None, "msg": f"Failed to ban player {player_obj.nucleus_id}"}
 
@@ -429,10 +474,56 @@ async def unban_player(nucleus_id_or_player_name: int | str):
         return {"code": "3000", "data": None, "msg": f"Failed to unban player {player_obj.nucleus_id}"}
 
 
+@router.get("/bans")
+async def get_ban_list(
+    page_no: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
+):
+    """
+    获取封禁记录列表。
+    """
+    # Check admin permission
+    is_admin = False
+    if not settings.fastapi_access_tokens:
+        is_admin = True
+    elif credentials and credentials.credentials in settings.fastapi_access_tokens:
+        is_admin = True
+
+    total = await BanRecord.all().count()
+    offset = (page_no - 1) * page_size
+    bans = await BanRecord.all().order_by("-created_at").offset(offset).limit(page_size).prefetch_related("player")
+
+    results = []
+    for ban in bans:
+        player_info = {
+            "id": ban.id,
+            "player": {
+                "name": ban.player.name,
+                "nucleus_id": ban.player.nucleus_id,
+                "kick_count": ban.player.kick_count,
+                "ban_count": ban.player.ban_count,
+                "status": ban.player.status,
+                "country": ban.player.country,
+            },
+            "reason": ban.reason,
+            "operator": ban.operator,
+            "created_at": ban.created_at,
+        }
+        if is_admin:
+            player_info["player"].update({
+                "region": ban.player.region,
+            })
+        results.append(player_info)
+
+    return {"code": "0000", "data": results, "total": total, "msg": "Ban list retrieved"}
+
+
 @router.get("/leaderboard/kd")
 async def get_kd_leaderboard(
     range: Literal["today", "yesterday", "week", "month", "all"] = "all",
-    limit: int = 20,
+    page_no: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     sort: Literal["kills", "deaths", "kd"] = "kd",
     min_kills: int = 100,
     min_deaths: int = 0,
@@ -473,7 +564,7 @@ async def get_kd_leaderboard(
         stats[pid]["deaths"] = d["d_count"]
 
     if not stats:
-        return []
+        return {"code": "0000", "data": [], "total": 0, "msg": f"KD Leaderboard for {range} range"}
 
     # 获取玩家详细信息
     player_ids = list(stats.keys())
@@ -502,19 +593,28 @@ async def get_kd_leaderboard(
 
         results.append({"name": name, "nucleus_id": nucleus_id, "kills": kills, "deaths": deaths, "kd": kd})
 
-        # 排序：主要 KD (降序)，次要击杀数 (降序)
-        if sort == "kd":
-            results.sort(key=lambda x: (x["kd"], x["kills"]), reverse=True)
-        elif sort == "kills":
-            results.sort(key=lambda x: x["kills"], reverse=True)
-        elif sort == "deaths":
-            results.sort(key=lambda x: x["deaths"], reverse=True)
+    # 排序：主要 KD (降序)，次要击杀数 (降序)
+    if sort == "kd":
+        results.sort(key=lambda x: (x["kd"], x["kills"]), reverse=True)
+    elif sort == "kills":
+        results.sort(key=lambda x: x["kills"], reverse=True)
+    elif sort == "deaths":
+        results.sort(key=lambda x: x["deaths"], reverse=True)
 
-    return {"code": "0000", "data": results[:limit], "msg": f"KD Leaderboard for {range} range"}
+    total = len(results)
+    offset = (page_no - 1) * page_size
+    paged_results = results[offset : offset + page_size]
+
+    return {"code": "0000", "data": paged_results, "total": total, "msg": f"KD Leaderboard for {range} range"}
 
 
 @router.get("/players/{nucleus_id_or_player_name}/vs_all")
-async def get_player_vs_all_stats(nucleus_id_or_player_name: int | str):
+async def get_player_vs_all_stats(
+    nucleus_id_or_player_name: int | str,
+    page_no: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    sort: Literal["kills", "deaths", "kd"] = "kd",
+):
     """
     获取特定玩家对其他所有人的 KD（从高到低）。
     """
@@ -571,8 +671,13 @@ async def get_player_vs_all_stats(nucleus_id_or_player_name: int | str):
 
         results.append({"opponent_name": name, "opponent_id": n_id, "kills": k, "deaths": d, "kd": kd})
 
-    # 按 KD 降序排序
-    results.sort(key=lambda x: (x["kd"], x["kills"]), reverse=True)
+    # 根据参数排序
+    if sort == "kd":
+        results.sort(key=lambda x: (x["kd"], x["kills"]), reverse=True)
+    elif sort == "kills":
+        results.sort(key=lambda x: (x["kills"], x["kd"]), reverse=True)
+    elif sort == "deaths":
+        results.sort(key=lambda x: (x["deaths"], x["kd"]), reverse=True)
 
     # Calculate Summary
     total_kills = len(kills_list)
@@ -588,7 +693,7 @@ async def get_player_vs_all_stats(nucleus_id_or_player_name: int | str):
     nemesis = None
     max_interaction = 0
     
-    # Find Worst Enemy (被暴打) - Highest Enemy KD (Deaths / Kills)
+    # Find Worst Enemy (天敌) - Highest Enemy KD (Deaths / Kills)
     worst_enemy = None
     
     # Calculate Enemy KD for all results
@@ -646,4 +751,8 @@ async def get_player_vs_all_stats(nucleus_id_or_player_name: int | str):
         "region": player.region
     }
 
-    return {"code": "0000", "data": results, "summary": summary, "player": player_info, "msg": f"KD Leaderboard for {nucleus_id_or_player_name}"}
+    total = len(results)
+    offset = (page_no - 1) * page_size
+    paged_results = results[offset : offset + page_size]
+
+    return {"code": "0000", "data": paged_results, "total": total, "summary": summary, "player": player_info, "msg": f"KD Leaderboard for {nucleus_id_or_player_name}"}

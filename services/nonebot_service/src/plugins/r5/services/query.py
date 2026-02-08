@@ -23,7 +23,7 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
         await player_query.finish("⚠️ 请提供玩家名或ID")
 
     try:
-        resp = await api_client.query_player(content, timeout=5.0)
+        resp = await api_client.query_player(content, page_no=1, page_size=20, timeout=5.0)
 
         if resp.status_code != 200:
             await player_query.finish(f"❌ 查询失败: HTTP {resp.status_code}")
@@ -39,6 +39,10 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
         if not data:
             await player_query.finish(f"❌ 未找到玩家: {content}")
 
+        # 优先显示在线玩家，只显示前3个
+        data.sort(key=lambda x: x.get("is_online", False), reverse=True)
+        data = data[:3]
+
         msg = f"🔍 玩家查询结果: {content}\n"
         for item in data:
             p = item.get("player", {})
@@ -50,12 +54,19 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
             ban_count = p.get("ban_count", 0)
             kick_count = p.get("kick_count", 0)
 
-            status_icon = "🟢" if is_online else "🔴"
-            if status_str == "banned":
-                status_icon = "🚫"
+            status_map = {
+                "online": ("🟢", "在线"),
+                "offline": ("🔴", "离线"),
+                "banned": ("🚫", "封禁"),
+                "kicked": ("�", "踢出"),
+            }
+            status_icon, status_text = status_map.get(status_str, ("❓", status_str))
+
+            if status_icon == "❓":
+                status_icon = "🟢" if is_online else "�"
 
             msg += f"{status_icon} {p.get('name')} (ID: {p.get('nucleus_id')})\n"
-            msg += f"   状态: {status_str} | 封禁: {ban_count} | 踢出: {kick_count}\n"
+            msg += f"   状态: {status_text} | 封禁: {ban_count} | 踢出: {kick_count}\n"
             country = p.get("country") or "未知"
             region = p.get("region") or "未知"
             msg += f"   地区: {country} / {region}\n"

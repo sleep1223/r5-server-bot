@@ -130,3 +130,14 @@ class Donation(models.Model):
 
     class Meta:
         table = "donations"
+
+
+class BanRecord(models.Model):
+    id = fields.IntField(pk=True)
+    player = fields.ForeignKeyField("models.Player", related_name="ban_records")
+    reason = fields.CharField(max_length=50)  # NO_COVER, BE_POLITE, CHEAT, RULES
+    operator = fields.CharField(max_length=255, null=True)  # Who performed the ban (e.g. "admin", "bot")
+    created_at = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "ban_records"

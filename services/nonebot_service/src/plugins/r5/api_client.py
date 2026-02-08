@@ -25,14 +25,16 @@ class R5ApiClient:
     async def get_kd_leaderboard(
         self,
         range_type: str = "all",
-        limit: int = 20,
+        page_no: int = 1,
+        page_size: int = 20,
         sort: str = "kd",
         min_kills: int = 100,
         timeout: float = 3.0,
     ) -> httpx.Response:
         params = {
             "range": range_type,
-            "limit": limit,
+            "page_no": page_no,
+            "page_size": page_size,
             "sort": sort,
             "min_kills": min_kills,
         }
@@ -41,9 +43,12 @@ class R5ApiClient:
         )
 
     async def get_player_vs_all(
-        self, target: str, timeout: float = 3.0
+        self, target: str, page_no: int = 1, page_size: int = 20, timeout: float = 3.0
     ) -> httpx.Response:
-        return await self._request("GET", f"/players/{target}/vs_all", timeout=timeout)
+        params = {"page_no": page_no, "page_size": page_size}
+        return await self._request(
+            "GET", f"/players/{target}/vs_all", params=params, timeout=timeout
+        )
 
     async def get_server_status(
         self, server_name: Optional[str] = None, timeout: float = 5.0
@@ -55,25 +60,29 @@ class R5ApiClient:
             "GET", "/server/status", params=params, timeout=timeout
         )
 
-    async def ban_player(self, target: str, timeout: float = 5.0) -> httpx.Response:
-        return await self._request("POST", f"/players/{target}/ban", timeout=timeout)
+    async def ban_player(self, target: str, reason: str, timeout: float = 5.0) -> httpx.Response:
+        params = {"reason": reason}
+        return await self._request("POST", f"/players/{target}/ban", params=params, timeout=timeout)
 
-    async def kick_player(self, target: str, timeout: float = 5.0) -> httpx.Response:
-        return await self._request("POST", f"/players/{target}/kick", timeout=timeout)
+    async def kick_player(self, target: str, reason: str, timeout: float = 5.0) -> httpx.Response:
+        params = {"reason": reason}
+        return await self._request("POST", f"/players/{target}/kick", params=params, timeout=timeout)
 
     async def unban_player(self, target: str, timeout: float = 5.0) -> httpx.Response:
         return await self._request("POST", f"/players/{target}/unban", timeout=timeout)
 
-    async def query_player(self, query: str, timeout: float = 5.0) -> httpx.Response:
-        params = {"q": query}
+    async def query_player(
+        self, query: str, page_no: int = 1, page_size: int = 20, timeout: float = 5.0
+    ) -> httpx.Response:
+        params = {"q": query, "page_no": page_no, "page_size": page_size}
         return await self._request(
             "GET", "/players/query", params=params, timeout=timeout
         )
 
     async def get_donations(
-        self, limit: int = 1000, offset: int = 0, timeout: float = 5.0
+        self, page_no: int = 1, page_size: int = 1000, timeout: float = 5.0
     ) -> httpx.Response:
-        params = {"limit": limit, "offset": offset}
+        params = {"page_no": page_no, "page_size": page_size}
         return await self._request(
             "GET", "/donations", params=params, timeout=timeout
         )

@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from shared_lib.models import Donation
 
@@ -33,9 +33,13 @@ async def create_donation(payload: DonationCreate):
 
 
 @router.get("/donations")
-async def list_donations(limit: int = 1000, offset: int = 0):
+async def list_donations(
+    page_no: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(1000, ge=1, le=1000, description="Items per page"),
+):
     total = await Donation.all().count()
-    items = await Donation.all().order_by("-created_at").limit(limit).offset(offset).values()
+    offset = (page_no - 1) * page_size
+    items = await Donation.all().order_by("-created_at").limit(page_size).offset(offset).values()
     return {"code": "0000", "data": items, "total": total, "msg": "Donations retrieved"}
 
 
