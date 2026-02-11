@@ -410,7 +410,7 @@ async def ban_player(
     try:
         await client.connect()
         await client.authenticate_and_start(rcon_pwd)
-        if await client.ban(player_obj.nucleus_id, f"BAN_REASON_{reason}"):
+        if await client.bann(player_obj.nucleus_id, f"BAN_REASON_{reason}"):
             success = True
     except Exception as e:
         logger.error(f"Failed to ban player on {target_host}:{target_port}: {e}")
@@ -692,32 +692,32 @@ async def get_player_vs_all_stats(
     # Definition: 0.6 <= KD <= 1.6, Max (Kills + Deaths)
     nemesis = None
     max_interaction = 0
-    
+
     # Find Worst Enemy (天敌) - Highest Enemy KD (Deaths / Kills)
     worst_enemy = None
-    
+
     # Calculate Enemy KD for all results
     for r in results:
         k = r["kills"]
         d = r["deaths"]
         if k == 0:
             # If kills is 0, enemy kd is infinite. We use a large number + deaths for sorting
-            r["enemy_kd"] = float(d) * 10000.0 
-            r["enemy_kd_display"] = float(d) # For display purposes if needed, or just use d
+            r["enemy_kd"] = float(d) * 10000.0
+            r["enemy_kd_display"] = float(d)  # For display purposes if needed, or just use d
         else:
             r["enemy_kd"] = round(d / k, 2)
             r["enemy_kd_display"] = r["enemy_kd"]
 
     # Sort by Enemy KD desc, then Deaths desc
     sorted_by_worst = sorted(results, key=lambda x: (x["enemy_kd"], x["deaths"]), reverse=True)
-    
+
     # Try to find worst enemy with at least 5 deaths, then 2, then any
     candidates = [r for r in sorted_by_worst if r["deaths"] >= 5]
     if not candidates:
         candidates = [r for r in sorted_by_worst if r["deaths"] >= 2]
     if not candidates:
         candidates = sorted_by_worst
-        
+
     if candidates:
         worst_enemy = candidates[0]
         # Ensure the dict has the enemy_kd value
@@ -729,27 +729,16 @@ async def get_player_vs_all_stats(
         d = r["deaths"]
         kd = r["kd"]
         interaction = k + d
-        
+
         # Check KD range (Close to 1)
         if 0.6 <= kd <= 1.66:
             if interaction > max_interaction:
                 max_interaction = interaction
                 nemesis = r
 
-    summary = {
-        "total_kills": total_kills,
-        "total_deaths": total_deaths,
-        "kd": total_kd,
-        "nemesis": nemesis,
-        "worst_enemy": worst_enemy
-    }
+    summary = {"total_kills": total_kills, "total_deaths": total_deaths, "kd": total_kd, "nemesis": nemesis, "worst_enemy": worst_enemy}
 
-    player_info = {
-        "name": player.name,
-        "nucleus_id": player.nucleus_id,
-        "country": player.country,
-        "region": player.region
-    }
+    player_info = {"name": player.name, "nucleus_id": player.nucleus_id, "country": player.country, "region": player.region}
 
     total = len(results)
     offset = (page_no - 1) * page_size

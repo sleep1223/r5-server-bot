@@ -236,26 +236,28 @@ class R5NetConsole:
     async def kick(self, nucleus_id: str | int, reason: str = "") -> bool:
         cmd = f"kickid {nucleus_id}"
         if reason:
-            # User requested format: kickid <uid> #<REASON>
-            if not reason.startswith("#"):
-                reason = f"#{reason}"
-            cmd += f" {reason}"
+            cmd += f' "{reason}"'
         resp = await self.exec_command(cmd)
-        return f"Kicked '{nucleus_id}' from server" in resp
+        return f"kicked '{nucleus_id}' from server" in resp.lower()
 
     async def ban(self, nucleus_id: str | int, reason: str = "") -> bool:
+        cmd = f"banid {nucleus_id}"
+        if reason:
+            cmd += f' "{reason}"'
+        resp = await self.exec_command(cmd)
+        return f"added '{nucleus_id}' to banned list" in resp.lower()
+
+    async def bann(self, nucleus_id: str | int, reason: str = "") -> bool:
         cmd = f"bannid {nucleus_id}"
         if reason:
-            # User requested format: banid <uid> #<REASON>
-            if not reason.startswith("#"):
-                reason = f"#{reason}"
-            cmd += f" {reason}"
+            cmd += f' "{reason}"'
         resp = await self.exec_command(cmd)
-        return f"Added '{nucleus_id}' to banned list" in resp
+        # and added '1009201166937' to banned list
+        return f"added '{nucleus_id}' to banned list" in resp.lower()
 
     async def unban(self, nucleus_id: str | int) -> bool:
         resp = await self.exec_command(f"unban {nucleus_id}")
-        return f"Removed '{nucleus_id}' from banned list" in resp
+        return f"removed '{nucleus_id}' from banned list" in resp.lower()
 
     def _clean_ip(self, ip_str: str) -> str:
         # Remove port first
