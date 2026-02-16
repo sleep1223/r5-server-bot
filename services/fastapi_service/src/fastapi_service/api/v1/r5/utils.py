@@ -39,7 +39,7 @@ async def resolve_ips_batch(ips: list[str]) -> dict[str, dict]:
     return _resolve_ips_batch(ips)
 
 
-def get_date_range(range_type: str):
+def get_date_range(range_type: str) -> tuple[datetime, datetime]:
     now = datetime.now(CN_TZ)
     start_time = None
     end_time = None

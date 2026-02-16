@@ -40,6 +40,7 @@ nonebot-plugin-orm = ["nonebot_plugin_orm"]
 [tool.ruff]
 line-length = 88
 target-version = "py311"
+extend-exclude = ["*_pb2.py", "*_pb2.pyi"]
 
 [tool.ruff.format]
 line-ending = "lf"
@@ -100,6 +101,11 @@ ignore = [
     "COM812",  # missing-trailing-comma
     "PLC0415", # import-outside-top-level
     "I001",
+    "BLE001",
+    "C901",
+    "PLR2004",
+    "RUF001",
+    "PLR0915",
 ]
 allowed-confusables = ["，", "。", "“", "”", "：", "；", "？", "！", "【", "】", "《", "》", "…", "—", "（", "）", "、"]
 

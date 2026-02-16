@@ -1,5 +1,4 @@
 import traceback
-from datetime import datetime
 
 from nonebot import on_command
 from nonebot.adapters.onebot.v11 import Message

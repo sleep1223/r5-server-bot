@@ -154,7 +154,7 @@ class R5NetConsole:
                 else:
                     # print(f"[Unknown] Type: {resp.responseType}, Msg: {resp.responseMsg}")
                     pass
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 logger.error(f"Error in background reader: {e}")
                 if not self.connected:
                     break
@@ -390,7 +390,7 @@ async def main() -> None:
         else:
             logger.error("认证失败。")
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception(f"Error: {e}")
     finally:
         await client.close()
