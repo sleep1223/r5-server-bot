@@ -17,9 +17,12 @@ async def handle_help(args: Message = CommandArg()) -> None:
     msg = """🤖 R5 Bot 帮助菜单 🤖
 
 📊 数据统计 (Stats):
-• /kd [范围] - 查看KD排行榜
+• /kd [范围] [排序]- 查看KD排行榜
   范围: 今天 (默认), 昨天, 本周, 本月, 全部
-• /个人kd <NID/名字> - 查询玩家详细数据
+  排序: 击杀, 死亡, kd
+• /个人kd <NID/名字> - 查询玩家击杀数据
+• /武器 - 查看武器排行榜
+• /个人武器 <NID/名字> - 查询玩家武器数据
 
 💰 捐赠系统 (Donation):
 • /捐赠查看 - 查看捐赠列表

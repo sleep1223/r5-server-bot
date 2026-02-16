@@ -298,9 +298,10 @@ async def query_player(
 
 
 async def get_player_by_identifier(identifier: int | str, require_nucleus_id: bool = True) -> tuple[Player | None, dict | None]:
+    # 精准匹配 nucleus_hash 或 name__iexact
     filter_q = Q(Q(nucleus_hash=identifier) | Q(name__iexact=identifier))
-    if isinstance(identifier, int):
-        filter_q |= Q(nucleus_id=identifier)
+    if str(identifier).isdigit():
+        filter_q |= Q(nucleus_id=int(identifier))
 
     player = await Player.filter(filter_q).first()
     if not player:
@@ -608,6 +609,178 @@ async def get_kd_leaderboard(
     return {"code": "0000", "data": paged_results, "total": total, "msg": f"KD Leaderboard for {range} range"}
 
 
+@router.get("/leaderboard/weapon")
+async def get_weapon_leaderboard(
+    weapon: list[str] = Query(
+        default=["r99", "volt", "wingman", "flatline", "r301", "player"],
+        description="Weapon names (e.g., r301) or internal codes; multiple allowed",
+    ),
+    range: Literal["today", "yesterday", "week", "month", "all"] = "today",
+    page_no: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    sort: Literal["kills", "deaths", "kd"] = "kd",
+    min_kills: int = 1,
+    min_deaths: int = 0,
+):
+    """
+    获取武器列表的最佳使用者排行榜（默认按 KD 排序），默认时间范围为今日。
+    入参参考 /leaderboard/kd。
+    """
+    # 规范化武器名映射（英文名到内部代码）
+    weapon_map = {
+        "alternator": "mp_weapon_alternator_smg",
+        "charge rifle": "mp_weapon_defender",
+        "devotion": "mp_weapon_esaw",
+        "epg": "mp_weapon_epg",
+        "eva8": "mp_weapon_shotgun",
+        "flatline": "mp_weapon_vinson",
+        "g7": "mp_weapon_g2",
+        "havoc": "mp_weapon_energy_ar",
+        "hemlok": "mp_weapon_hemlok",
+        "kraber": "mp_weapon_sniper",
+        "longbow": "mp_weapon_dmr",
+        "lstar": "mp_weapon_lstar",
+        "mastiff": "mp_weapon_mastiff",
+        "mozambique": "mp_weapon_shotgun_pistol",
+        "p2020": "mp_weapon_semipistol",
+        "peacekeeper": "mp_weapon_energy_shotgun",
+        "prowler": "mp_weapon_pdw",
+        "r301": "mp_weapon_rspn101",
+        "r99": "mp_weapon_r97",
+        "re45": "mp_weapon_autopistol",
+        "smart pistol": "mp_weapon_smart_pistol",
+        "spitfire": "mp_weapon_lmg",
+        "triple take": "mp_weapon_doubletake",
+        "wingman": "mp_weapon_wingman",
+        "volt": "mp_weapon_volt_smg",
+        "player": "player",
+    }
+    weapon_name_map = {v: k for k, v in weapon_map.items()}
+
+    def to_internal_weapon(w: str | None) -> str:
+        s = (w or "").strip().lower()
+        if not s:
+            return s
+        if s in weapon_map:
+            return weapon_map[s]
+        return s
+
+    def to_display_weapon(w: str | None) -> str:
+        s = (w or "").strip().lower()
+        if not s:
+            return s
+        return weapon_name_map.get(s, s)
+
+    start_time, end_time = get_date_range(range)
+
+    filters = {}
+    if start_time and end_time:
+        filters["created_at__range"] = (start_time, end_time)
+
+    internal_weapons = [to_internal_weapon(w) for w in (weapon or [])]
+    internal_weapons = [w for w in internal_weapons if w]
+    if not internal_weapons:
+        return {"code": "0000", "data": [], "total": 0, "msg": "Invalid weapon(s)"}
+
+    display_weapons = [to_display_weapon(w) for w in internal_weapons]
+    display_weapons_str = ", ".join(display_weapons)
+    winners = []
+    if internal_weapons:
+        stats_by_weapon = {iw: {} for iw in internal_weapons}
+        kills_data = await (
+            PlayerKilled.filter(**filters, attacker_id__not_isnull=True, weapon__in=internal_weapons)
+            .group_by("weapon", "attacker_id")
+            .annotate(k_count=Count("id"))
+            .values("weapon", "attacker_id", "k_count")
+        )
+        deaths_data = await (
+            PlayerKilled.filter(**filters, victim_id__not_isnull=True, weapon__in=internal_weapons)
+            .group_by("weapon", "victim_id")
+            .annotate(d_count=Count("id"))
+            .values("weapon", "victim_id", "d_count")
+        )
+
+        for k in kills_data:
+            wcode = k["weapon"]
+            pid = k["attacker_id"]
+            stats = stats_by_weapon.get(wcode)
+            if stats is None:
+                continue
+            if pid not in stats:
+                stats[pid] = {"kills": 0, "deaths": 0}
+            stats[pid]["kills"] = k["k_count"]
+
+        for d in deaths_data:
+            wcode = d["weapon"]
+            pid = d["victim_id"]
+            stats = stats_by_weapon.get(wcode)
+            if stats is None:
+                continue
+            if pid not in stats:
+                stats[pid] = {"kills": 0, "deaths": 0}
+            stats[pid]["deaths"] = d["d_count"]
+
+        for iw in internal_weapons:
+            stats = stats_by_weapon.get(iw, {})
+            if not stats:
+                continue
+            best = None
+            best_key = None
+            for pid, data in stats.items():
+                kills = data["kills"]
+                deaths = data["deaths"]
+                kd = float(kills) if deaths == 0 else round(kills / deaths, 2)
+                if kills < min_kills or deaths < min_deaths:
+                    continue
+                if sort == "kd":
+                    key = (kd, kills)
+                elif sort == "kills":
+                    key = (kills,)
+                else:
+                    key = (deaths,)
+                if best is None or key > best_key:
+                    best = {"pid": pid, "kills": kills, "deaths": deaths, "kd": kd, "weapon": iw}
+                    best_key = key
+            if best:
+                winners.append(best)
+    if not winners:
+        return {"code": "0000", "data": [], "total": 0, "msg": f"Weapon Leaderboard for {display_weapons_str} ({range})"}
+    player_ids = [w["pid"] for w in winners]
+    players = await Player.filter(id__in=player_ids).values("id", "name", "nucleus_id")
+    p_map = {p["id"]: p for p in players}
+    results = []
+    for w in winners:
+        p_info = p_map.get(w["pid"])
+        name = p_info["name"] if p_info else f"Unknown ({w['pid']})"
+        nucleus_id = p_info["nucleus_id"] if p_info else None
+        results.append({
+            "weapon": to_display_weapon(w["weapon"]),
+            "name": name,
+            "nucleus_id": nucleus_id,
+            "kills": w["kills"],
+            "deaths": w["deaths"],
+            "kd": w["kd"],
+        })
+
+    if sort == "kd":
+        results.sort(key=lambda x: (x["kd"], x["kills"]), reverse=True)
+    elif sort == "kills":
+        results.sort(key=lambda x: x["kills"], reverse=True)
+    elif sort == "deaths":
+        results.sort(key=lambda x: x["deaths"], reverse=True)
+
+    total = len(results)
+    offset = (page_no - 1) * page_size
+    paged_results = results[offset : offset + page_size]
+
+    return {
+        "code": "0000",
+        "data": paged_results,
+        "total": total,
+        "msg": f"Weapon Leaderboard for {display_weapons_str} ({range})",
+    }
+
+
 @router.get("/players/{nucleus_id_or_player_name}/vs_all")
 async def get_player_vs_all_stats(
     nucleus_id_or_player_name: int | str,
@@ -745,3 +918,112 @@ async def get_player_vs_all_stats(
     paged_results = results[offset : offset + page_size]
 
     return {"code": "0000", "data": paged_results, "total": total, "summary": summary, "player": player_info, "msg": f"KD Leaderboard for {nucleus_id_or_player_name}"}
+
+
+@router.get("/players/{nucleus_id_or_player_name}/weapons")
+async def get_player_weapon_stats(
+    nucleus_id_or_player_name: int | str,
+    page_no: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    sort: Literal["kills", "deaths", "kd"] = "kd",
+):
+    player, error = await get_player_by_identifier(nucleus_id_or_player_name, require_nucleus_id=False)
+    if error:
+        return error
+
+    pid = player.id
+
+    weapon_map = {
+        "alternator": "mp_weapon_alternator_smg",
+        "charge rifle": "mp_weapon_defender",
+        "devotion": "mp_weapon_esaw",
+        "epg": "mp_weapon_epg",
+        "eva8": "mp_weapon_shotgun",
+        "flatline": "mp_weapon_vinson",
+        "g7": "mp_weapon_g2",
+        "havoc": "mp_weapon_energy_ar",
+        "hemlok": "mp_weapon_hemlok",
+        "kraber": "mp_weapon_sniper",
+        "longbow": "mp_weapon_dmr",
+        "lstar": "mp_weapon_lstar",
+        "mastiff": "mp_weapon_mastiff",
+        "mozambique": "mp_weapon_shotgun_pistol",
+        "p2020": "mp_weapon_semipistol",
+        "peacekeeper": "mp_weapon_energy_shotgun",
+        "prowler": "mp_weapon_pdw",
+        "r301": "mp_weapon_rspn101",
+        "r99": "mp_weapon_r97",
+        "re45": "mp_weapon_autopistol",
+        "smart pistol": "mp_weapon_smart_pistol",
+        "spitfire": "mp_weapon_lmg",
+        "triple take": "mp_weapon_doubletake",
+        "wingman": "mp_weapon_wingman",
+        "volt": "mp_weapon_volt_smg",
+        "player": "player",
+    }
+    weapon_name_map = {v: k for k, v in weapon_map.items()}
+
+    def normalize_weapon(w: str | None) -> str:
+        s = (w or "").strip().lower()
+        if not s:
+            return s
+        if s in weapon_name_map:
+            return weapon_name_map[s]
+        return s
+
+    kills_list = await PlayerKilled.filter(attacker_id=pid, victim_id__not_isnull=True).values("weapon")
+    deaths_list = await PlayerKilled.filter(victim_id=pid, attacker_id__not_isnull=True).values("weapon")
+
+    weapon_stats = {}
+
+    for k in kills_list:
+        w = normalize_weapon(k.get("weapon"))
+        if not w:
+            continue
+        if w not in weapon_stats:
+            weapon_stats[w] = {"kills": 0, "deaths": 0}
+        weapon_stats[w]["kills"] += 1
+
+    for d in deaths_list:
+        w = normalize_weapon(d.get("weapon"))
+        if not w:
+            continue
+        if w not in weapon_stats:
+            weapon_stats[w] = {"kills": 0, "deaths": 0}
+        weapon_stats[w]["deaths"] += 1
+
+    if not weapon_stats:
+        return {"code": "0000", "data": [], "msg": f"Player {nucleus_id_or_player_name} has no weapon stats"}
+
+    results = []
+    for w, data in weapon_stats.items():
+        k = data["kills"]
+        d = data["deaths"]
+        kd = float(k) if d == 0 else round(k / d, 2)
+        results.append({"weapon": weapon_name_map.get(w, w), "kills": k, "deaths": d, "kd": kd})
+
+    if sort == "kd":
+        results.sort(key=lambda x: (x["kd"], x["kills"]), reverse=True)
+    elif sort == "kills":
+        results.sort(key=lambda x: (x["kills"], x["kd"]), reverse=True)
+    elif sort == "deaths":
+        results.sort(key=lambda x: (x["deaths"], x["kd"]), reverse=True)
+
+    total_kills = len(kills_list)
+    total_deaths = len(deaths_list)
+    total_kd = float(total_kills) if total_deaths == 0 else round(total_kills / total_deaths, 2)
+
+    player_info = {"name": player.name, "nucleus_id": player.nucleus_id, "country": player.country, "region": player.region}
+
+    total = len(results)
+    offset = (page_no - 1) * page_size
+    paged_results = results[offset : offset + page_size]
+
+    return {
+        "code": "0000",
+        "data": paged_results,
+        "total": total,
+        "summary": {"total_kills": total_kills, "total_deaths": total_deaths, "kd": total_kd},
+        "player": player_info,
+        "msg": f"Weapon stats for {nucleus_id_or_player_name}",
+    }

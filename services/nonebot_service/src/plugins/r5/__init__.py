@@ -35,20 +35,16 @@ __plugin_meta__ = PluginMetadata(
        捐赠查看
        捐赠新增 <名字> <金额> [备注] (管理员)
        捐赠删除 <序号> (管理员)
+
+    7. 个人武器 <玩家名/ID> [击杀/死亡/kd]
+       查询指定玩家的武器击杀、死亡与KD
     """,
     config=Config,
 )
 
-from .services import admin, help, kd, query, status, donation
+from .services import admin, donation, help, kd, query, status, weapons
 
 # Config
 plugin_config = get_plugin_config(Config)
 
-__all__ = [
-    "admin",
-    "help",
-    "kd",
-    "query",
-    "status",
-    "donation",
-]
+__all__ = ["admin", "donation", "help", "kd", "query", "status", "weapons"]

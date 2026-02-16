@@ -27,7 +27,7 @@ cmd_unban = on_command("unban", priority=5, block=True)
 async def handle_ban(args: Message = CommandArg()) -> None:
     text = args.extract_plain_text().strip()
     parts = text.split()
-    
+
     if not parts:
         await cmd_ban.finish(f"⚠️ 用法: /ban <玩家名或ID> [原因]\n默认原因: NO_COVER\n可选原因: {', '.join(ALLOWED_REASONS)}")
 

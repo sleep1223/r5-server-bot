@@ -18,7 +18,7 @@ check_service = kd_service.create_subservice("check")
 kd_rank = on_command(
     "kd榜", aliases={"kd ranking", "kd", "kd排行榜"}, priority=5, block=True
 )
-check_kd = on_command("查kd", aliases={"check kd", "个人kd"}, priority=5, block=True)
+check_kd = on_command("查kd", aliases={"个人kd"}, priority=5, block=True)
 
 
 @kd_rank.handle()
@@ -41,28 +41,32 @@ async def handle_kd_rank(args: Message = CommandArg()) -> None:
         "all": "all",
     }
 
-    query_range = "today"
+    range_type = "today"
     for k, v in range_map.items():
         if k in content:
-            query_range = v
+            range_type = v
             break
 
     # Default params
+    base_min_kills = 100
+    dynamic_min_kills = (
+        base_min_kills if range_type in ["today", "yesterday"] else base_min_kills * 3
+    )
     params = {
-        "range": query_range,
-        "limit": 20,
+        "range_type": range_type,
+        "page_size": 20,
         "sort": "kd",
-        "min_kills": 100,  # Filter out low sample size
+        "min_kills": dynamic_min_kills,
     }
 
+    # Parse sort from content
+    if "击杀" in content or "kills" in content:
+        params["sort"] = "kills"
+    elif "死亡" in content or "deaths" in content:
+        params["sort"] = "deaths"
+
     try:
-        resp = await api_client.get_kd_leaderboard(
-            range_type=params.get("range"),
-            page_size=params.get("limit"),
-            sort=params.get("sort"),
-            min_kills=params.get("min_kills"),
-            timeout=3.0,
-        )
+        resp = await api_client.get_kd_leaderboard(**params, timeout=3.0)
 
         if resp.status_code != 200:
             await kd_rank.finish(f"❌ 查询失败: HTTP {resp.status_code}")
@@ -70,11 +74,11 @@ async def handle_kd_rank(args: Message = CommandArg()) -> None:
         data = req.get("data", [])
 
         if not data:
-            await kd_rank.finish(f"ℹ️ 暂无数据 ({query_range})")
+            await kd_rank.finish(f"ℹ️ 暂无数据 ({range_type})")
 
         # Format message
-        msg = f"🏆 R5 KD排行榜 ({query_range})\n"
-        msg += f"筛选: 至少 {params['min_kills']} 击杀\n"
+        msg = f"🏆 R5 KD排行榜 ({range_type})\n"
+        msg += f"筛选: 至少 {params['min_kills']} 击杀\t排序: {params['sort']}\n"
         msg += "排名 | 玩家 | K/D | 击杀数\n"
         msg += "-" * 30 + "\n"
 
@@ -103,8 +107,15 @@ async def handle_check_kd(args: Message = CommandArg()) -> None:
     if not target:
         await check_kd.finish("⚠️ 请提供玩家名称或ID")
 
+    # Parse sort from target text
+    sort = "kd"
+    if "击杀" in target or "kills" in target:
+        sort = "kills"
+    elif "死亡" in target or "deaths" in target:
+        sort = "deaths"
+
     try:
-        resp = await api_client.get_player_vs_all(target, timeout=3.0)
+        resp = await api_client.get_player_vs_all(target, sort=sort, timeout=3.0)
 
         if resp.status_code != 200:
             await check_kd.finish(f"❌ 查询失败: HTTP {resp.status_code}")
