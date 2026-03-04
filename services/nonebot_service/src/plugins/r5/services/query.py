@@ -78,6 +78,12 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
                     msg += f"   服务器: {server_name}\n"
                 duration = item.get("duration_seconds", 0)
                 msg += f"   在线时长: {duration // 60} 分钟\n"
+            elif status_str == "banned" and server:
+                server_name = server.get("short_name") or server.get("name")
+                if item.get("server_source") == "ban_cache":
+                    msg += f"   封禁服务器(缓存): {server_name}\n"
+                else:
+                    msg += f"   封禁服务器: {server_name}\n"
 
             msg += "-" * 20 + "\n"
 

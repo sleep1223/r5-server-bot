@@ -1,3 +1,4 @@
+import asyncio
 import re
 from datetime import datetime
 from typing import Literal
@@ -10,7 +11,7 @@ from shared_lib.models import BanRecord, Player, PlayerKilled
 from tortoise.expressions import Q
 from tortoise.functions import Count
 
-from .cache import global_server_cache, raw_server_response_cache
+from .cache import banned_player_server_cache, global_server_cache, raw_server_response_cache
 from .netcon_client import R5NetConsole
 from .utils import CN_TZ, get_date_range
 
@@ -191,24 +192,26 @@ async def query_player(
     返回匹配的玩家列表及其在线状态。
     """
 
-    # 1. 构建过滤器
-    filter_q = Q(Q(nucleus_hash=q) | Q(name__icontains=q))
-    if str(q).isdigit():
+    # 1. 构建过滤器（忽略大小写）
+    query_text = str(q).strip()
+    filter_q = Q(Q(nucleus_hash__iexact=query_text) | Q(name__icontains=query_text))
+    if query_text.isdigit():
         # 如果 q 是数字，它可能是 nucleus_id 或名称的一部分（虽然名称纯数字的可能性较小）
         # 我们将其视为 nucleus_id 精确匹配 或 名称模糊匹配
-        filter_q |= Q(nucleus_id=int(q))
+        filter_q |= Q(nucleus_id=int(query_text))
 
     # 2. 获取玩家
     offset = (page_no - 1) * page_size
     players = await Player.filter(filter_q).offset(offset).limit(page_size)
 
     if not players:
-        return {"code": "4001", "data": [], "msg": f"No players found matching '{q}'"}
+        return {"code": "4001", "data": [], "msg": f"No players found matching '{query_text}'"}
 
     results = []
     for player in players:
         # 检查缓存中的在线状态
         target_loc = None
+        target_loc_source = "none"
 
         # 在 global_server_cache 中搜索
         if player.nucleus_id:
@@ -234,10 +237,17 @@ async def query_player(
                             "region": s_status.get("region"),
                             "server_ping": s_status.get("server_ping", 0),
                         }
+                        target_loc_source = "live"
                         found_in_server = True
                         break
                 if found_in_server:
                     break
+
+        if not target_loc and player.status == "banned" and player.nucleus_id:
+            cached_loc = get_cached_ban_location(player.nucleus_id)
+            if cached_loc:
+                target_loc = cached_loc
+                target_loc_source = "ban_cache"
 
         is_online = False
         duration = None
@@ -245,7 +255,7 @@ async def query_player(
         ping = 0
 
         if target_loc:
-            is_online = True
+            is_online = target_loc_source == "live"
 
             server_full_name = target_loc.get("server_name")
 
@@ -266,10 +276,11 @@ async def query_player(
                 "ping": target_loc.get("server_ping"),
             }
 
-            ping = target_loc.get("ping", 0)
-            online_at = target_loc.get("online_at")
-            if online_at:
-                duration = (datetime.now(CN_TZ) - online_at).total_seconds()
+            if is_online:
+                ping = target_loc.get("ping", 0)
+                online_at = target_loc.get("online_at")
+                if online_at:
+                    duration = (datetime.now(CN_TZ) - online_at).total_seconds()
 
         # 如果缓存中没有但数据库显示在线，则回退到数据库
         if not is_online and player.status == "online":
@@ -281,6 +292,7 @@ async def query_player(
         results.append({
             "is_online": is_online,
             "server": server_info,
+            "server_source": target_loc_source,
             "duration_seconds": int(duration) if duration is not None else 0,
             "ping": ping,
             "player": {
@@ -298,10 +310,11 @@ async def query_player(
 
 
 async def get_player_by_identifier(identifier: int | str, require_nucleus_id: bool = True) -> tuple[Player | None, dict | None]:
-    # 精准匹配 nucleus_hash 或 name__iexact
-    filter_q = Q(Q(nucleus_hash=identifier) | Q(name__iexact=identifier))
-    if str(identifier).isdigit():
-        filter_q |= Q(nucleus_id=int(identifier))
+    # 精准匹配 nucleus_hash 或 name（忽略大小写）
+    identifier_text = str(identifier).strip()
+    filter_q = Q(Q(nucleus_hash__iexact=identifier_text) | Q(name__iexact=identifier_text))
+    if identifier_text.isdigit():
+        filter_q |= Q(nucleus_id=int(identifier_text))
 
     player = await Player.filter(filter_q).first()
     if not player:
@@ -328,6 +341,156 @@ def get_online_location(player: Player) -> tuple[dict | None, dict | None]:
                 return target_loc, None
 
     return None, {"code": "4004", "data": None, "msg": f"Player {player.name} is not online"}
+
+
+def get_online_servers() -> list[dict]:
+    servers = []
+    for server_key, s_status in global_server_cache.items():
+        try:
+            host, port_str = str(server_key).rsplit(":", 1)
+            port = int(port_str)
+        except Exception:
+            logger.error(f"Invalid server key in cache: {server_key}")
+            continue
+
+        servers.append({
+            "server_key": str(server_key),
+            "server_name": s_status.get("_api_name") or s_status.get("hostname") or str(server_key),
+            "server_host": host,
+            "server_port": port,
+        })
+    return servers
+
+
+def cache_banned_server(nucleus_id: int, *, server_name: str, server_host: str, server_port: int) -> None:
+    match = re.match(r"^(\[.*?\])", server_name)
+    short_name = match.group(1) if match else server_name
+    banned_player_server_cache[nucleus_id] = {
+        "server_name": server_name,
+        "short_name": short_name,
+        "server_host": server_host,
+        "server_port": server_port,
+        "cached_at": datetime.now(CN_TZ).isoformat(),
+    }
+
+
+def get_cached_ban_location(nucleus_id: int) -> dict | None:
+    cached = banned_player_server_cache.get(nucleus_id)
+    if not cached:
+        return None
+
+    server_host = str(cached.get("server_host") or "")
+    server_port_raw = cached.get("server_port", 0)
+    try:
+        server_port = int(server_port_raw)
+    except Exception:
+        server_port = 0
+
+    server_name = str(cached.get("server_name") or f"{server_host}:{server_port}")
+    return {
+        "server_name": server_name,
+        "server_host": server_host,
+        "server_port": server_port,
+        "online_at": None,
+        "ping": 0,
+        "short_name": cached.get("short_name"),
+        "country": None,
+        "region": None,
+        "server_ping": 0,
+        "_from_ban_cache": True,
+    }
+
+
+def clear_cached_ban_location(nucleus_id: int) -> None:
+    banned_player_server_cache.pop(nucleus_id, None)
+
+
+async def run_ban_on_servers_background(
+    *,
+    player_id: int,
+    nucleus_id: int,
+    reason: str,
+    operator_name: str,
+    servers: list[dict],
+    update_record_on_success: bool,
+    cache_server_on_first_success: bool,
+) -> None:
+    rcon_key = settings.r5_rcon_key
+    rcon_pwd = settings.r5_rcon_password
+    if not rcon_key or not rcon_pwd:
+        logger.error("Background ban aborted: RCON configuration missing")
+        return
+
+    success_count = 0
+    cached_server = False
+
+    for server in servers:
+        host = server["server_host"]
+        port = server["server_port"]
+        server_key = server["server_key"]
+        server_name = server.get("server_name") or server_key
+        client = R5NetConsole(host, port, rcon_key)
+        try:
+            await client.connect()
+            await client.authenticate_and_start(rcon_pwd)
+            if await client.bann(nucleus_id, f"BAN_REASON_{reason}"):
+                success_count += 1
+                if cache_server_on_first_success and not cached_server:
+                    cache_banned_server(
+                        nucleus_id,
+                        server_name=server_name,
+                        server_host=host,
+                        server_port=port,
+                    )
+                    cached_server = True
+        except Exception as e:
+            logger.error(f"Failed to ban player on {server_key}: {e}")
+        finally:
+            await client.close()
+
+    if update_record_on_success and success_count > 0:
+        player_obj = await Player.filter(id=player_id).first()
+        if player_obj:
+            await BanRecord.create(player=player_obj, reason=reason, operator=operator_name)
+            await Player.filter(id=player_id).update(ban_count=player_obj.ban_count + 1, status="banned")
+
+    logger.info(f"Background ban task finished for {nucleus_id}. success={success_count}/{len(servers)}")
+
+
+async def run_unban_on_servers_background(
+    *,
+    player_id: int,
+    nucleus_id: int,
+    servers: list[dict],
+) -> None:
+    rcon_key = settings.r5_rcon_key
+    rcon_pwd = settings.r5_rcon_password
+    if not rcon_key or not rcon_pwd:
+        logger.error("Background unban aborted: RCON configuration missing")
+        return
+
+    success_count = 0
+
+    for server in servers:
+        host = server["server_host"]
+        port = server["server_port"]
+        server_key = server["server_key"]
+        client = R5NetConsole(host, port, rcon_key)
+        try:
+            await client.connect()
+            await client.authenticate_and_start(rcon_pwd)
+            if await client.unban(nucleus_id):
+                success_count += 1
+        except Exception as e:
+            logger.error(f"Failed to unban player on {server_key}: {e}")
+        finally:
+            await client.close()
+
+    if success_count > 0:
+        await Player.filter(id=player_id).update(status="offline")
+        clear_cached_ban_location(nucleus_id)
+
+    logger.info(f"Background unban task finished for {nucleus_id}. success={success_count}/{len(servers)}")
 
 
 @router.post("/players/{nucleus_id_or_player_name}/kick", dependencies=[Depends(verify_token)])
@@ -391,44 +554,107 @@ async def ban_player(
     if error:
         return error
 
-    target_loc, error = get_online_location(player_obj)
-    if error:
-        return error
-
-    success = False
-
-    # 目标特定服务器
-    target_host = target_loc["server_host"]
-    target_port = target_loc["server_port"]
-
-    # 临时连接
     rcon_key = settings.r5_rcon_key
     rcon_pwd = settings.r5_rcon_password
     if not rcon_key or not rcon_pwd:
         raise HTTPException(status_code=503, detail="RCON configuration missing")
 
-    client = R5NetConsole(target_host, target_port, rcon_key)
-    try:
-        await client.connect()
-        await client.authenticate_and_start(rcon_pwd)
-        if await client.bann(player_obj.nucleus_id, f"BAN_REASON_{reason}"):
-            success = True
-    except Exception as e:
-        logger.error(f"Failed to ban player on {target_host}:{target_port}: {e}")
-    finally:
-        await client.close()
+    online_servers = get_online_servers()
 
-    if success:
-        if player_obj:
-            # Record ban
-            operator_name = "admin" if credentials else "system"
-            await BanRecord.create(player=player_obj, reason=reason, operator=operator_name)
+    operator_name = "admin" if credentials else "system"
+    target_loc, online_error = get_online_location(player_obj)
 
-            # 改为原子锁+1
-            await Player.filter(nucleus_id=player_obj.nucleus_id).update(ban_count=player_obj.ban_count + 1, status="banned")
-        return {"code": "0000", "data": None, "msg": f"Player {player_obj.nucleus_id} banned on {target_loc['server_name']} for {reason}"}
-    else:
-        return {"code": "3000", "data": None, "msg": f"Failed to ban player {player_obj.nucleus_id}"}
+    # 1) 玩家在线: 先同步封禁所在服务器；成功后异步在其余在线服务器补执行
+    if not online_error and target_loc:
+        target_host = target_loc["server_host"]
+        target_port = target_loc["server_port"]
+        target_server_name = target_loc["server_name"]
+
+        success = False
+        client = R5NetConsole(target_host, target_port, rcon_key)
+        try:
+            await client.connect()
+            await client.authenticate_and_start(rcon_pwd)
+            if await client.bann(player_obj.nucleus_id, f"BAN_REASON_{reason}"):
+                success = True
+        except Exception as e:
+            logger.error(f"Failed to ban player on {target_host}:{target_port}: {e}")
+        finally:
+            await client.close()
+
+        if not success:
+            return {
+                "code": "3000",
+                "data": {
+                    "player_online": True,
+                    "primary_server": {
+                        "name": target_server_name,
+                        "host": target_host,
+                        "port": target_port,
+                    },
+                },
+                "msg": f"Failed to ban player {player_obj.nucleus_id} on online server {target_server_name}",
+            }
+
+        await BanRecord.create(player=player_obj, reason=reason, operator=operator_name)
+        await Player.filter(nucleus_id=player_obj.nucleus_id).update(ban_count=player_obj.ban_count + 1, status="banned")
+        cache_banned_server(
+            player_obj.nucleus_id,
+            server_name=target_server_name,
+            server_host=target_host,
+            server_port=target_port,
+        )
+
+        remain_servers = [s for s in online_servers if not (s["server_host"] == target_host and s["server_port"] == target_port)]
+        if remain_servers:
+            asyncio.create_task(
+                run_ban_on_servers_background(
+                    player_id=player_obj.id,
+                    nucleus_id=player_obj.nucleus_id,
+                    reason=reason,
+                    operator_name=operator_name,
+                    servers=remain_servers,
+                    update_record_on_success=False,
+                    cache_server_on_first_success=False,
+                )
+            )
+
+        return {
+            "code": "0000",
+            "data": {
+                "player_online": True,
+                "primary_server": {
+                    "name": target_server_name,
+                    "host": target_host,
+                    "port": target_port,
+                },
+                "async_server_count": len(remain_servers),
+            },
+            "msg": f"Player {player_obj.nucleus_id} banned on online server {target_server_name}; background sync started",
+        }
+
+    # 2) 玩家不在线: 异步在所有在线服务器执行 bannid，任务启动即返回成功
+    if online_servers:
+        asyncio.create_task(
+            run_ban_on_servers_background(
+                player_id=player_obj.id,
+                nucleus_id=player_obj.nucleus_id,
+                reason=reason,
+                operator_name=operator_name,
+                servers=online_servers,
+                update_record_on_success=True,
+                cache_server_on_first_success=True,
+            )
+        )
+
+    return {
+        "code": "0000",
+        "data": {
+            "player_online": False,
+            "async_server_count": len(online_servers),
+        },
+        "msg": f"Player {player_obj.nucleus_id} is not online; background ban task started",
+    }
 
 
 @router.post("/players/{nucleus_id_or_player_name}/unban", dependencies=[Depends(verify_token)])
@@ -442,37 +668,102 @@ async def unban_player(nucleus_id_or_player_name: int | str):
     if not rcon_key or not rcon_pwd:
         raise HTTPException(status_code=503, detail="RCON configuration missing")
 
-    success = False
+    online_servers = get_online_servers()
+    target_loc, online_error = get_online_location(player_obj)
+    if online_error and player_obj.nucleus_id:
+        cached_target_loc = get_cached_ban_location(player_obj.nucleus_id)
+        if cached_target_loc:
+            target_loc = cached_target_loc
+            online_error = None
 
-    # 尝试在所有已知服务器上解封
-    # 使用 global_server_cache 中的服务器列表
-    for server_key in global_server_cache.keys():
+    # 1) 玩家在线或命中封禁缓存服务器: 先同步解封目标服务器；成功后异步在其余在线服务器补执行
+    if not online_error and target_loc:
+        target_host = target_loc["server_host"]
+        target_port = target_loc["server_port"]
+        target_server_name = target_loc["server_name"]
+        target_source = "ban_cache" if target_loc.get("_from_ban_cache") else "online"
+        target_source_desc = "cached ban server" if target_source == "ban_cache" else "online server"
+
+        success = False
+        client = R5NetConsole(target_host, target_port, rcon_key)
         try:
-            host, port = server_key.split(":")
-            port = int(port)
-
-            client = R5NetConsole(host, port, rcon_key)
-            try:
-                await client.connect()
-                await client.authenticate_and_start(rcon_pwd)
-                if await client.unban(player_obj.nucleus_id):
-                    success = True
-            finally:
-                await client.close()
+            await client.connect()
+            await client.authenticate_and_start(rcon_pwd)
+            if await client.unban(player_obj.nucleus_id):
+                success = True
         except Exception as e:
-            logger.error(f"Failed to unban on {server_key}: {e}")
-            continue
+            logger.error(f"Failed to unban player on {target_host}:{target_port}: {e}")
+        finally:
+            await client.close()
 
-    if success:
-        if player_obj:
-            player_obj.status = "offline"  # 或者其他默认值
-            await player_obj.save()
-        return {"code": "0000", "data": None, "msg": f"Player {player_obj.nucleus_id} unbanned"}
-    else:
-        # 如果没有任何成功，可能是因为没有在线服务器，或者都不成功
-        if not global_server_cache:
-            return {"code": "3000", "data": None, "msg": "No online servers found to execute unban"}
-        return {"code": "3000", "data": None, "msg": f"Failed to unban player {player_obj.nucleus_id}"}
+        if success:
+            await Player.filter(nucleus_id=player_obj.nucleus_id).update(status="offline")
+            clear_cached_ban_location(player_obj.nucleus_id)
+
+            remain_servers = [s for s in online_servers if not (s["server_host"] == target_host and s["server_port"] == target_port)]
+            if remain_servers:
+                asyncio.create_task(
+                    run_unban_on_servers_background(
+                        player_id=player_obj.id,
+                        nucleus_id=player_obj.nucleus_id,
+                        servers=remain_servers,
+                    )
+                )
+
+            return {
+                "code": "0000",
+                "data": {
+                    "player_online": target_source == "online",
+                    "target_source": target_source,
+                    "target_server": {
+                        "name": target_server_name,
+                        "host": target_host,
+                        "port": target_port,
+                    },
+                    "async_server_count": len(remain_servers),
+                },
+                "msg": f"Player {player_obj.nucleus_id} unbanned on {target_source_desc} {target_server_name}; background sync started",
+            }
+
+        if target_source == "online":
+            return {
+                "code": "3000",
+                "data": {
+                    "player_online": True,
+                    "target_source": target_source,
+                    "target_server": {
+                        "name": target_server_name,
+                        "host": target_host,
+                        "port": target_port,
+                    },
+                },
+                "msg": f"Failed to unban player {player_obj.nucleus_id} on {target_source_desc} {target_server_name}",
+            }
+
+        logger.warning(
+            f"Failed to unban player {player_obj.nucleus_id} on cached ban server "
+            f"{target_server_name}, fallback to background unban on online servers"
+        )
+
+    # 2) 玩家不在线: 异步在所有在线服务器执行 unban，任务启动即返回成功
+    if online_servers:
+        asyncio.create_task(
+            run_unban_on_servers_background(
+                player_id=player_obj.id,
+                nucleus_id=player_obj.nucleus_id,
+                servers=online_servers,
+            )
+        )
+        return {
+            "code": "0000",
+            "data": {
+                "player_online": False,
+                "async_server_count": len(online_servers),
+            },
+            "msg": f"Player {player_obj.nucleus_id} is not online; background unban task started",
+        }
+
+    return {"code": "3000", "data": None, "msg": "No online servers found to execute unban"}
 
 
 @router.get("/bans")
