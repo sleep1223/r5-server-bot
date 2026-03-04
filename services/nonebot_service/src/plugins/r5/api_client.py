@@ -121,7 +121,7 @@ class R5ApiClient:
             "POST", f"/players/{target}/kick", params=params, timeout=timeout
         )
 
-    async def unban_player(self, target: str, timeout: float = 5.0) -> httpx.Response:
+    async def unban_player(self, target: str, timeout: float = 12.0) -> httpx.Response:
         return await self._request("POST", f"/players/{target}/unban", timeout=timeout)
 
     async def query_player(
