@@ -687,7 +687,7 @@ async def unban_player(nucleus_id_or_player_name: int | str):
         success = False
         client = R5NetConsole(target_host, target_port, rcon_key)
         try:
-            await client.connect()
+            await client.connect(timeout=1)
             await client.authenticate_and_start(rcon_pwd)
             if await client.unban(player_obj.nucleus_id):
                 success = True

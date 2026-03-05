@@ -153,8 +153,6 @@ async def sync_players_task():
                         if not s_ip or not s_port:
                             continue
                         client = R5NetConsole(s_ip, s_port, rcon_key)
-                        setattr(client, "rcon_password", rcon_pwd)
-                        
                         try:
                             status_data = {}
                             proc_start = datetime.now()
@@ -168,7 +166,7 @@ async def sync_players_task():
                             players_data = status_data.get("players", [])
                             status_data["_server"] = f"{s_ip}:{s_port}"
                             status_data["_api_name"] = s.get("name", "Unknown Server")
-                            
+
                             # Fallback/Merge max_players from API list if not parsed from RCON
                             if not status_data.get("max_players"):
                                 try:
@@ -177,8 +175,12 @@ async def sync_players_task():
                                     status_data["max_players"] = 0
 
                             full_name = status_data["_api_name"]
-                            match = re.match(r"^(\[.*?\])", full_name)
-                            status_data["short_name"] = match.group(1) if match else full_name
+                            # Custom cleaning for specific server name pattern
+                            match_complex = re.match(r"^\[(.*?)]\s*(.*?)\s*server QQ group\(\d+\)\s*(.*)$", full_name, re.IGNORECASE)
+                            if match_complex:
+                                status_data["short_name"] = f"{match_complex.group(1)} {match_complex.group(2)} {match_complex.group(3)}".strip()
+                            else:
+                                status_data["short_name"] = full_name
                             ip_info = ip_info_map.get(s_ip)
                             status_data["country"] = ip_info.country if ip_info else None
                             status_data["region"] = ip_info.region if ip_info else None
@@ -242,8 +244,7 @@ async def sync_players_task():
                                             await existing_p.update_from_dict(update_dict).save()
                                             p_data["online_at"] = update_dict["online_at"]
                                             all_players.append(existing_p)
-                            
-                            
+
                         except Exception as e:
                             logger.error(f"Error syncing players from {client.host}: {e}")
                             any_server_failed = True
