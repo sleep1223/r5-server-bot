@@ -507,7 +507,12 @@ async def kick_player(
 
     target_loc, error = get_online_location(player_obj)
     if error:
-        return error
+        await Player.filter(nucleus_id=player_obj.nucleus_id).update(kick_count=player_obj.kick_count + 1)
+        return {
+            "code": "0000",
+            "data": {"player_online": False},
+            "msg": f"Player {player_obj.nucleus_id} is not online; kick count recorded for {reason}",
+        }
 
     success = False
 
