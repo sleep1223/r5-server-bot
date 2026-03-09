@@ -580,7 +580,7 @@ async def ban_player(
         try:
             await client.connect()
             await client.authenticate_and_start(rcon_pwd)
-            if await client.bann(player_obj.nucleus_id, f"BAN_REASON_{reason}"):
+            if await client.ban(player_obj.nucleus_id, f"BAN_REASON_{reason}"):
                 success = True
         except Exception as e:
             logger.error(f"Failed to ban player on {target_host}:{target_port}: {e}")
@@ -745,10 +745,7 @@ async def unban_player(nucleus_id_or_player_name: int | str):
                 "msg": f"Failed to unban player {player_obj.nucleus_id} on {target_source_desc} {target_server_name}",
             }
 
-        logger.warning(
-            f"Failed to unban player {player_obj.nucleus_id} on cached ban server "
-            f"{target_server_name}, fallback to background unban on online servers"
-        )
+        logger.warning(f"Failed to unban player {player_obj.nucleus_id} on cached ban server {target_server_name}, fallback to background unban on online servers")
 
     # 2) 玩家不在线: 异步在所有在线服务器执行 unban，任务启动即返回成功
     if online_servers:
@@ -984,13 +981,15 @@ async def get_weapon_leaderboard(
     if internal_weapons:
         stats_by_weapon = {iw: {} for iw in internal_weapons}
         kills_data = await (
-            PlayerKilled.filter(**filters, attacker_id__not_isnull=True, weapon__in=internal_weapons)
+            PlayerKilled
+            .filter(**filters, attacker_id__not_isnull=True, weapon__in=internal_weapons)
             .group_by("weapon", "attacker_id")
             .annotate(k_count=Count("id"))
             .values("weapon", "attacker_id", "k_count")
         )
         deaths_data = await (
-            PlayerKilled.filter(**filters, victim_id__not_isnull=True, weapon__in=internal_weapons)
+            PlayerKilled
+            .filter(**filters, victim_id__not_isnull=True, weapon__in=internal_weapons)
             .group_by("weapon", "victim_id")
             .annotate(d_count=Count("id"))
             .values("weapon", "victim_id", "d_count")
