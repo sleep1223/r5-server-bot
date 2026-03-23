@@ -97,20 +97,18 @@ async def handle_kd_rank(args: Message = CommandArg()) -> None:
         if not data:
             await kd_rank.finish(f"🏆 暂无{range_cn}数据")
 
-        msg = f"🏆 KD 榜（{range_cn}）\n"
-        msg += f"⚙️ ≥{dynamic_min_kills}杀 · 排序：{sort_cn}\n"
-        msg += "━" * 20 + "\n"
+        msg = f"🏆 R5 KD排行榜 ({range_cn})\n"
+        msg += f"筛选: 至少 {dynamic_min_kills} 击杀   排序: {sort_cn}\n"
+        msg += "排名 | 玩家 | K/D | 击杀数\n"
+        msg += "-" * 30 + "\n"
 
         for i, p in enumerate(data, 1):
             name = p.get("name", "未知")
             kd = p.get("kd", 0)
             kills = p.get("kills", 0)
-            deaths = p.get("deaths", 0)
-            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, f"{i:>2}.")
-            msg += f"{medal} {name} · KD {kd} · 🗡️{kills} · 💀{deaths}\n"
+            msg += f"#{i} {name}: KD {kd} (击杀 {kills})\n"
 
-        msg += "━" * 20 + "\n"
-        msg += "🔗 r5.sleep0.de"
+        msg += f"\n🔗 在线服务器面板: https://r5.sleep0.de"
         await kd_rank.finish(msg.strip())
 
     except FinishedException:
@@ -186,7 +184,9 @@ async def handle_check_kd(args: Message = CommandArg()) -> None:
                 else:
                     msg += f"☠️ 天敌：{w_name}（{w_k}/{w_d} KD {w_kd}）\n"
 
-        msg += "━" * 20 + "\n"
+        msg += "-" * 30 + "\n"
+        msg += "对手 | K/D | 击杀/死亡\n"
+        msg += "-" * 30 + "\n"
 
         display_data = data[:20]
         for p in display_data:
@@ -194,12 +194,12 @@ async def handle_check_kd(args: Message = CommandArg()) -> None:
             kd = p.get("kd", 0)
             k = p.get("kills", 0)
             d = p.get("deaths", 0)
-            msg += f"⚔️ {op_name} · KD {kd} · 🗡️{k} · 💀{d}\n"
+            msg += f"{op_name}: {kd} ({k}/{d})\n"
 
         if len(data) > 20:
-            msg += f"…+{len(data) - 20} 人"
+            msg += f"…+{len(data) - 20} 人\n"
 
-        msg += f"\n🔗 r5.sleep0.de/player/{player_name}"
+        msg += f"\n🔗 详细数据: https://r5.sleep0.de/player/{player_name}"
         await check_kd.finish(msg.strip())
 
     except FinishedException:
