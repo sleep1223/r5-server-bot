@@ -144,6 +144,7 @@ async def kick_player(
     player_obj, err = await get_player_by_identifier(nucleus_id_or_player_name)
     if err:
         return err
+    assert player_obj is not None
 
     target_loc, err = get_online_location(player_obj)
     if err:
@@ -152,6 +153,7 @@ async def kick_player(
             data={"player_online": False},
             msg=f"Player {player_obj.nucleus_id} is not online; kick count recorded for {reason}",
         )
+    assert target_loc is not None
 
     target_host = target_loc["server_host"]
     target_port = target_loc["server_port"]
@@ -185,6 +187,7 @@ async def ban_player(
     player_obj, err = await get_player_by_identifier(nucleus_id_or_player_name)
     if err:
         return err
+    assert player_obj is not None
 
     rcon_key, rcon_pwd = require_rcon_config()
 
@@ -285,6 +288,7 @@ async def unban_player(nucleus_id_or_player_name: int | str):
     player_obj, err = await get_player_by_identifier(nucleus_id_or_player_name)
     if err:
         return err
+    assert player_obj is not None
 
     rcon_key, rcon_pwd = require_rcon_config()
 

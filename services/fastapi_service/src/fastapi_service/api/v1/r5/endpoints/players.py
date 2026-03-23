@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Literal
 
@@ -13,7 +15,7 @@ from ..utils import CN_TZ, parse_short_name
 router = APIRouter()
 
 
-async def get_player_by_identifier(identifier: int | str, require_nucleus_id: bool = True) -> tuple[Player | None, dict | None]:
+async def get_player_by_identifier(identifier: int | str, require_nucleus_id: bool = True) -> tuple[Player, None] | tuple[None, dict]:
     identifier_text = str(identifier).strip()
     filter_q = Q(Q(nucleus_hash__iexact=identifier_text) | Q(name__iexact=identifier_text))
     if identifier_text.isdigit():
@@ -51,9 +53,9 @@ def get_cached_ban_location(nucleus_id: int) -> dict | None:
         return None
 
     server_host = str(cached.get("server_host") or "")
-    server_port_raw = cached.get("server_port", 0)
+    server_port_raw: object = cached.get("server_port", 0)
     try:
-        server_port = int(server_port_raw)
+        server_port = int(str(server_port_raw))
     except Exception:
         server_port = 0
 

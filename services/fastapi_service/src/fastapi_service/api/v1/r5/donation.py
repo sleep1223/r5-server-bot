@@ -12,7 +12,7 @@ from .response import error, paginated, success
 
 class DonationCreate(BaseModel):
     donor_name: str | None = None
-    amount: Decimal = Field(..., gte=0)
+    amount: Decimal = Field(..., ge=0)
     currency: Literal["CNY", "USD", "EUR", "GBP", "JPY", "HKD", "TWD", "AUD", "CAD", "SGD"] = "CNY"
     message: str | None = None
 

@@ -38,7 +38,7 @@ nonebot-plugin-access-control = ["nonebot_plugin_access_control"]
 nonebot-plugin-orm = ["nonebot_plugin_orm"]
 
 [tool.ruff]
-line-length = 88
+line-length = 200
 target-version = "py311"
 extend-exclude = ["*_pb2.py", "*_pb2.pyi"]
 
@@ -106,6 +106,13 @@ ignore = [
     "PLR2004",
     "RUF001",
     "PLR0915",
+    "PLR0913",  # too-many-arguments — API client methods need many params
+    "PLR0912",  # too-many-branches — handler functions with many status checks
+    "ASYNC109", # async-function-with-timeout — timeout passed to httpx, not asyncio
+    "TID252",   # relative-import-from-parent-module — standard in nonebot plugins
+    "A004",     # import-shadowing-builtin — `help` service module name is intentional
+    "ANN003",   # missing-type-annotation-kwargs — **kwargs in internal methods
+    "ARG001",   # unused-function-argument — nonebot handler signatures require args
 ]
 allowed-confusables = ["，", "。", "“", "”", "：", "；", "？", "！", "【", "】", "《", "》", "…", "—", "（", "）", "、"]
 
@@ -117,6 +124,7 @@ keep-runtime-typing = true
 pythonVersion = "3.11"
 pythonPlatform = "All"
 typeCheckingMode = "standard"
+exclude = ["data/", ".venv/"]
 
 [tool.uv.workspace]
 members = [

@@ -156,7 +156,7 @@ async def get_weapon_leaderboard(
             if not weapon_stats:
                 continue
             best = None
-            best_key = None
+            best_key: tuple[float, ...] | None = None
             for pid, data in weapon_stats.items():
                 kills = data["kills"]
                 deaths = data["deaths"]
@@ -164,12 +164,12 @@ async def get_weapon_leaderboard(
                 if kills < min_kills or deaths < min_deaths:
                     continue
                 if sort == "kd":
-                    key = (kd, kills)
+                    key: tuple[float, ...] = (kd, kills)
                 elif sort == "kills":
                     key = (kills,)
                 else:
                     key = (deaths,)
-                if best is None or key > best_key:
+                if best_key is None or key > best_key:
                     best = {"pid": pid, "kills": kills, "deaths": deaths, "kd": kd, "weapon": iw}
                     best_key = key
             if best:
@@ -223,6 +223,7 @@ async def get_player_vs_all_stats(
     player, err = await get_player_by_identifier(nucleus_id_or_player_name, require_nucleus_id=False)
     if err:
         return err
+    assert player is not None
 
     pid = player.id
 
@@ -334,6 +335,7 @@ async def get_player_weapon_stats(
     player, err = await get_player_by_identifier(nucleus_id_or_player_name, require_nucleus_id=False)
     if err:
         return err
+    assert player is not None
 
     pid = player.id
 
