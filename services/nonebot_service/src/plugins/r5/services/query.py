@@ -23,7 +23,9 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
         await player_query.finish("⚠️ 请提供玩家名或ID")
 
     try:
-        resp = await api_client.query_player(content, page_no=1, page_size=20, timeout=5.0)
+        resp = await api_client.query_player(
+            content, page_no=1, page_size=20, timeout=5.0
+        )
 
         if resp.status_code != 200:
             await player_query.finish(f"❌ 查询失败: HTTP {resp.status_code}")

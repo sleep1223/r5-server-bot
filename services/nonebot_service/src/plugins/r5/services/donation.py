@@ -15,13 +15,17 @@ donation_del_service = donation_service.create_subservice("delete")
 
 
 # Commands
-cmd_view = on_command("捐赠查看", aliases={"捐赠列表", "查看捐赠"}, priority=5, block=True)
-cmd_add = on_command("捐赠新增", aliases={"新增捐赠", "添加捐赠"}, priority=5, block=True)
+cmd_view = on_command(
+    "捐赠查看", aliases={"捐赠列表", "查看捐赠"}, priority=5, block=True
+)
+cmd_add = on_command(
+    "捐赠新增", aliases={"新增捐赠", "添加捐赠"}, priority=5, block=True
+)
 cmd_del = on_command("捐赠删除", aliases={"删除捐赠"}, priority=5, block=True)
 
 
 @cmd_view.handle()
-async def handle_view():
+async def handle_view() -> None:
     try:
         resp = await api_client.get_donations()
         res = resp.json()
@@ -41,7 +45,11 @@ async def handle_view():
             note = d.get("message") or "无"
             if len(note) > 20:
                 note = note[:20] + "..."
-            msg += f"{idx}. [{date_str}] {d['donor_name']} 捐赠了 {d['amount']} {d['currency']} (备注: {note})\n"
+            msg += (
+                f"{idx}. [{date_str}] {d['donor_name']}"
+                f" 捐赠了 {d['amount']} {d['currency']}"
+                f" (备注: {note})\n"
+            )
 
         await cmd_view.finish(msg.strip())
 
@@ -54,7 +62,7 @@ async def handle_view():
 
 @cmd_add.handle()
 @donation_add_service.patch_handler()
-async def handle_add(args: Message = CommandArg()):
+async def handle_add(args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
     if not content:
         await cmd_add.finish("⚠️ 用法: /捐赠新增 <名字> <金额> [备注]")
@@ -73,14 +81,20 @@ async def handle_add(args: Message = CommandArg()):
         await cmd_add.finish("⚠️ 金额必须是数字。")
 
     try:
-        resp = await api_client.create_donation(donor_name=name, amount=amount, message=note)
+        resp = await api_client.create_donation(
+            donor_name=name, amount=amount, message=note
+        )
         res = resp.json()
 
         if res.get("code") == "0000":
             d = res.get("data")
             date_str = d.get("created_at", "")[:10]
             note_display = d.get("message") or "无"
-            await cmd_add.finish(f"✅ 已添加捐赠记录：\n{date_str} {d['donor_name']} {d['amount']} {d['currency']} {note_display}")
+            await cmd_add.finish(
+                f"✅ 已添加捐赠记录：\n{date_str}"
+                f" {d['donor_name']} {d['amount']}"
+                f" {d['currency']} {note_display}"
+            )
         else:
             await cmd_add.finish(f"❌ 添加失败: {res.get('msg')}")
 
@@ -93,7 +107,7 @@ async def handle_add(args: Message = CommandArg()):
 
 @cmd_del.handle()
 @donation_del_service.patch_handler()
-async def handle_del(args: Message = CommandArg()):
+async def handle_del(args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
     if not content or not content.isdigit():
         await cmd_del.finish("⚠️ 用法: /捐赠删除 <序号> (请先使用 /捐赠查看 获取序号)")
@@ -120,7 +134,10 @@ async def handle_del(args: Message = CommandArg()):
         del_res = del_resp.json()
 
         if del_res.get("code") == "0000":
-            await cmd_del.finish(f"✅ 已删除捐赠记录：{target['donor_name']} - {target['amount']}")
+            await cmd_del.finish(
+                f"✅ 已删除捐赠记录："
+                f"{target['donor_name']} - {target['amount']}"
+            )
         else:
             await cmd_del.finish(f"❌ 删除失败: {del_res.get('msg')}")
 

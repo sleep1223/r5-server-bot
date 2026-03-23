@@ -30,7 +30,11 @@ async def handle_ban(args: Message = CommandArg()) -> None:
     parts = text.split()
 
     if not parts:
-        await cmd_ban.finish(f"⚠️ 用法: /ban <玩家名或ID> [原因]\n默认原因: NO_COVER\n可选原因: {', '.join(ALLOWED_REASONS)}")
+        reasons = ", ".join(ALLOWED_REASONS)
+        await cmd_ban.finish(
+            f"⚠️ 用法: /ban <玩家名或ID> [原因]\n"
+            f"默认原因: NO_COVER\n可选原因: {reasons}"
+        )
 
     target = parts[0]
     reason = "NO_COVER"
@@ -89,7 +93,11 @@ async def handle_kick(args: Message = CommandArg()) -> None:
     parts = text.split()
 
     if not parts:
-        await cmd_kick.finish(f"⚠️ 用法: /kick <玩家名或ID> [原因]\n默认原因: NO_COVER\n可选原因: {', '.join(ALLOWED_REASONS)}")
+        reasons = ", ".join(ALLOWED_REASONS)
+        await cmd_kick.finish(
+            f"⚠️ 用法: /kick <玩家名或ID> [原因]\n"
+            f"默认原因: NO_COVER\n可选原因: {reasons}"
+        )
 
     target = parts[0]
     reason = "NO_COVER"
@@ -97,7 +105,10 @@ async def handle_kick(args: Message = CommandArg()) -> None:
         reason = parts[1].upper()
 
     if reason not in ALLOWED_REASONS:
-        await cmd_kick.finish(f"❌ 原因不合法。\n可选原因: {', '.join(ALLOWED_REASONS)}")
+        reasons = ", ".join(ALLOWED_REASONS)
+        await cmd_kick.finish(
+            f"❌ 原因不合法。\n可选原因: {reasons}"
+        )
 
     try:
         resp = await api_client.kick_player(target, reason, timeout=5.0)

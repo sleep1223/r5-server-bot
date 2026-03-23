@@ -81,8 +81,8 @@ async def ip_resolution_task():
                     try:
                         if ip in existing_ip_map:
                             info = existing_ip_map[ip]
-                            info.country = data.get("country")
-                            info.region = data.get("region")
+                            info.country = data.get("country") or ""
+                            info.region = data.get("region") or ""
                             info.is_resolved = True
                             await info.save()
 
@@ -153,8 +153,8 @@ async def sync_players_task():
                         if not s_ip or not s_port:
                             continue
                         client = R5NetConsole(s_ip, s_port, rcon_key)
+                        status_data: dict[str, Any] = {}
                         try:
-                            status_data = {}
                             proc_start = datetime.now()
                             await client.connect()
                             proc_duration = (datetime.now() - proc_start).total_seconds() * 1000
@@ -258,14 +258,14 @@ async def sync_players_task():
                             if p.nucleus_id and str(p.nucleus_id) not in online_nucleus_ids:
                                 if p.status == "online":
                                     p.status = "offline"
-                                    p.online_at = None
+                                    p.online_at = None  # type: ignore[reportAttributeAccessIssue]
                                     await p.save()
                                 elif p.status == "banned":
                                     pass
                                 if str(p.nucleus_id) not in online_nucleus_ids:
                                     if p.status not in ("offline", "banned"):
                                         p.status = "offline"
-                                        p.online_at = None
+                                        p.online_at = None  # type: ignore[reportAttributeAccessIssue]
                                         await p.save()
                     else:
                         logger.warning("Skipping offline detection due to server sync failures")
