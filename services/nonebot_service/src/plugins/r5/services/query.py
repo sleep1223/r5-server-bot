@@ -27,31 +27,30 @@ STATUS_MAP = {
 async def handle_player_query(args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
     if not content:
-        await player_query.finish("请提供玩家名或 ID\n用法：/查询 <玩家名或ID>")
+        await player_query.finish("❌ 用法：/查询 <玩家名或ID>")
 
     try:
         resp = await api_client.query_player(content, page_no=1, page_size=20, timeout=5.0)
 
         if resp.status_code != 200:
-            await player_query.finish(f"查询失败，服务器返回 HTTP {resp.status_code}")
+            await player_query.finish(f"❌ HTTP {resp.status_code}")
 
         res = resp.json()
         if res.get("code") == "2001":
-            await player_query.finish(f"未找到玩家「{content}」")
+            await player_query.finish(f"❌ 未找到「{content}」")
 
         if res.get("code") != "0000":
-            await player_query.finish(f"查询失败: {res.get('msg')}")
+            await player_query.finish(f"❌ {res.get('msg')}")
 
         data = res.get("data", [])
         if not data:
-            await player_query.finish(f"未找到玩家「{content}」")
+            await player_query.finish(f"❌ 未找到「{content}」")
 
-        # 优先显示在线玩家，只显示前3个
         data.sort(key=lambda x: x.get("is_online", False), reverse=True)
         data = data[:3]
 
-        msg = f"玩家查询：{content}\n"
-        msg += "━" * 24 + "\n"
+        msg = f"👤 查询：{content}\n"
+        msg += "━" * 20 + "\n"
 
         for item in data:
             p = item.get("player", {})
@@ -68,38 +67,38 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
             if status_icon == "❓":
                 status_icon = "🟢" if is_online else "🔴"
 
-            msg += f"{status_icon} {p.get('name')}（ID: {p.get('nucleus_id')}）\n"
-            msg += f"  状态：{status_text}"
+            msg += f"{status_icon} {p.get('name')}（{p.get('nucleus_id')}）\n"
+
+            tags = [status_text]
             if ban_count > 0:
-                msg += f" | 封禁 {ban_count} 次"
+                tags.append(f"🚫×{ban_count}")
             if kick_count > 0:
-                msg += f" | 踢出 {kick_count} 次"
-            msg += "\n"
+                tags.append(f"⚠️×{kick_count}")
+            msg += f"  {'｜'.join(tags)}\n"
 
             country = p.get("country") or "未知"
             region = p.get("region") or "未知"
-            msg += f"  地区：{country} {region}\n"
+            msg += f"  🌍 {country} {region}\n"
 
             if is_online:
-                msg += f"  延迟：{ping}ms\n"
+                msg += f"  📶 {ping}ms"
                 if server:
                     server_name = server.get("short_name") or server.get("name")
-                    msg += f"  服务器：{server_name}\n"
+                    msg += f" · 🖥️ {server_name}"
+                msg += "\n"
                 duration = item.get("duration_seconds", 0)
                 hours, remainder = divmod(duration, 3600)
                 minutes = remainder // 60
                 if hours > 0:
-                    msg += f"  在线时长：{hours} 小时 {minutes} 分钟\n"
+                    msg += f"  ⏱️ {hours}h{minutes}m\n"
                 else:
-                    msg += f"  在线时长：{minutes} 分钟\n"
+                    msg += f"  ⏱️ {minutes}m\n"
             elif status_str == "banned" and server:
                 server_name = server.get("short_name") or server.get("name")
-                if item.get("server_source") == "ban_cache":
-                    msg += f"  封禁服务器（缓存）：{server_name}\n"
-                else:
-                    msg += f"  封禁服务器：{server_name}\n"
+                cache_tag = "（缓存）" if item.get("server_source") == "ban_cache" else ""
+                msg += f"  🚫 {server_name}{cache_tag}\n"
 
-            msg += "━" * 24 + "\n"
+            msg += "━" * 20 + "\n"
 
         await player_query.finish(msg.strip())
 
@@ -107,4 +106,4 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
         raise
     except Exception as e:
         traceback.print_exc()
-        await player_query.finish(f"查询出错: {e}")
+        await player_query.finish(f"❌ {e}")
