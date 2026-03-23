@@ -7,7 +7,7 @@ class Player(models.Model):
     nucleus_id = fields.BigIntField(null=True, unique=True)
     nucleus_hash = fields.CharField(max_length=100, null=True, unique=True)
     name = fields.CharField(max_length=255, db_index=True)
-    ip = fields.CharField(max_length=50, null=True)
+    ip = fields.CharField(max_length=50, null=True, db_index=True)
     country = fields.CharField(max_length=100, null=True)
     region = fields.CharField(max_length=100, null=True)
     ping = fields.IntField(default=0)
@@ -91,16 +91,19 @@ class PlayerDisconnected(BaseEvent):
 
 
 class PlayerKilled(BaseEvent):
-    attacker = fields.ForeignKeyField("models.Player", related_name="kills", null=True)
-    victim = fields.ForeignKeyField("models.Player", related_name="deaths", null=True)
+    attacker = fields.ForeignKeyField("models.Player", related_name="kills", null=True, db_index=True)
+    victim = fields.ForeignKeyField("models.Player", related_name="deaths", null=True, db_index=True)
     awarded_to = fields.ForeignKeyField("models.Player", related_name="awarded_kills", null=True)
     attacker_data = fields.JSONField(null=True)
     victim_data = fields.JSONField(null=True)
     awarded_to_data = fields.JSONField(null=True)
-    weapon = fields.CharField(max_length=100)
+    weapon = fields.CharField(max_length=100, db_index=True)
 
     class Meta:
         table = "player_killed"
+        indexes = [
+            ("created_at",),
+        ]
 
 
 class IpInfo(models.Model):
