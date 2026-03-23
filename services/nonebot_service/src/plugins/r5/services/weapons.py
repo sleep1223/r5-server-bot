@@ -96,43 +96,43 @@ async def handle_check_weapons(args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
     target = content
     if not target:
-        await check_weapons.finish("❌ 用法：/个人武器 <玩家名或ID>")
+        await check_weapons.finish("请提供玩家名称或 ID\n用法：/个人武器 <玩家名或ID>")
 
     sort = _parse_sort(content)
 
     try:
         resp = await api_client.get_player_weapons(target=target, sort=sort, timeout=3.0)
         if resp.status_code != 200:
-            await check_weapons.finish(f"❌ HTTP {resp.status_code}")
+            await check_weapons.finish(f"查询失败，服务器返回 HTTP {resp.status_code}")
 
         req = resp.json()
 
         if req.get("code") == "2001":
-            await check_weapons.finish(f"❌ 未找到「{target}」")
+            await check_weapons.finish(f"未找到玩家「{target}」")
 
         if req.get("code") != "0000":
-            await check_weapons.finish(f"❌ {req.get('msg')}")
+            await check_weapons.finish(f"查询失败: {req.get('msg')}")
 
         data = req.get("data", [])
         if not data:
-            await check_weapons.finish(f"🎯 「{target}」暂无武器数据")
+            await check_weapons.finish(f"玩家「{target}」暂无武器数据")
 
         player_info = req.get("player") or {}
         player_name = player_info.get("name") or target
 
-        msg = f"🎯 「{player_name}」武器统计\n"
+        msg = f"「{player_name}」武器统计\n"
 
         if player_info:
             country = player_info.get("country") or "未知"
             region = player_info.get("region") or "未知"
-            msg += f"🌍 {country} {region}\n"
+            msg += f"地区：{country} {region}\n"
 
         summary = req.get("summary") or {}
         tk = summary.get("total_kills", 0)
         td = summary.get("total_deaths", 0)
         tkd = summary.get("kd", 0)
-        msg += f"📊 KD {tkd} · 🗡️{tk} · 💀{td}\n"
-        msg += "━" * 20 + "\n"
+        msg += f"总计：击杀 {tk} / 死亡 {td}（KD {tkd}）\n"
+        msg += "━" * 24 + "\n"
 
         display = data[:20]
         for w in display:
@@ -141,20 +141,20 @@ async def handle_check_weapons(args: Message = CommandArg()) -> None:
             kd = w.get("kd", 0)
             k = w.get("kills", 0)
             d = w.get("deaths", 0)
-            msg += f"🔫 {weapon_name} · KD {kd} · 🗡️{k} · 💀{d}\n"
+            msg += f"{weapon_name}：KD {kd}（{k}/{d}）\n"
 
         if len(data) > 20:
-            msg += f"…+{len(data) - 20} 种\n"
+            msg += f"\n…及其他 {len(data) - 20} 种武器"
 
-        msg += f"\n🔗 r5.sleep0.de/player/{player_name}"
+        msg += f"\n详细数据：https://r5.sleep0.de/player/{player_name}"
         await check_weapons.finish(msg.strip())
     except FinishedException:
         raise
     except httpx.RequestError as e:
-        await check_weapons.finish(f"❌ {e}")
+        await check_weapons.finish(f"网络请求错误: {e}")
     except Exception as e:
         traceback.print_exc()
-        await check_weapons.finish(f"❌ {e}")
+        await check_weapons.finish(f"查询出错: {e}")
 
 
 @weapon_leaderboard.handle()
@@ -179,11 +179,11 @@ async def handle_weapon_leaderboard(args: Message = CommandArg()) -> None:
             timeout=3.0,
         )
         if resp.status_code != 200:
-            await weapon_leaderboard.finish(f"❌ HTTP {resp.status_code}")
+            await weapon_leaderboard.finish(f"查询失败，服务器返回 HTTP {resp.status_code}")
 
         req = resp.json()
         if req.get("code") != "0000":
-            await weapon_leaderboard.finish(f"❌ {req.get('msg')}")
+            await weapon_leaderboard.finish(f"查询失败: {req.get('msg')}")
 
         data = req.get("data", [])
         total = req.get("total", 0)
@@ -191,9 +191,9 @@ async def handle_weapon_leaderboard(args: Message = CommandArg()) -> None:
         range_cn = RANGE_DISPLAY.get(range_type, range_type)
         sort_cn = SORT_DISPLAY.get(sort, sort)
 
-        msg = f"🔫 武器榜（{range_cn}）\n"
-        msg += f"⚙️ ≥{dynamic_min_kills}杀 · 排序：{sort_cn}\n"
-        msg += "━" * 20 + "\n"
+        msg = f"武器排行榜（{range_cn}）\n"
+        msg += f"筛选：至少 {dynamic_min_kills} 击杀 | 排序：{sort_cn}\n"
+        msg += "━" * 24 + "\n"
 
         if not data:
             msg += "暂无数据"
@@ -207,18 +207,19 @@ async def handle_weapon_leaderboard(args: Message = CommandArg()) -> None:
             k = w.get("kills", 0)
             d = w.get("deaths", 0)
             kd = w.get("kd", 0)
-            msg += f"🎯 {weapon_name} · {name} · KD {kd} · 🗡️{k} · 💀{d}\n"
+            msg += f"{weapon_name}：{name}\n"
+            msg += f"  KD {kd}（击杀 {k} / 死亡 {d}）\n"
 
         if total > len(display):
-            msg += f"…+{total - len(display)} 种\n"
+            msg += f"\n…及其他 {total - len(display)} 种武器"
 
-        msg += "━" * 20 + "\n"
-        msg += "🔗 r5.sleep0.de"
+        msg += "\n━" * 24 + "\n"
+        msg += "服务器面板：https://r5.sleep0.de"
         await weapon_leaderboard.finish(msg.strip())
     except FinishedException:
         raise
     except httpx.RequestError as e:
-        await weapon_leaderboard.finish(f"❌ {e}")
+        await weapon_leaderboard.finish(f"网络请求错误: {e}")
     except Exception as e:
         traceback.print_exc()
-        await weapon_leaderboard.finish(f"❌ {e}")
+        await weapon_leaderboard.finish(f"查询出错: {e}")
