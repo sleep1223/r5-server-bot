@@ -29,7 +29,7 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
             await player_query.finish(f"❌ 查询失败: HTTP {resp.status_code}")
 
         res = resp.json()
-        if res.get("code") == "4001":  # Not found
+        if res.get("code") == "2001":  # Not found
             await player_query.finish(f"❌ 未找到玩家: {content}")
 
         if res.get("code") != "0000":

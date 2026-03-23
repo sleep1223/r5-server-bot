@@ -5,6 +5,7 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from Cryptodome.Hash import SHA512
+from fastapi.security import HTTPAuthorizationCredentials
 from loguru import logger
 from shared_lib.utils.ip import resolve_ips_batch as _resolve_ips_batch
 
@@ -39,7 +40,7 @@ async def resolve_ips_batch(ips: list[str]) -> dict[str, dict]:
     return _resolve_ips_batch(ips)
 
 
-def get_date_range(range_type: str) -> tuple[datetime, datetime]:
+def get_date_range(range_type: str) -> tuple[datetime | None, datetime | None]:
     now = datetime.now(CN_TZ)
     start_time = None
     end_time = None
@@ -58,3 +59,22 @@ def get_date_range(range_type: str) -> tuple[datetime, datetime]:
         start_time = datetime.combine(now.date().replace(day=1), time.min, tzinfo=CN_TZ)
         end_time = now
     return start_time, end_time
+
+
+def calc_kd(kills: int, deaths: int) -> float:
+    if deaths == 0:
+        return float(kills)
+    return round(kills / deaths, 2)
+
+
+def parse_short_name(full_name: str) -> str:
+    match = re.match(r"^(\[.*?\])", full_name)
+    return match.group(1) if match else full_name
+
+
+def check_is_admin(credentials: HTTPAuthorizationCredentials | None, access_tokens: list[str] | None) -> bool:
+    if not access_tokens:
+        return True
+    if credentials and credentials.credentials in access_tokens:
+        return True
+    return False
