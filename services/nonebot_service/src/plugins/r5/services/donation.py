@@ -15,12 +15,8 @@ donation_del_service = donation_service.create_subservice("delete")
 
 
 # Commands
-cmd_view = on_command(
-    "捐赠查看", aliases={"捐赠列表", "查看捐赠"}, priority=5, block=True
-)
-cmd_add = on_command(
-    "捐赠新增", aliases={"新增捐赠", "添加捐赠"}, priority=5, block=True
-)
+cmd_view = on_command("捐赠查看", aliases={"捐赠列表", "查看捐赠"}, priority=5, block=True)
+cmd_add = on_command("捐赠新增", aliases={"新增捐赠", "添加捐赠"}, priority=5, block=True)
 cmd_del = on_command("捐赠删除", aliases={"删除捐赠"}, priority=5, block=True)
 
 
@@ -31,25 +27,26 @@ async def handle_view() -> None:
         res = resp.json()
 
         if res.get("code") != "0000":
-            await cmd_view.finish(f"❌ 获取失败: {res.get('msg')}")
+            await cmd_view.finish(f"获取失败: {res.get('msg')}")
 
         donations = res.get("data", [])
         if not donations:
-            await cmd_view.finish("ℹ️ 暂无捐赠记录。")
+            await cmd_view.finish("暂无捐赠记录")
 
-        msg = "💰 捐赠列表\n❤️ 捐赠地址 https://afdian.com/a/Sleep1223\n"
-        # API returns: id, donor_name, amount, currency, message, created_at
+        msg = "捐赠列表\n"
+        msg += "捐赠地址：https://afdian.com/a/Sleep1223\n"
+        msg += "━" * 24 + "\n"
+
         for idx, d in enumerate(donations, 1):
-            # Format date: 2023-10-27T10:00:00+08:00 -> 2023-10-27
             date_str = d.get("created_at", "")[:10]
-            note = d.get("message") or "无"
+            note = d.get("message") or ""
             if len(note) > 20:
-                note = note[:20] + "..."
-            msg += (
-                f"{idx}. [{date_str}] {d['donor_name']}"
-                f" 捐赠了 {d['amount']} {d['currency']}"
-                f" (备注: {note})\n"
-            )
+                note = note[:20] + "…"
+            line = f"{idx}. {d['donor_name']}  {d['amount']} {d['currency']}"
+            if note:
+                line += f"（{note}）"
+            line += f"  [{date_str}]"
+            msg += line + "\n"
 
         await cmd_view.finish(msg.strip())
 
@@ -57,7 +54,7 @@ async def handle_view() -> None:
         raise
     except Exception as e:
         traceback.print_exc()
-        await cmd_view.finish(f"❌ 执行出错: {e}")
+        await cmd_view.finish(f"执行出错: {e}")
 
 
 @cmd_add.handle()
@@ -65,11 +62,11 @@ async def handle_view() -> None:
 async def handle_add(args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
     if not content:
-        await cmd_add.finish("⚠️ 用法: /捐赠新增 <名字> <金额> [备注]")
+        await cmd_add.finish("用法：/捐赠新增 <名字> <金额> [备注]")
 
     parts = content.split()
     if len(parts) < 2:
-        await cmd_add.finish("⚠️ 参数不足。用法: /捐赠新增 <名字> <金额> [备注]")
+        await cmd_add.finish("参数不足\n用法：/捐赠新增 <名字> <金额> [备注]")
 
     name = parts[0]
     amount_str = parts[1]
@@ -78,31 +75,27 @@ async def handle_add(args: Message = CommandArg()) -> None:
     try:
         amount = float(amount_str)
     except ValueError:
-        await cmd_add.finish("⚠️ 金额必须是数字。")
+        await cmd_add.finish("金额必须是数字")
 
     try:
-        resp = await api_client.create_donation(
-            donor_name=name, amount=amount, message=note
-        )
+        resp = await api_client.create_donation(donor_name=name, amount=amount, message=note)
         res = resp.json()
 
         if res.get("code") == "0000":
             d = res.get("data")
-            date_str = d.get("created_at", "")[:10]
-            note_display = d.get("message") or "无"
-            await cmd_add.finish(
-                f"✅ 已添加捐赠记录：\n{date_str}"
-                f" {d['donor_name']} {d['amount']}"
-                f" {d['currency']} {note_display}"
-            )
+            note_display = d.get("message") or ""
+            line = f"已添加：{d['donor_name']}  {d['amount']} {d['currency']}"
+            if note_display:
+                line += f"（{note_display}）"
+            await cmd_add.finish(line)
         else:
-            await cmd_add.finish(f"❌ 添加失败: {res.get('msg')}")
+            await cmd_add.finish(f"添加失败: {res.get('msg')}")
 
     except FinishedException:
         raise
     except Exception as e:
         traceback.print_exc()
-        await cmd_add.finish(f"❌ 执行出错: {e}")
+        await cmd_add.finish(f"执行出错: {e}")
 
 
 @cmd_del.handle()
@@ -110,7 +103,7 @@ async def handle_add(args: Message = CommandArg()) -> None:
 async def handle_del(args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
     if not content or not content.isdigit():
-        await cmd_del.finish("⚠️ 用法: /捐赠删除 <序号> (请先使用 /捐赠查看 获取序号)")
+        await cmd_del.finish("用法：/捐赠删除 <序号>\n请先使用 /捐赠查看 获取序号")
 
     idx = int(content)
 
@@ -120,11 +113,11 @@ async def handle_del(args: Message = CommandArg()) -> None:
         res = resp.json()
 
         if res.get("code") != "0000":
-            await cmd_del.finish(f"❌ 获取列表失败: {res.get('msg')}")
+            await cmd_del.finish(f"获取列表失败: {res.get('msg')}")
 
         donations = res.get("data", [])
         if idx < 1 or idx > len(donations):
-            await cmd_del.finish("⚠️ 序号无效。")
+            await cmd_del.finish("序号无效，请使用 /捐赠查看 确认")
 
         target = donations[idx - 1]
         donation_id = target["id"]
@@ -134,15 +127,12 @@ async def handle_del(args: Message = CommandArg()) -> None:
         del_res = del_resp.json()
 
         if del_res.get("code") == "0000":
-            await cmd_del.finish(
-                f"✅ 已删除捐赠记录："
-                f"{target['donor_name']} - {target['amount']}"
-            )
+            await cmd_del.finish(f"已删除：{target['donor_name']} {target['amount']} {target.get('currency', 'CNY')}")
         else:
-            await cmd_del.finish(f"❌ 删除失败: {del_res.get('msg')}")
+            await cmd_del.finish(f"删除失败: {del_res.get('msg')}")
 
     except FinishedException:
         raise
     except Exception as e:
         traceback.print_exc()
-        await cmd_del.finish(f"❌ 执行出错: {e}")
+        await cmd_del.finish(f"执行出错: {e}")
