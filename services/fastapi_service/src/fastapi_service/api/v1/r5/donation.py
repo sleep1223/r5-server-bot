@@ -5,7 +5,9 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from shared_lib.models import Donation
 
-from .api import verify_token
+from .auth import verify_token
+from .errors import ErrorCode
+from .response import error, paginated, success
 
 
 class DonationCreate(BaseModel):
@@ -29,7 +31,7 @@ async def create_donation(payload: DonationCreate):
             message=payload.message,
         ),
     )
-    return {"code": "0000", "data": donation, "msg": "Donation created" if created else "Donation updated"}
+    return success(data=donation, msg="Donation created" if created else "Donation updated")
 
 
 @router.get("/donations")
@@ -40,12 +42,12 @@ async def list_donations(
     total = await Donation.all().count()
     offset = (page_no - 1) * page_size
     items = await Donation.all().order_by("-created_at").limit(page_size).offset(offset).values()
-    return {"code": "0000", "data": items, "total": total, "msg": "Donations retrieved"}
+    return paginated(data=items, total=total, msg="Donations retrieved")
 
 
 @router.delete("/donations/{donation_id}", dependencies=[Depends(verify_token)])
 async def delete_donation(donation_id: int):
     deleted = await Donation.filter(id=donation_id).delete()
     if not deleted:
-        return {"code": "4001", "data": None, "msg": "Donation not found"}
-    return {"code": "0000", "data": None, "msg": "Donation deleted"}
+        return error(ErrorCode.DONATION_NOT_FOUND, msg="Donation not found")
+    return success(msg="Donation deleted")

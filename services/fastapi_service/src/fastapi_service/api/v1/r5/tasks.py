@@ -18,22 +18,22 @@ from .utils import CN_TZ, generate_hash, get_local_ping, resolve_ips_batch
 
 async def fetch_server_list_raw_task():
     url = "https://r5r-sl.ugniushosting.com/servers"
-    async with httpx.AsyncClient() as client:
-        while True:
-            try:
+    while True:
+        try:
+            async with httpx.AsyncClient() as client:
                 response = await client.post(url, timeout=10.0)
-                if response.status_code == 200:
-                    data = response.json()
-                    raw_server_response_cache.clear()
-                    if isinstance(data, dict):
-                        raw_server_response_cache.update(data)
-                    else:
-                        raw_server_response_cache["data"] = data
+            if response.status_code == 200:
+                data = response.json()
+                raw_server_response_cache.clear()
+                if isinstance(data, dict):
+                    raw_server_response_cache.update(data)
                 else:
-                    logger.warning(f"Failed to fetch raw server list: {response.status_code}")
-            except Exception as e:
-                logger.error(f"Error fetching raw server list: {e}")
-            await asyncio.sleep(5)
+                    raw_server_response_cache["data"] = data
+            else:
+                logger.warning(f"Failed to fetch raw server list: {response.status_code}")
+        except Exception as e:
+            logger.error(f"Error fetching raw server list: {e}")
+        await asyncio.sleep(5)
 
 
 async def ip_resolution_task():
@@ -119,7 +119,7 @@ async def sync_players_task():
 
                 async def fetch_servers():
                     async with httpx.AsyncClient() as client:
-                        response = await client.post(servers_url)
+                        response = await client.post(servers_url, timeout=10.0)
                         response.raise_for_status()
                         return response.json()["servers"]
 
