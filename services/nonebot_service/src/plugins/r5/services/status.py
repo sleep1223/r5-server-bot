@@ -28,28 +28,28 @@ async def handle_server_status(args: Message = CommandArg()) -> None:
         resp = await api_client.get_server_status(server_name=params.get("server_name"), timeout=5.0)
 
         if resp.status_code != 200:
-            await server_status.finish(f"查询失败，服务器返回 HTTP {resp.status_code}")
+            await server_status.finish(f"❌ HTTP {resp.status_code}")
 
         res = resp.json()
         if res.get("code") != "0000":
-            await server_status.finish(f"查询失败: {res.get('msg')}")
+            await server_status.finish(f"❌ {res.get('msg')}")
 
         data = res.get("data", [])
         if not data:
-            await server_status.finish("当前没有在线服务器")
+            await server_status.finish("📡 当前无在线服务器")
 
         total_players = sum(s.get("player_count", 0) for s in data)
 
-        msg = f"服务器状态（共 {len(data)} 台，{total_players} 人在线）\n"
-        msg += "━" * 24 + "\n"
+        msg = f"📡 服务器 {len(data)} 台 · 👥 {total_players} 人\n"
+        msg += "━" * 20 + "\n"
 
         for s in data:
             name = s.get("short_name") or s.get("name", "未知")
             count = s.get("player_count", 0)
             max_players = s.get("max_players", 0)
             ping = s.get("ping", 0)
-            msg += f"{name}\n"
-            msg += f"  在线 {count}/{max_players} | 延迟 {ping}ms\n"
+            msg += f"🖥️ {name}\n"
+            msg += f"  👥 {count}/{max_players} · 📶 {ping}ms\n"
 
         await server_status.finish(msg.strip())
 
@@ -57,4 +57,4 @@ async def handle_server_status(args: Message = CommandArg()) -> None:
         raise
     except Exception as e:
         traceback.print_exc()
-        await server_status.finish(f"查询出错: {e}")
+        await server_status.finish(f"❌ {e}")

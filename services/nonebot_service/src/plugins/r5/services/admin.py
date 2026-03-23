@@ -37,8 +37,7 @@ async def handle_ban(args: Message = CommandArg()) -> None:
     parts = text.split()
 
     if not parts:
-        reasons = "、".join(ALLOWED_REASONS)
-        await cmd_ban.finish(f"用法：/ban <玩家名或ID> [原因]\n默认原因：NO_COVER\n可选原因：{reasons}")
+        await cmd_ban.finish("❌ 用法：/ban <玩家> [原因]")
 
     target = parts[0]
     reason = "NO_COVER"
@@ -46,10 +45,10 @@ async def handle_ban(args: Message = CommandArg()) -> None:
         reason = parts[1].upper()
 
     if reason not in ALLOWED_REASONS:
-        await cmd_ban.finish(f"原因不合法\n可选：{'、'.join(ALLOWED_REASONS)}")
+        await cmd_ban.finish(f"❌ 可选原因：{'｜'.join(ALLOWED_REASONS)}")
 
     reason_cn = REASON_CN.get(reason, reason)
-    await cmd_ban.send(f"正在封禁「{target}」（{reason_cn}），请稍候…")
+    await cmd_ban.send(f"⏳ 封禁「{target}」（{reason_cn}）…")
 
     try:
         resp = await api_client.ban_player(target, reason, timeout=5.0)
@@ -61,31 +60,31 @@ async def handle_ban(args: Message = CommandArg()) -> None:
                 primary = data.get("primary_server") or {}
                 server_name = primary.get("name") or (f"{primary.get('host', '未知')}:{primary.get('port', '未知')}")
                 async_count = data.get("async_server_count", 0)
-                msg = f"封禁成功\n玩家「{target}」正在线\n已封禁服务器：{server_name}\n"
+                msg = f"🚫 已封禁「{target}」\n🟢 在线 · 🖥️ {server_name}"
                 if async_count > 0:
-                    msg += f"后台同步中（剩余 {async_count} 台服务器）"
-                await cmd_ban.finish(msg.strip())
+                    msg += f"\n🔄 同步剩余 {async_count} 台"
+                await cmd_ban.finish(msg)
             elif data.get("player_online") is False:
                 async_count = data.get("async_server_count", 0)
-                await cmd_ban.finish(f"玩家「{target}」当前不在线\n已启动后台封禁（共 {async_count} 台服务器）")
+                await cmd_ban.finish(f"🚫 「{target}」离线\n🔄 后台封禁 {async_count} 台")
             else:
-                await cmd_ban.finish(f"封禁完成：{target}")
+                await cmd_ban.finish(f"🚫 已封禁「{target}」")
         else:
             code = res.get("code", "")
             if code == "2001":
-                await cmd_ban.finish(f"未找到玩家「{target}」")
+                await cmd_ban.finish(f"❌ 未找到「{target}」")
             elif code == "3001":
-                await cmd_ban.finish("RCON 配置缺失，无法执行封禁")
+                await cmd_ban.finish("❌ RCON 配置缺失")
             elif code == "3002":
-                await cmd_ban.finish(f"封禁「{target}」失败，RCON 操作未成功")
+                await cmd_ban.finish(f"❌ 封禁「{target}」RCON 失败")
             else:
-                await cmd_ban.finish(f"封禁失败: {res.get('msg')}")
+                await cmd_ban.finish(f"❌ {res.get('msg')}")
 
     except FinishedException:
         raise
     except Exception as e:
         traceback.print_exc()
-        await cmd_ban.finish(f"执行出错: {e}")
+        await cmd_ban.finish(f"❌ {e}")
 
 
 @cmd_kick.handle()
@@ -95,8 +94,7 @@ async def handle_kick(args: Message = CommandArg()) -> None:
     parts = text.split()
 
     if not parts:
-        reasons = "、".join(ALLOWED_REASONS)
-        await cmd_kick.finish(f"用法：/kick <玩家名或ID> [原因]\n默认原因：NO_COVER\n可选原因：{reasons}")
+        await cmd_kick.finish("❌ 用法：/kick <玩家> [原因]")
 
     target = parts[0]
     reason = "NO_COVER"
@@ -104,7 +102,7 @@ async def handle_kick(args: Message = CommandArg()) -> None:
         reason = parts[1].upper()
 
     if reason not in ALLOWED_REASONS:
-        await cmd_kick.finish(f"原因不合法\n可选：{'、'.join(ALLOWED_REASONS)}")
+        await cmd_kick.finish(f"❌ 可选原因：{'｜'.join(ALLOWED_REASONS)}")
 
     reason_cn = REASON_CN.get(reason, reason)
 
@@ -115,23 +113,23 @@ async def handle_kick(args: Message = CommandArg()) -> None:
         if res.get("code") == "0000":
             data = res.get("data") or {}
             if data.get("player_online") is False:
-                await cmd_kick.finish(f"玩家「{target}」当前不在线，已记录踢出（{reason_cn}）")
+                await cmd_kick.finish(f"⚠️ 「{target}」离线 · 已记录（{reason_cn}）")
             else:
-                await cmd_kick.finish(f"已踢出玩家「{target}」（{reason_cn}）")
+                await cmd_kick.finish(f"⚠️ 已踢出「{target}」（{reason_cn}）")
         else:
             code = res.get("code", "")
             if code == "2001":
-                await cmd_kick.finish(f"未找到玩家「{target}」")
+                await cmd_kick.finish(f"❌ 未找到「{target}」")
             elif code == "3002":
-                await cmd_kick.finish(f"踢出「{target}」失败，RCON 操作未成功")
+                await cmd_kick.finish(f"❌ 踢出「{target}」RCON 失败")
             else:
-                await cmd_kick.finish(f"踢出失败: {res.get('msg')}")
+                await cmd_kick.finish(f"❌ {res.get('msg')}")
 
     except FinishedException:
         raise
     except Exception as e:
         traceback.print_exc()
-        await cmd_kick.finish(f"执行出错: {e}")
+        await cmd_kick.finish(f"❌ {e}")
 
 
 @cmd_unban.handle()
@@ -139,9 +137,9 @@ async def handle_kick(args: Message = CommandArg()) -> None:
 async def handle_unban(args: Message = CommandArg()) -> None:
     target = args.extract_plain_text().strip()
     if not target:
-        await cmd_unban.finish("用法：/unban <玩家名或ID>")
+        await cmd_unban.finish("❌ 用法：/unban <玩家>")
 
-    await cmd_unban.send(f"正在解封「{target}」，请稍候…")
+    await cmd_unban.send(f"⏳ 解封「{target}」…")
 
     try:
         resp = await api_client.unban_player(target, timeout=12.0)
@@ -151,27 +149,27 @@ async def handle_unban(args: Message = CommandArg()) -> None:
             data = res.get("data") or {}
             async_count = data.get("async_server_count", 0)
             if data.get("player_online"):
-                await cmd_unban.finish(f"已解封在线玩家「{target}」")
+                await cmd_unban.finish(f"✅ 已解封「{target}」（在线）")
             elif async_count > 0:
-                await cmd_unban.finish(f"玩家「{target}」当前不在线\n已启动后台解封（共 {async_count} 台服务器）")
+                await cmd_unban.finish(f"✅ 「{target}」离线\n🔄 后台解封 {async_count} 台")
             else:
-                await cmd_unban.finish(f"已解封玩家「{target}」")
+                await cmd_unban.finish(f"✅ 已解封「{target}」")
         else:
             code = res.get("code", "")
             if code == "2001":
-                await cmd_unban.finish(f"未找到玩家「{target}」")
+                await cmd_unban.finish(f"❌ 未找到「{target}」")
             elif code == "3003":
-                await cmd_unban.finish("当前没有在线服务器，无法执行解封")
+                await cmd_unban.finish("❌ 无在线服务器")
             elif code == "3002":
-                await cmd_unban.finish(f"解封「{target}」失败，RCON 操作未成功")
+                await cmd_unban.finish(f"❌ 解封「{target}」RCON 失败")
             else:
-                await cmd_unban.finish(f"解封失败: {res.get('msg')}")
+                await cmd_unban.finish(f"❌ {res.get('msg')}")
 
     except FinishedException:
         raise
     except httpx.ReadTimeout:
         traceback.print_exc()
-        await cmd_unban.finish("解封请求超时，服务器可能仍在后台执行\n请稍后查询玩家状态确认结果")
+        await cmd_unban.finish("⏱️ 超时，服务器可能仍在执行\n稍后 /查询 确认")
     except Exception as e:
         traceback.print_exc()
-        await cmd_unban.finish(f"执行出错: {e}")
+        await cmd_unban.finish(f"❌ {e}")
