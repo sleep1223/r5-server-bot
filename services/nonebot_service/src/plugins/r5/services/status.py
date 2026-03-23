@@ -48,8 +48,16 @@ async def handle_server_status(args: Message = CommandArg()) -> None:
             count = s.get("player_count", 0)
             max_players = s.get("max_players", 0)
             ping = s.get("ping", 0)
+            country = s.get("country") or ""
+            region = s.get("region") or ""
+            location = f" · 🌍 {country} {region}".rstrip() if country else ""
             msg += f"🖥️ {name}\n"
-            msg += f"  👥 {count}/{max_players} · 📶 {ping}ms\n"
+            msg += f"  👥 {count}/{max_players} · 📶 {ping}ms{location}\n"
+
+            players = s.get("players") or []
+            if players:
+                names = [p.get("name", "?") for p in players]
+                msg += f"  🎮 {', '.join(names)}\n"
 
         await server_status.finish(msg.strip())
 
