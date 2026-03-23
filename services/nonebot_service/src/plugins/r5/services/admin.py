@@ -115,7 +115,9 @@ async def handle_kick(args: Message = CommandArg()) -> None:
             if data.get("player_online") is False:
                 await cmd_kick.finish(f"⚠️ 「{target}」离线 · 已记录（{reason_cn}）")
             else:
-                await cmd_kick.finish(f"⚠️ 已踢出「{target}」（{reason_cn}）")
+                server = data.get("server") or {}
+                server_name = server.get("name") or "未知"
+                await cmd_kick.finish(f"⚠️ 已踢出「{target}」（{reason_cn}）\n🖥️ {server_name}")
         else:
             code = res.get("code", "")
             if code == "2001":
@@ -148,10 +150,18 @@ async def handle_unban(args: Message = CommandArg()) -> None:
         if res.get("code") == "0000":
             data = res.get("data") or {}
             async_count = data.get("async_server_count", 0)
+            target_server = data.get("target_server") or {}
+            server_name = target_server.get("name") or ""
             if data.get("player_online"):
-                await cmd_unban.finish(f"✅ 已解封「{target}」（在线）")
+                msg = f"✅ 已解封「{target}」（在线）"
+                if server_name:
+                    msg += f"\n🖥️ {server_name}"
+                await cmd_unban.finish(msg)
             elif async_count > 0:
-                await cmd_unban.finish(f"✅ 「{target}」离线\n🔄 后台解封 {async_count} 台")
+                msg = f"✅ 「{target}」离线\n🔄 后台解封 {async_count} 台"
+                if server_name:
+                    msg += f"\n🖥️ 首台：{server_name}"
+                await cmd_unban.finish(msg)
             else:
                 await cmd_unban.finish(f"✅ 已解封「{target}」")
         else:

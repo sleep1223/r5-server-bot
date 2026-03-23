@@ -170,7 +170,17 @@ async def kick_player(
 
     if kick_success:
         await Player.filter(nucleus_id=player_obj.nucleus_id).update(kick_count=player_obj.kick_count + 1, status="kicked")
-        return success(msg=f"Player {player_obj.nucleus_id} kicked from {target_loc['server_name']} for {reason}")
+        return success(
+            data={
+                "player_online": True,
+                "server": {
+                    "name": target_loc["server_name"],
+                    "host": target_host,
+                    "port": target_port,
+                },
+            },
+            msg=f"Player {player_obj.nucleus_id} kicked from {target_loc['server_name']} for {reason}",
+        )
     else:
         return error(ErrorCode.RCON_OPERATION_FAILED, msg=f"Failed to kick player {player_obj.nucleus_id}")
 
