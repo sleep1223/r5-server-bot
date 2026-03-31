@@ -13,7 +13,7 @@ __plugin_meta__ = PluginMetadata(
     usage="""
     指令:
     1. kd榜 [范围]
-       范围: 今日/today, 昨日/yesterday, 本周/week, 本月/month, 全部/all (默认)
+       范围: 今日/today(默认), 昨日/yesterday, 本周/week, 本月/month
        示例: kd榜 今日
 
     2. 查kd <玩家名/ID>

@@ -19,7 +19,7 @@ async def handle_help(args: Message = CommandArg()) -> None:
         "\n"
         "📊 数据统计\n"
         "  📈 /kd [范围] [排序]\n"
-        "    范围: 今天|昨天|本周|本月|全部\n"
+        "    范围: 今天|昨天|本周|本月\n"
         "    排序: 击杀|死亡|kd\n"
         "  👤 /个人kd <名字或NID>\n"
         "  🔫 /武器 - 武器排行榜\n"
