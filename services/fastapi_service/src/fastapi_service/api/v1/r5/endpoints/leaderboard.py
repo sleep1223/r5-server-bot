@@ -14,7 +14,7 @@ router = APIRouter()
 
 @router.get("/leaderboard/kd")
 async def get_kd_leaderboard(
-    range: Literal["today", "yesterday", "week", "month", "all"] = "all",
+    range: Literal["today", "yesterday", "week", "month"] = "today",
     page_no: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     sort: Literal["kills", "deaths", "kd"] = "kd",
@@ -92,7 +92,7 @@ async def get_weapon_leaderboard(
         default=["r99", "volt", "wingman", "flatline", "r301", "player"],
         description="Weapon names (e.g., r301) or internal codes; multiple allowed",
     ),
-    range: Literal["today", "yesterday", "week", "month", "all"] = "today",
+    range: Literal["today", "yesterday", "week", "month"] = "today",
     page_no: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     sort: Literal["kills", "deaths", "kd"] = "kd",
