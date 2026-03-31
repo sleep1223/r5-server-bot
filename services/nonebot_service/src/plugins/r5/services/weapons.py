@@ -141,8 +141,6 @@ async def handle_weapon_leaderboard(args: Message = CommandArg()) -> None:
         "week": "week",
         "本月": "month",
         "month": "month",
-        "全部": "all",
-        "all": "all",
     }
 
     range_type = "today"
