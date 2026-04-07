@@ -1,5 +1,8 @@
 import asyncio
 import logging
+from collections import defaultdict
+from collections.abc import Callable, Coroutine
+from typing import Any as TypingAny
 
 import websockets
 from google.protobuf import symbol_database
@@ -24,20 +27,82 @@ logger = logging.getLogger("LiveAPI")
 
 
 class LiveAPIListener:
-    def __init__(self, host="127.0.0.1", port=7771, db_config=None):
+    def __init__(self, host="127.0.0.1", port=7771, db_config=None, batch_interval: int = 60, batch_max_retries: int = 3):
         self.host = host
         self.port = port
         self.server = None
         self.db_config = db_config
+        self.batch_interval = batch_interval
+        self.batch_max_retries = batch_max_retries
+        self._pending_records: defaultdict[type, list] = defaultdict(list)
+        self._pending_tasks: list[Callable[[], Coroutine[TypingAny, TypingAny, TypingAny]]] = []
+        self._flush_task: asyncio.Task | None = None
 
     async def start(self):
         await init_db(self.db_config)
         logger.info(f"正在启动 LiveAPI 监听器于 {self.host}:{self.port}")
+        logger.info(f"批量写入配置: 间隔={self.batch_interval}s, 最大重试={self.batch_max_retries}次")
+        self._flush_task = asyncio.create_task(self._flush_loop())
         self.server = await websockets.serve(self.handle_connection, self.host, self.port)
         try:
             await self.server.wait_closed()
         finally:
+            self._flush_task.cancel()
+            # 关闭前刷写剩余数据
+            await self._flush()
             await close_db()
+
+    async def _flush_loop(self):
+        """定时批量刷写循环"""
+        while True:
+            await asyncio.sleep(self.batch_interval)
+            await self._flush()
+
+    async def _flush(self):
+        """将缓存的事件批量写入数据库"""
+        if not self._pending_records and not self._pending_tasks:
+            return
+
+        tasks = self._pending_tasks
+        self._pending_tasks = []
+        records = self._pending_records
+        self._pending_records = defaultdict(list)
+
+        total = sum(len(v) for v in records.values()) + len(tasks)
+        logger.info(f"开始批量写入 {total} 条记录...")
+
+        # 执行异步任务（玩家查询/更新，生成事件记录加入 _pending_records）
+        for task_fn in tasks:
+            try:
+                await task_fn()
+            except Exception as e:
+                logger.error(f"任务执行失败: {e}")
+
+        # 合并任务中产生的记录
+        for model_cls, instances in self._pending_records.items():
+            records[model_cls].extend(instances)
+        self._pending_records = defaultdict(list)
+
+        # 按模型类型 bulk_create 批量写入
+        total_records = sum(len(v) for v in records.values())
+        success_count = 0
+        for model_cls, instances in records.items():
+            if not instances:
+                continue
+            for attempt in range(1, self.batch_max_retries + 1):
+                try:
+                    await model_cls.bulk_create(instances)
+                    success_count += len(instances)
+                    break
+                except Exception as e:
+                    logger.error(f"批量创建 {model_cls.__name__} 失败 (第 {attempt}/{self.batch_max_retries} 次): {e}")
+                    if attempt == self.batch_max_retries:
+                        logger.error(f"{model_cls.__name__}: {len(instances)} 条记录在 {self.batch_max_retries} 次重试后仍未成功")
+
+        if success_count > 0:
+            logger.info(f"批量写入完成: 成功 {success_count}/{total_records}")
+        if success_count < total_records:
+            logger.error(f"批量写入最终失败: {total_records - success_count} 条记录")
 
     async def get_or_update_player(self, player_msg):
         """Helper to get or update a player record"""
@@ -58,16 +123,13 @@ class LiveAPIListener:
             logger.error(f"Error updating player: {e}")
             raise
 
-    def save_to_db(self, coroutine):
-        """Helper to schedule DB save task"""
+    def save_record(self, instance):
+        """将模型实例加入缓存队列，等待 bulk_create 批量写入"""
+        self._pending_records[type(instance)].append(instance)
 
-        async def task_wrapper():
-            try:
-                await coroutine
-            except Exception as e:
-                logger.error(f"Database save failed: {e}")
-
-        asyncio.create_task(task_wrapper())
+    def save_task(self, task_fn: Callable[[], Coroutine[TypingAny, TypingAny, TypingAny]]):
+        """将异步任务加入队列（用于需要先查询玩家的复杂操作）"""
+        self._pending_tasks.append(task_fn)
 
     async def handle_connection(self, websocket):
         logger.info(f"新连接来自 {websocket.remote_address}")
@@ -142,16 +204,16 @@ class LiveAPIListener:
 
     def on_Init(self, msg):
         logger.info(f"[初始化] 版本: {msg.gameVersion} 平台: {msg.platform}")
-        self.save_to_db(
-            InitEvent.create(
+        self.save_record(
+            InitEvent(
                 timestamp=msg.timestamp, category=msg.category, game_version=msg.gameVersion, api_version=MessageToDict(msg.apiVersion, preserving_proto_field_name=True), platform=msg.platform
             )
         )
 
     def on_MatchSetup(self, msg):
         logger.info(f"[比赛设置] 地图: {msg.map}, 模式: {msg.playlistName}, 服务器ID: {msg.serverId}")
-        self.save_to_db(
-            MatchSetup.create(
+        self.save_record(
+            MatchSetup(
                 timestamp=msg.timestamp,
                 category=msg.category,
                 map_name=msg.map,
@@ -165,7 +227,7 @@ class LiveAPIListener:
 
     def on_GameStateChanged(self, msg):
         logger.info(f"[游戏状态变更] 新状态: {msg.state}")
-        self.save_to_db(GameStateChanged.create(timestamp=msg.timestamp, category=msg.category, state=msg.state))
+        self.save_record(GameStateChanged(timestamp=msg.timestamp, category=msg.category, state=msg.state))
 
     def on_MatchStateEnd(self, msg):
         winner_names = [p.name for p in msg.winners]
@@ -180,35 +242,37 @@ class LiveAPIListener:
     def on_PlayerConnected(self, msg):
         logger.info(f"[玩家连接] {msg.player.name} (队伍 {msg.player.teamId})")
 
-        async def save_task():
+        async def task():
             player = await self.get_or_update_player(msg.player)
             if player:
                 player.status = "online"
                 await player.save()
-                await PlayerConnected.create(timestamp=msg.timestamp, category=msg.category, player=player, player_data=MessageToDict(msg.player, preserving_proto_field_name=True))
+                self.save_record(PlayerConnected(timestamp=msg.timestamp, category=msg.category, player=player, player_data=MessageToDict(msg.player, preserving_proto_field_name=True)))
 
-        self.save_to_db(save_task())
+        self.save_task(task)
 
     def on_PlayerDisconnected(self, msg):
         logger.info(f"[玩家断开] {msg.player.name} (可重连: {msg.canReconnect})")
 
-        async def save_task():
+        async def task():
             player = await self.get_or_update_player(msg.player)
             if player:
                 if player.status not in ["banned", "kicked"]:
                     player.status = "offline"
                     await player.save()
 
-                await PlayerDisconnected.create(
-                    timestamp=msg.timestamp,
-                    category=msg.category,
-                    player=player,
-                    player_data=MessageToDict(msg.player, preserving_proto_field_name=True),
-                    can_reconnect=msg.canReconnect,
-                    is_alive=getattr(msg, "isAlive", None),
+                self.save_record(
+                    PlayerDisconnected(
+                        timestamp=msg.timestamp,
+                        category=msg.category,
+                        player=player,
+                        player_data=MessageToDict(msg.player, preserving_proto_field_name=True),
+                        can_reconnect=msg.canReconnect,
+                        is_alive=getattr(msg, "isAlive", None),
+                    )
                 )
 
-        self.save_to_db(save_task())
+        self.save_task(task)
 
     def on_PlayerStatChanged(self, msg):
         # Handle oneof field for value
@@ -233,24 +297,26 @@ class LiveAPIListener:
     def on_PlayerKilled(self, msg):
         logger.info(f"[玩家被杀] {msg.attacker.name} 击杀了 {msg.victim.name} 使用武器: {msg.weapon}")
 
-        async def save_task():
+        async def task():
             attacker = await self.get_or_update_player(msg.attacker)
             victim = await self.get_or_update_player(msg.victim)
             awarded_to = await self.get_or_update_player(msg.awardedTo)
 
-            await PlayerKilled.create(
-                timestamp=msg.timestamp,
-                category=msg.category,
-                attacker=attacker,
-                victim=victim,
-                awarded_to=awarded_to,
-                attacker_data=MessageToDict(msg.attacker, preserving_proto_field_name=True) if msg.HasField("attacker") else None,
-                victim_data=MessageToDict(msg.victim, preserving_proto_field_name=True) if msg.HasField("victim") else None,
-                awarded_to_data=MessageToDict(msg.awardedTo, preserving_proto_field_name=True) if msg.HasField("awardedTo") else None,
-                weapon=msg.weapon,
+            self.save_record(
+                PlayerKilled(
+                    timestamp=msg.timestamp,
+                    category=msg.category,
+                    attacker=attacker,
+                    victim=victim,
+                    awarded_to=awarded_to,
+                    attacker_data=MessageToDict(msg.attacker, preserving_proto_field_name=True) if msg.HasField("attacker") else None,
+                    victim_data=MessageToDict(msg.victim, preserving_proto_field_name=True) if msg.HasField("victim") else None,
+                    awarded_to_data=MessageToDict(msg.awardedTo, preserving_proto_field_name=True) if msg.HasField("awardedTo") else None,
+                    weapon=msg.weapon,
+                )
             )
 
-        self.save_to_db(save_task())
+        self.save_task(task)
 
     def on_PlayerDowned(self, msg):
         logger.info(f"[玩家倒地] {msg.attacker.name} 击倒了 {msg.victim.name} 使用武器: {msg.weapon}")
@@ -332,9 +398,9 @@ class LiveAPIListener:
     def on_CharacterSelected(self, msg):
         logger.info(f"[角色选择] {msg.player.name} 选择了 {msg.player.character}")
 
-        async def save_task():
+        async def task():
             player = await self.get_or_update_player(msg.player)
             if player:
-                await CharacterSelected.create(timestamp=msg.timestamp, category=msg.category, player=player, player_data=MessageToDict(msg.player, preserving_proto_field_name=True))
+                self.save_record(CharacterSelected(timestamp=msg.timestamp, category=msg.category, player=player, player_data=MessageToDict(msg.player, preserving_proto_field_name=True)))
 
-        self.save_to_db(save_task())
+        self.save_task(task)

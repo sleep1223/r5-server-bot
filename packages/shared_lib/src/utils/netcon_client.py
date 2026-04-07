@@ -10,10 +10,7 @@ from Cryptodome.Random import get_random_bytes
 from Cryptodome.Util import Counter
 from loguru import logger
 
-try:
-    from .protos import netcon_pb2
-except ImportError:
-    from protos import netcon_pb2
+from .protos import netcon_pb2
 
 
 # 常量
@@ -35,14 +32,13 @@ class R5NetConsole:
         logger.info(f"正在连接到 {self.host}:{self.port}...")
         try:
             self.reader, self.writer = await asyncio.wait_for(asyncio.open_connection(self.host, self.port), timeout=timeout)
-            self.connected = True
-            logger.success("已连接。")
-            return True
-            # 不要在此时启动后台读取器，以避免与 authenticate() 发生竞争条件
         except TimeoutError:
             logger.error(f"连接到 {self.host}:{self.port} 超时，耗时 {timeout}秒。")
             raise
-        return False
+        # 不要在此时启动后台读取器，以避免与 authenticate() 发生竞争条件
+        self.connected = True
+        logger.success("已连接。")
+        return True
 
     async def close(self) -> None:
         self.connected = False
