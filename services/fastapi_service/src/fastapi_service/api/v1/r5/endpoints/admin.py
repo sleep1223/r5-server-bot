@@ -79,7 +79,7 @@ async def run_ban_on_servers_background(
         server_name = server.get("server_name") or server_key
         try:
             async with rcon_session(host, port, rcon_key, rcon_pwd) as client:
-                if await client.bann(nucleus_id, f"BAN_REASON_{reason}"):
+                if await client.bann(nucleus_id, f"#BAN_REASON_{reason}"):
                     success_count += 1
                     if cache_server_on_first_success and not cached_server:
                         cache_banned_server(
@@ -163,7 +163,7 @@ async def kick_player(
     kick_success = False
     try:
         async with rcon_session(target_host, target_port, rcon_key, rcon_pwd) as client:
-            if await client.kick(player_obj.nucleus_id, f"KICK_REASON_{reason}"):
+            if await client.kick(player_obj.nucleus_id, f"#KICK_REASON_{reason}"):
                 kick_success = True
     except Exception as e:
         logger.error(f"Failed to kick player on {target_host}:{target_port}: {e}")

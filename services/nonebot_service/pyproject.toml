@@ -126,6 +126,12 @@ pythonPlatform = "All"
 typeCheckingMode = "standard"
 exclude = ["data/", ".venv/"]
 
+[tool.pyright]
+pythonVersion = "3.11"
+pythonPlatform = "All"
+typeCheckingMode = "standard"
+exclude = ["data/", ".venv/"]
+
 [tool.uv.workspace]
 members = [
     "data/test",

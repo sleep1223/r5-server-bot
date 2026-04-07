@@ -21,7 +21,7 @@ cmd_del = on_command("捐赠删除", aliases={"删除捐赠"}, priority=5, block
 
 
 @cmd_view.handle()
-async def handle_view():
+async def handle_view() -> None:
     try:
         resp = await api_client.get_donations()
         res = resp.json()
@@ -56,7 +56,7 @@ async def handle_view():
 
 @cmd_add.handle()
 @donation_add_service.patch_handler()
-async def handle_add(args: Message = CommandArg()):
+async def handle_add(args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
     if not content:
         await cmd_add.finish("⚠️ 用法:\n/捐赠新增 <名字> <金额> [备注]")
@@ -99,7 +99,7 @@ async def handle_add(args: Message = CommandArg()):
 
 @cmd_del.handle()
 @donation_del_service.patch_handler()
-async def handle_del(args: Message = CommandArg()):
+async def handle_del(args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
     if not content or not content.isdigit():
         await cmd_del.finish("⚠️ 用法: /捐赠删除 <序号>\n请先 /捐赠查看 获取序号")

@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     # WS Service settings
     ws_host: str = "0.0.0.0"
     ws_port: int = 8000
+    ws_batch_interval: int = 60  # 批量写入间隔（秒）
+    ws_batch_max_retries: int = 3  # 批量写入失败最大重试次数
 
     # FastAPI Service settings
     fastapi_host: str = "0.0.0.0"

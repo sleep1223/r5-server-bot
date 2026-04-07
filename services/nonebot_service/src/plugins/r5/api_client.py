@@ -7,7 +7,7 @@ from .config import Config
 
 
 class R5ApiClient:
-    def __init__(self):
+    def __init__(self) -> None:
         self.config = get_plugin_config(Config)
         self.base_url = self.config.r5_api_base
         self.token = self.config.r5_api_token

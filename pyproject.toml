@@ -21,3 +21,10 @@ exclude = [
 tortoise_orm = "shared_lib.database.TORTOISE_ORM"
 location = "./packages/shared_lib/migrations"
 src_folder = "./packages/shared_lib/src"
+
+[tool.pyright]
+exclude = [
+    "**/__pycache__",
+    "**/.venv",
+    "services/nonebot_service",
+]
