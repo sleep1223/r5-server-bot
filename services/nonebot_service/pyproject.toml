@@ -8,7 +8,6 @@ dependencies = [
     "nonebot2[fastapi]>=2.4.4",
     "nonebot2[websockets]>=2.4.4",
     "nonebot-adapter-onebot>=2.4.6",
-    "nonebot-adapter-kaiheila>=0.3.4",
     "nonebot-plugin-orm[default]>=0.8.3",
     "nonebot-plugin-access-control>=1.2.4",
 ]
@@ -26,9 +25,6 @@ builtin_plugins = []
 [tool.nonebot.adapters]
 nonebot-adapter-onebot = [
     { name = "OneBot V11", module_name = "nonebot.adapters.onebot.v11" }
-]
-nonebot-adapter-kaiheila = [
-    { name = "开黑啦", module_name = "nonebot.adapters.kaiheila" }
 ]
 "@local" = []
 
