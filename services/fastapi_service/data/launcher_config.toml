@@ -1,0 +1,50 @@
+# R5RC N Launcher 配置信息
+# 由 /v1/r5/launcher/config 接口读取并返回
+
+# 离线包下载地址
+offline_package_url = "https://www.123684.com/s/C9r9-IkJhH"
+
+# 文档地址
+docs_url = "https://af3mroq0w3.feishu.cn/wiki/WgIhwpiOwi6aYgkEJrQcGc4snHg"
+
+# 启动器最新版本
+launcher_version = "0.3.0"
+
+# 启动器自更新下载地址
+launcher_update_url = ""
+
+# 是否强制更新
+force_update = true
+
+# 当前游戏版本
+game_version = "v2.6.41"
+
+# 版本补丁地址列表（从某个版本到某个版本之间的补丁）
+[[patches]]
+from_version = "v2.6.21"
+to_version = "v2.6.31"
+url = ""
+
+[[patches]]
+from_version = "v2.6.31"
+to_version = "v2.6.41"
+url = ""
+
+# 公告
+[announcement]
+title = "R5ApexCN社区服"
+content = """QQ群 732124612
+KOOK 41289816"""
+
+# 服务器规则
+[[rules]]
+icon = "🚫"
+text = "禁止利用掩体/卡头皮"
+
+[[rules]]
+icon = "💬"
+text = "请文明用语"
+
+[[rules]]
+icon = "⛔"
+text = "严禁作弊"
