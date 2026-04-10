@@ -19,6 +19,21 @@ admin_unbind_cmd = on_command("管理解绑", priority=4, block=True)
 my_info_cmd = on_command("我的信息", aliases={"个人信息"}, priority=5, block=True)
 
 
+def _format_binding_success_message(name: str, app_key: str) -> str:
+    msg = "✅ 绑定成功！\n"
+    msg += f"游戏昵称: {name}\n"
+    msg += f"AppKey: {app_key}\n"
+    msg += "已为你启用组队功能。\n"
+    msg += "现在可以直接使用: /组队、/组队列表、/加入 <队伍ID>\n"
+    msg += "并且 /个人kd 和 /个人武器 不需要再指定名字。\n"
+    msg += "请妥善保管 AppKey，用于前端登录认证。"
+    return msg
+
+
+def _format_existing_binding_message(name: str, app_key: str) -> str:
+    return f"📋 当前绑定信息\n游戏昵称: {name}\nAppKey: {app_key}"
+
+
 @bind_cmd.handle()
 @binding_svc.patch_handler()
 async def handle_bind(event: Event, args: Message = CommandArg()) -> None:
@@ -36,17 +51,24 @@ async def handle_bind(event: Event, args: Message = CommandArg()) -> None:
         req = resp.json()
 
         if req.get("code") != "0000":
+            err_msg = req.get("msg", "绑定失败")
+
+            if "已绑定" in err_msg:
+                await bind_cmd.send(f"❌ {err_msg}")
+                binding_resp = await api_client.get_binding(platform="qq", platform_uid=user_id, timeout=5.0)
+                binding_req = binding_resp.json()
+                if binding_req.get("code") == "0000":
+                    binding_data = binding_req.get("data", {})
+                    name = binding_data.get("player_name", "未知")
+                    app_key = binding_data.get("app_key", "")
+                    await bind_cmd.finish(_format_existing_binding_message(name, app_key))
+
             await bind_cmd.finish(f"❌ {req.get('msg', '绑定失败')}")
 
         data = req.get("data", {})
         app_key = data.get("app_key", "")
         name = data.get("player_name", player_query)
-
-        msg = "✅ 绑定成功！\n"
-        msg += f"游戏昵称: {name}\n"
-        msg += f"AppKey: {app_key}\n"
-        msg += "请妥善保管 AppKey，用于前端登录认证。"
-        await bind_cmd.finish(msg)
+        await bind_cmd.finish(_format_binding_success_message(name, app_key))
 
     except FinishedException:
         raise

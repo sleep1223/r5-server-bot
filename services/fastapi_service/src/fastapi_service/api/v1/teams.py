@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from shared_lib.models import UserBinding
 
@@ -157,7 +157,7 @@ async def accept_invite(team_id: int, payload: AcceptInviteRequest):
 
 
 @router.post("/teams/app/create")
-async def app_create_team(slots_needed: int = Field(..., ge=1, le=2), binding: UserBinding = Depends(verify_app_key)):
+async def app_create_team(slots_needed: int = Query(..., ge=1, le=2), binding: UserBinding = Depends(verify_app_key)):
     """前端创建组队。"""
     data, err = await team_service.create_team(binding.id, slots_needed)
     if err:
