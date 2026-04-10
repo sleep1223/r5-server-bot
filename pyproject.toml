@@ -22,9 +22,24 @@ tortoise_orm = "shared_lib.database.TORTOISE_ORM"
 location = "./packages/shared_lib/migrations"
 src_folder = "./packages/shared_lib/src"
 
-[tool.pyright]
+[tool.basedpyright]
+typeCheckingMode = "standard"
 exclude = [
     "**/__pycache__",
     "**/.venv",
     "services/nonebot_service",
+]
+reportMissingTypeStubs = false
+reportMissingTypeArgument = false
+reportUnknownVariableType = false
+reportUnknownMemberType = false
+reportUnknownParameterType = false
+reportUnknownArgumentType = false
+reportUnknownLambdaType = false
+reportUnusedCallResult = false
+reportAny = false
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.39.0",
 ]
