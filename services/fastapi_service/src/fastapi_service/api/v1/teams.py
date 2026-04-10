@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from shared_lib.models import UserBinding
 
-from fastapi_service.core.auth import verify_app_key, verify_token
+from fastapi_service.core.auth import has_valid_token, verify_app_key, verify_token
 from fastapi_service.core.errors import ErrorCode
 from fastapi_service.core.response import error, paginated, success
 from fastapi_service.services import team_service
@@ -47,23 +47,23 @@ async def create_team(payload: CreateTeamRequest):
     if not binding:
         return error(ErrorCode.BINDING_NOT_FOUND, msg="请先绑定游戏账号")
 
-    data, err = await team_service.create_team(binding.id, payload.slots_needed)
+    data, err = await team_service.create_team(binding.id, payload.slots_needed, include_private_fields=True)
     if err:
         return error(ErrorCode.TEAM_ALREADY_IN_TEAM, msg=err)
     return success(data=data, msg="组队创建成功")
 
 
 @router.get("/teams")
-async def list_teams(pg: Pagination = Depends(get_pagination)):
+async def list_teams(pg: Pagination = Depends(get_pagination), is_internal: bool = Depends(has_valid_token)):
     """列出所有开放的队伍。"""
-    items, total = await team_service.list_open_teams(page_size=pg.page_size, offset=pg.offset)
+    items, total = await team_service.list_open_teams(page_size=pg.page_size, offset=pg.offset, include_private_fields=is_internal)
     return paginated(data=items, total=total, msg="Teams retrieved")
 
 
 @router.get("/teams/{team_id}")
-async def get_team(team_id: int):
+async def get_team(team_id: int, is_internal: bool = Depends(has_valid_token)):
     """获取队伍详情。"""
-    data = await team_service.get_team_detail(team_id)
+    data = await team_service.get_team_detail(team_id, include_private_fields=is_internal)
     if not data:
         return error(ErrorCode.TEAM_NOT_FOUND, msg="队伍不存在")
     return success(data=data)
@@ -76,7 +76,7 @@ async def join_team(team_id: int, payload: JoinTeamRequest):
     if not binding:
         return error(ErrorCode.BINDING_NOT_FOUND, msg="请先绑定游戏账号")
 
-    data, err = await team_service.join_team(team_id, binding.id)
+    data, err = await team_service.join_team(team_id, binding.id, include_private_fields=True)
     if err:
         if "已满" in err:
             return error(ErrorCode.TEAM_ALREADY_FULL, msg=err)
