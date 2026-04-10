@@ -163,6 +163,7 @@ class UserBinding(models.Model):
 class TeamPost(models.Model):
     id = fields.IntField(pk=True)
     creator = fields.ForeignKeyField("models.UserBinding", related_name="created_teams")
+    creator_id: int
     slots_needed = fields.IntField()  # 需要的队友数量: 1 或 2
     status = fields.CharField(max_length=16, default="open")  # open / full / cancelled / expired
     created_at = fields.DatetimeField(auto_now_add=True)

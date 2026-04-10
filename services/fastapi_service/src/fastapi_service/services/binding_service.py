@@ -43,6 +43,7 @@ async def bind_player(platform: str, platform_uid: str, player_query: str) -> tu
             return None, f"你已绑定玩家: {existing.player.name}，请先解绑"
         return None, "绑定失败，请稍后重试"
 
+    assert player is not None
     return {
         "id": binding.id,
         "platform": binding.platform,

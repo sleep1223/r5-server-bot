@@ -101,7 +101,7 @@ async def cancel_team(team_id: int, payload: JoinTeamRequest):
 
     ok, err = await team_service.cancel_team(team_id, binding.id)
     if not ok:
-        return error(ErrorCode.TEAM_NOT_CREATOR, msg=err)
+        return error(ErrorCode.TEAM_NOT_CREATOR, msg=err or "")
     return success(msg="组队已取消")
 
 
@@ -114,7 +114,7 @@ async def leave_team(team_id: int, payload: JoinTeamRequest):
 
     ok, err = await team_service.leave_team(team_id, binding.id)
     if not ok:
-        return error(ErrorCode.TEAM_NOT_MEMBER, msg=err)
+        return error(ErrorCode.TEAM_NOT_MEMBER, msg=err or "")
     return success(msg="已退出队伍")
 
 
@@ -188,7 +188,7 @@ async def app_cancel_team(team_id: int, binding: UserBinding = Depends(verify_ap
     """前端取消组队。"""
     ok, err = await team_service.cancel_team(team_id, binding.id)
     if not ok:
-        return error(ErrorCode.TEAM_NOT_CREATOR, msg=err)
+        return error(ErrorCode.TEAM_NOT_CREATOR, msg=err or "")
     return success(msg="组队已取消")
 
 
@@ -197,5 +197,5 @@ async def app_leave_team(team_id: int, binding: UserBinding = Depends(verify_app
     """前端退出队伍。"""
     ok, err = await team_service.leave_team(team_id, binding.id)
     if not ok:
-        return error(ErrorCode.TEAM_NOT_MEMBER, msg=err)
+        return error(ErrorCode.TEAM_NOT_MEMBER, msg=err or "")
     return success(msg="已退出队伍")
