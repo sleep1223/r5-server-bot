@@ -1,13 +1,17 @@
 from decimal import Decimal
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from shared_lib.models import Donation
 
-from .auth import verify_token
-from .errors import ErrorCode
-from .response import error, paginated, success
+from fastapi_service.core.auth import verify_token
+from fastapi_service.core.errors import ErrorCode
+from fastapi_service.core.response import error, paginated, success
+from fastapi_service.services import donation_service
+
+from ..deps import Pagination, get_large_pagination
+
+router = APIRouter()
 
 
 class DonationCreate(BaseModel):
@@ -17,37 +21,26 @@ class DonationCreate(BaseModel):
     message: str | None = None
 
 
-router = APIRouter()
-
-
 @router.post("/donations", dependencies=[Depends(verify_token)])
 async def create_donation(payload: DonationCreate):
-    # 重复donor_name则更新金额和消息
-    donation, created = await Donation.update_or_create(
+    donation, created = await donation_service.create_or_update_donation(
         donor_name=payload.donor_name,
-        defaults=dict(
-            amount=payload.amount,
-            currency=payload.currency,
-            message=payload.message,
-        ),
+        amount=payload.amount,
+        currency=payload.currency,
+        message=payload.message,
     )
     return success(data=donation, msg="Donation created" if created else "Donation updated")
 
 
 @router.get("/donations")
-async def list_donations(
-    page_no: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(1000, ge=1, le=1000, description="Items per page"),
-):
-    total = await Donation.all().count()
-    offset = (page_no - 1) * page_size
-    items = await Donation.all().order_by("-created_at").limit(page_size).offset(offset).values()
+async def list_donations(pg: Pagination = Depends(get_large_pagination)):
+    items, total = await donation_service.list_donations(page_size=pg.page_size, offset=pg.offset)
     return paginated(data=items, total=total, msg="Donations retrieved")
 
 
 @router.delete("/donations/{donation_id}", dependencies=[Depends(verify_token)])
 async def delete_donation(donation_id: int):
-    deleted = await Donation.filter(id=donation_id).delete()
+    deleted = await donation_service.delete_donation(donation_id)
     if not deleted:
         return error(ErrorCode.DONATION_NOT_FOUND, msg="Donation not found")
     return success(msg="Donation deleted")

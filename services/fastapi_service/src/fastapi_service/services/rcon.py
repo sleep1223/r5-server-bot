@@ -2,8 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import HTTPException
 from shared_lib.config import settings
-
-from .netcon_client import R5NetConsole
+from utils.netcon_client import R5NetConsole
 
 
 def require_rcon_config() -> tuple[str, str]:

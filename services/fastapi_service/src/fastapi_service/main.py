@@ -1,4 +1,3 @@
-import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,36 +6,17 @@ from shared_lib import close_db, init_db
 from shared_lib.config import settings
 
 from fastapi_service.api import router as api_router
-from fastapi_service.api.v1.r5.tasks import fetch_server_list_raw_task, ip_resolution_task, sync_players_task
+from fastapi_service.tasks.scheduler import task_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    sync_task = asyncio.create_task(sync_players_task())
-    raw_server_task = asyncio.create_task(fetch_server_list_raw_task())
-    ip_task = asyncio.create_task(ip_resolution_task())
+    await task_scheduler.start()
 
     yield
 
-    sync_task.cancel()
-    raw_server_task.cancel()
-    ip_task.cancel()
-    try:
-        await sync_task
-    except asyncio.CancelledError:
-        pass
-
-    try:
-        await raw_server_task
-    except asyncio.CancelledError:
-        pass
-
-    try:
-        await ip_task
-    except asyncio.CancelledError:
-        pass
-
+    await task_scheduler.stop()
     await close_db()
 
 
