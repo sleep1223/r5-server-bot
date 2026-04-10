@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # Data settings
     qqwry_path: str = "services/fastapi_service/data/qqwry.dat"
     launcher_config_path: str = "services/fastapi_service/data/launcher_config.toml"
+    launcher_update_path: str = "services/fastapi_service/data/launcher_update.toml"
 
     @property
     def tortoise_orm(self) -> dict:

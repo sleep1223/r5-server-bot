@@ -2,6 +2,7 @@ import tomllib
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse, Response
 from loguru import logger
 from shared_lib.config import settings
 
@@ -10,19 +11,76 @@ from fastapi_service.core.response import success
 router = APIRouter()
 
 
+def _load_toml(path: Path) -> dict:
+    """读取并解析 TOML 文件"""
+    if not path.exists():
+        logger.error(f"Config file not found: {path}")
+        raise HTTPException(status_code=404, detail=f"Config file not found: {path.name}")
+    try:
+        with path.open("rb") as f:
+            return tomllib.load(f)
+    except tomllib.TOMLDecodeError as e:
+        logger.error(f"Failed to parse config: {e}")
+        raise HTTPException(status_code=500, detail="Invalid config file") from e
+
+
+def _parse_version(v: str) -> tuple[int, ...]:
+    """将版本号字符串解析为整数元组，用于比较。如 '0.4.0' -> (0, 4, 0)"""
+    return tuple(int(x) for x in v.strip().lstrip("v").split("."))
+
+
 @router.get("/launcher/config")
 async def get_launcher_config():
-    """获取 R5RC N Launcher 配置信息（读取 TOML 文件并返回）"""
-    config_path = Path(settings.launcher_config_path)
-    if not config_path.exists():
-        logger.error(f"Launcher config file not found: {config_path}")
-        raise HTTPException(status_code=404, detail="Launcher config not found")
-
-    try:
-        with config_path.open("rb") as f:
-            data = tomllib.load(f)
-    except tomllib.TOMLDecodeError as e:
-        logger.error(f"Failed to parse launcher config: {e}")
-        raise HTTPException(status_code=500, detail="Invalid launcher config") from e
-
+    """获取 R5RCN Launcher 配置信息（读取 TOML 文件并返回）"""
+    data = _load_toml(Path(settings.launcher_config_path))
+    update_data = _load_toml(Path(settings.launcher_update_path))
+    data["launcher_version"] = update_data.get("latest", "")
     return success(data=data, msg="Launcher config retrieved")
+
+
+@router.get("/launcher/update/{target}/{arch}/{current_version}")
+async def check_launcher_update(target: str, arch: str, current_version: str):
+    """Tauri 自更新检查接口
+
+    - 有更新时返回 HTTP 200 + Tauri updater JSON
+    - 无更新时返回 HTTP 204
+    """
+    data = _load_toml(Path(settings.launcher_update_path))
+
+    latest_version = data.get("latest", "")
+    if not latest_version:
+        return Response(status_code=204)
+
+    # 比较版本号，当前版本 >= 最新版本时无需更新
+    try:
+        if _parse_version(current_version) >= _parse_version(latest_version):
+            return Response(status_code=204)
+    except (ValueError, TypeError):
+        logger.warning(f"Invalid version format: current={current_version}, latest={latest_version}")
+        return Response(status_code=204)
+
+    # 在版本列表中查找最新版本的详情
+    versions: list[dict] = data.get("versions", [])
+    version_info = next((v for v in versions if v.get("version") == latest_version), None)
+    if not version_info:
+        logger.error(f"Latest version {latest_version} not found in versions list")
+        return Response(status_code=204)
+
+    # 查找匹配的平台
+    platform_key = f"{target}-{arch}"
+    platforms: dict = version_info.get("platforms", {})
+    platform_info = platforms.get(platform_key)
+
+    if not platform_info:
+        logger.info(f"No update available for platform: {platform_key}")
+        return Response(status_code=204)
+
+    # 返回 Tauri updater 格式
+    return JSONResponse(
+        content={
+            "version": latest_version,
+            "notes": version_info.get("notes", ""),
+            "pub_date": version_info.get("pub_date", ""),
+            "platforms": {platform_key: platform_info},
+        }
+    )
