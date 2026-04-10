@@ -2,7 +2,7 @@ import traceback
 
 import httpx
 from nonebot import on_command
-from nonebot.adapters.onebot.v11 import Message
+from nonebot.adapters.onebot.v11 import Event, Message
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
 
@@ -14,9 +14,7 @@ check_service = weapons_service.create_subservice("check")
 lb_service = weapons_service.create_subservice("leaderboard")
 
 check_weapons = on_command("个人武器", aliases={"个人武器"}, priority=5, block=True)
-weapon_leaderboard = on_command(
-    "武器", aliases={"武器排行", "枪械"}, priority=5, block=True
-)
+weapon_leaderboard = on_command("武器", aliases={"武器排行", "枪械"}, priority=5, block=True)
 
 weapon_map = {
     "alternator": "转换者冲锋枪",
@@ -50,11 +48,21 @@ weapon_map = {
 
 @check_weapons.handle()
 @check_service.patch_handler()
-async def handle_check_weapons(args: Message = CommandArg()) -> None:
+async def handle_check_weapons(event: Event, args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
     target = content
     if not target:
-        await check_weapons.finish("⚠️ 请提供玩家名称或ID")
+        # 尝试通过绑定信息获取玩家名
+        user_id = event.get_user_id()
+        try:
+            bind_resp = await api_client.get_binding(platform="qq", platform_uid=user_id, timeout=3.0)
+            bind_data = bind_resp.json()
+            if bind_data.get("code") == "0000" and bind_data.get("data"):
+                target = bind_data["data"].get("player_name", "")
+        except Exception:
+            pass
+        if not target:
+            await check_weapons.finish("⚠️ 请提供玩家名称或ID，或先绑定账号")
 
     sort = "kd"
     if "击杀" in content:
@@ -63,9 +71,7 @@ async def handle_check_weapons(args: Message = CommandArg()) -> None:
         sort = "deaths"
 
     try:
-        resp = await api_client.get_player_weapons(
-            target=target, sort=sort, timeout=3.0
-        )
+        resp = await api_client.get_player_weapons(target=target, sort=sort, timeout=3.0)
         if resp.status_code != 200:
             await check_weapons.finish(f"❌ 查询失败: HTTP {resp.status_code}")
         req = resp.json()
@@ -151,11 +157,7 @@ async def handle_weapon_leaderboard(args: Message = CommandArg()) -> None:
 
     try:
         base_min_kills = 10
-        dynamic_min_kills = (
-            base_min_kills
-            if range_type in ["today", "yesterday"]
-            else base_min_kills * 3
-        )
+        dynamic_min_kills = base_min_kills if range_type in ["today", "yesterday"] else base_min_kills * 3
         params = {
             "weapon": ["r99", "volt", "wingman", "flatline", "r301", "player"],
             "range_type": range_type,

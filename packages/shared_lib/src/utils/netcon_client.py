@@ -12,7 +12,6 @@ from loguru import logger
 
 from .protos import netcon_pb2
 
-
 # 常量
 RCON_FRAME_MAGIC = 0x6E6F4352  # ('R'+('C'<<8)+('o'<<16)+('n'<<24))
 

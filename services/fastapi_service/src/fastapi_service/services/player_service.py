@@ -131,11 +131,16 @@ async def query_players(q: str, *, page_size: int = 20, offset: int = 0) -> list
             if player.online_at:
                 duration = (datetime.now(CN_TZ) - player.online_at).total_seconds()
 
+        total_playtime = player.total_playtime_seconds
+        if is_online and duration is not None:
+            total_playtime += int(duration)
+
         results.append({
             "is_online": is_online,
             "server": server_info,
             "server_source": target_loc_source,
             "duration_seconds": int(duration) if duration is not None else 0,
+            "total_playtime_seconds": total_playtime,
             "ping": ping,
             "player": {
                 "name": player.name,

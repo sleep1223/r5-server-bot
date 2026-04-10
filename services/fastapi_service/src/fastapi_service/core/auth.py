@@ -1,6 +1,7 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from shared_lib.config import settings
+from shared_lib.models import UserBinding
 
 security_scheme = HTTPBearer(auto_error=False)
 
@@ -22,3 +23,11 @@ async def verify_token(credentials: HTTPAuthorizationCredentials | None = Depend
             headers={"WWW-Authenticate": "Bearer"},
         )
     return credentials
+
+
+async def verify_app_key(x_app_key: str = Header(..., description="用户 AppKey")) -> UserBinding:
+    """前端通过 X-App-Key header 认证，返回对应的 UserBinding。"""
+    binding = await UserBinding.filter(app_key=x_app_key).prefetch_related("player").first()
+    if not binding:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid AppKey")
+    return binding

@@ -166,6 +166,10 @@ async def sync_players_task() -> None:
                         for p in all_players:
                             if p.nucleus_id and str(p.nucleus_id) not in online_nucleus_ids:
                                 if p.status == "online":
+                                    if p.online_at:
+                                        session_seconds = int((datetime.now(CN_TZ) - p.online_at).total_seconds())
+                                        if session_seconds > 0:
+                                            p.total_playtime_seconds += session_seconds
                                     p.status = "offline"
                                     p.online_at = None  # type: ignore[reportAttributeAccessIssue]
                                     await p.save()

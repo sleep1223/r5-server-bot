@@ -16,6 +16,7 @@ class Player(models.Model):
     kick_count = fields.IntField(default=0)
     ban_count = fields.IntField(default=0)
     hardware_name = fields.CharField(max_length=100, null=True)
+    total_playtime_seconds = fields.BigIntField(default=0)
     online_at = fields.DatetimeField(null=True)
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)
@@ -144,3 +145,42 @@ class BanRecord(models.Model):
 
     class Meta:
         table = "ban_records"
+
+
+class UserBinding(models.Model):
+    id = fields.IntField(pk=True)
+    platform = fields.CharField(max_length=20)  # "qq" / "kaiheila"
+    platform_uid = fields.CharField(max_length=64)  # 平台用户ID(如QQ号)
+    player = fields.ForeignKeyField("models.Player", related_name="bindings")
+    app_key = fields.CharField(max_length=64, unique=True)  # 前端认证用
+    created_at = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "user_binding"
+        unique_together = (("platform", "platform_uid"),)
+
+
+class TeamPost(models.Model):
+    id = fields.IntField(pk=True)
+    creator = fields.ForeignKeyField("models.UserBinding", related_name="created_teams")
+    slots_needed = fields.IntField()  # 需要的队友数量: 1 或 2
+    status = fields.CharField(max_length=16, default="open")  # open / full / cancelled / expired
+    created_at = fields.DatetimeField(auto_now_add=True)
+    updated_at = fields.DatetimeField(auto_now=True)
+
+    members: fields.ReverseRelation["TeamMember"]
+
+    class Meta:
+        table = "team_post"
+
+
+class TeamMember(models.Model):
+    id = fields.IntField(pk=True)
+    team = fields.ForeignKeyField("models.TeamPost", related_name="members")
+    user_binding = fields.ForeignKeyField("models.UserBinding", related_name="team_memberships")
+    role = fields.CharField(max_length=16)  # "creator" / "member"
+    joined_at = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "team_member"
+        unique_together = (("team", "user_binding"),)
