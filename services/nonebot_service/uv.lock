@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.10, <4.0"
 
 [[package]]
@@ -650,19 +650,6 @@ wheels = [
 ]
 
 [[package]]
-name = "nonebot-adapter-kaiheila"
-version = "0.3.4"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-dependencies = [
-    { name = "nonebot2" },
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/63/11/56d412ea071c784f8c5242f5df4020334d31125ba1b9c58e28318f9fc5ec/nonebot_adapter_kaiheila-0.3.4.tar.gz", hash = "sha256:1fea823e5bc2bb5dc8e56a4c10a8f6698dac6e4f77d4526768275fa0925340f2" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/92/a6/5ae597cf228faf445a3021eeeeb1a2d2daf994405ef33a9e8c0691cb919e/nonebot_adapter_kaiheila-0.3.4-py3-none-any.whl", hash = "sha256:a4cc0e43bd24e015b8312f1753705116274d5b7e9a68be266384dd413ca4f510" },
-]
-
-[[package]]
 name = "nonebot-adapter-onebot"
 version = "2.4.6"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -1154,7 +1141,6 @@ name = "r5bot"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "nonebot-adapter-kaiheila" },
     { name = "nonebot-adapter-onebot" },
     { name = "nonebot-plugin-access-control" },
     { name = "nonebot-plugin-orm", extra = ["default"] },
@@ -1175,7 +1161,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "basedpyright", marker = "extra == 'dev'" },
-    { name = "nonebot-adapter-kaiheila", specifier = ">=0.3.4" },
     { name = "nonebot-adapter-onebot", specifier = ">=2.4.6" },
     { name = "nonebot-plugin-access-control", specifier = ">=1.2.4" },
     { name = "nonebot-plugin-orm", extras = ["default"], specifier = ">=0.8.3" },

@@ -258,6 +258,12 @@ class LiveAPIListener:
             player = await self.get_or_update_player(msg.player)
             if player:
                 if player.status not in ["banned", "kicked"]:
+                    if player.online_at:
+                        from datetime import datetime, timezone
+
+                        session_seconds = int((datetime.now(timezone.utc) - player.online_at).total_seconds())
+                        if session_seconds > 0:
+                            player.total_playtime_seconds += session_seconds
                     player.status = "offline"
                     await player.save()
 

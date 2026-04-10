@@ -76,13 +76,21 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
             region = p.get("region") or "未知"
             msg += f"🌍 {country} / {region}\n"
 
+            total_playtime = item.get("total_playtime_seconds", 0)
+            if total_playtime >= 3600:
+                hours = total_playtime // 3600
+                minutes = (total_playtime % 3600) // 60
+                msg += f"🕐 总游玩 {hours} 小时 {minutes} 分钟\n"
+            elif total_playtime >= 60:
+                msg += f"🕐 总游玩 {total_playtime // 60} 分钟\n"
+
             if is_online:
                 msg += f"📶 {ping}ms\n"
                 if server:
                     server_name = server.get("short_name") or server.get("name")
                     msg += f"🖥️ {server_name}\n"
                 duration = item.get("duration_seconds", 0)
-                msg += f"⏱️ {duration // 60} 分钟\n"
+                msg += f"⏱️ 本次在线 {duration // 60} 分钟\n"
             elif status_str == "banned" and server:
                 server_name = server.get("short_name") or server.get("name")
                 source = "(缓存)" if item.get("server_source") == "ban_cache" else ""

@@ -2,7 +2,7 @@ import traceback
 
 import httpx
 from nonebot import on_command
-from nonebot.adapters.onebot.v11 import Message
+from nonebot.adapters.onebot.v11 import Event, Message
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
 
@@ -15,9 +15,7 @@ rank_service = kd_service.create_subservice("rank")
 check_service = kd_service.create_subservice("check")
 
 # Matchers
-kd_rank = on_command(
-    "kd榜", aliases={"kd ranking", "kd", "kd排行榜"}, priority=5, block=True
-)
+kd_rank = on_command("kd榜", aliases={"kd ranking", "kd", "kd排行榜"}, priority=5, block=True)
 check_kd = on_command("查kd", aliases={"个人kd"}, priority=5, block=True)
 
 
@@ -47,9 +45,7 @@ async def handle_kd_rank(args: Message = CommandArg()) -> None:
 
     # Default params
     base_min_kills = 100
-    dynamic_min_kills = (
-        base_min_kills if range_type in ["today", "yesterday"] else base_min_kills * 3
-    )
+    dynamic_min_kills = base_min_kills if range_type in ["today", "yesterday"] else base_min_kills * 3
     params = {
         "range_type": range_type,
         "page_size": 20,
@@ -100,10 +96,20 @@ async def handle_kd_rank(args: Message = CommandArg()) -> None:
 
 @check_kd.handle()
 @check_service.patch_handler()
-async def handle_check_kd(args: Message = CommandArg()) -> None:
+async def handle_check_kd(event: Event, args: Message = CommandArg()) -> None:
     target = args.extract_plain_text().strip()
     if not target:
-        await check_kd.finish("⚠️ 请提供玩家名称或ID")
+        # 尝试通过绑定信息获取玩家名
+        user_id = event.get_user_id()
+        try:
+            bind_resp = await api_client.get_binding(platform="qq", platform_uid=user_id, timeout=3.0)
+            bind_data = bind_resp.json()
+            if bind_data.get("code") == "0000" and bind_data.get("data"):
+                target = bind_data["data"].get("player_name", "")
+        except Exception:
+            pass
+        if not target:
+            await check_kd.finish("⚠️ 请提供玩家名称或ID，或先绑定账号")
 
     # Parse sort from target text
     sort = "kd"

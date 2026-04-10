@@ -1,0 +1,4 @@
+{
+  "python.analysis.extraPaths": ["packages/shared_lib/src"],
+  "python.venv.switcher.customProvider": "bash -c 'unset VIRTUAL_ENV && uv run --no-sync which python'"
+}

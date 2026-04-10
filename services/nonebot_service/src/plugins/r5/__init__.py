@@ -42,9 +42,9 @@ __plugin_meta__ = PluginMetadata(
     config=Config,
 )
 
-from .services import admin, donation, help, kd, query, status, weapons
+from .services import admin, binding, donation, help, kd, query, status, team, weapons
 
 # Config
 plugin_config = get_plugin_config(Config)
 
-__all__ = ["admin", "donation", "help", "kd", "query", "status", "weapons"]
+__all__ = ["admin", "binding", "donation", "help", "kd", "query", "status", "team", "weapons"]
