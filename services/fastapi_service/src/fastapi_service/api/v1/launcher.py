@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from loguru import logger
 from shared_lib.config import settings
 
-from ..response import success
+from fastapi_service.core.response import success
 
 router = APIRouter()
 
