@@ -5,6 +5,9 @@ description = "Monorepo root for WS and API services"
 requires-python = ">=3.12"
 dependencies = [
     "aerich>=0.7.2",
+    "fastapi-service",
+    "shared-lib",
+    "ws-service",
 ]
 
 [tool.uv.workspace]
@@ -16,6 +19,11 @@ members = [
 exclude = [
     "services/nonebot_service"
 ]
+
+[tool.uv.sources]
+fastapi-service = { workspace = true }
+shared-lib = { workspace = true }
+ws-service = { workspace = true }
 
 [tool.aerich]
 tortoise_orm = "shared_lib.database.TORTOISE_ORM"
