@@ -26,23 +26,28 @@ def _format_binding_success_message(name: str, app_key: str) -> str:
     msg += "已为你启用组队功能。\n"
     msg += "现在可以直接使用: /组队、/组队列表、/加入 <队伍ID>\n"
     msg += "并且 /个人kd 和 /个人武器 不需要再指定名字。\n"
-    msg += "请妥善保管 AppKey，用于前端登录认证。"
+    msg += "请妥善保管 AppKey，用于前端登录认证。\n\n"
+    msg += f"🔗 一键登录: https://r5.sleep0.de/teams?appkey={app_key}\n"
+    msg += "⚠️ 请勿将此链接发送给他人！"
     return msg
 
 
 def _format_existing_binding_message(name: str, app_key: str) -> str:
-    return f"📋 当前绑定信息\n游戏昵称: {name}\nAppKey: {app_key}"
+    msg = f"📋 当前绑定信息\n游戏昵称: {name}\nAppKey: {app_key}\n\n"
+    msg += f"🔗 一键登录: https://r5.sleep0.de/teams?appkey={app_key}\n"
+    msg += "⚠️ 请勿将此链接发送给他人！"
+    return msg
 
 
 @bind_cmd.handle()
 @binding_svc.patch_handler()
 async def handle_bind(event: Event, args: Message = CommandArg()) -> None:
-    if not isinstance(event, PrivateMessageEvent):
-        await bind_cmd.finish("⚠️ 请私信机器人进行绑定操作")
-
     player_query = args.extract_plain_text().strip()
     if not player_query:
-        await bind_cmd.finish("⚠️ 请提供游戏昵称或ID，如: 绑定 MyName 或 绑定 10086")
+        await bind_cmd.finish("⚠️ 请提供游戏昵称或ID，如: /绑定 MyName 或 /绑定 10086")
+
+    if not isinstance(event, PrivateMessageEvent):
+        await bind_cmd.finish("⚠️ 绑定涉及敏感信息（AppKey），请先添加机器人为好友，然后私信发送：\n/绑定 " + player_query)
 
     user_id = event.get_user_id()
 
@@ -82,9 +87,6 @@ async def handle_bind(event: Event, args: Message = CommandArg()) -> None:
 @unbind_cmd.handle()
 @binding_svc.patch_handler()
 async def handle_unbind(event: Event) -> None:
-    if not isinstance(event, PrivateMessageEvent):
-        await unbind_cmd.finish("⚠️ 请私信机器人进行解绑操作")
-
     user_id = event.get_user_id()
 
     try:
@@ -176,7 +178,7 @@ async def handle_my_info(event: Event) -> None:
         req = resp.json()
 
         if req.get("code") != "0000":
-            await my_info_cmd.finish("❌ 你还未绑定游戏账号，请私信发送: 绑定 <游戏昵称>")
+            await my_info_cmd.finish("❌ 你还未绑定游戏账号，请发送: /绑定 <游戏昵称>")
 
         data = req.get("data", {})
         name = data.get("player_name", "未知")

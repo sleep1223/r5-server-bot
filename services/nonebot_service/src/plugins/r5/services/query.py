@@ -20,7 +20,7 @@ player_query = on_command("查询玩家", aliases={"查询", "query"}, priority=
 async def handle_player_query(args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
     if not content:
-        await player_query.finish("⚠️ 请提供玩家名或ID")
+        await player_query.finish("⚠️ 请提供玩家名或ID，如: /查询 MyName")
 
     try:
         resp = await api_client.query_player(content, page_no=1, page_size=20, timeout=5.0)

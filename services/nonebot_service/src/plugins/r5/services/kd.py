@@ -109,7 +109,7 @@ async def handle_check_kd(event: Event, args: Message = CommandArg()) -> None:
         except Exception:
             pass
         if not target:
-            await check_kd.finish("⚠️ 请提供玩家名称或ID，或先绑定账号")
+            await check_kd.finish("⚠️ 请提供玩家名称或ID，或先 /绑定 账号")
 
     # Parse sort from target text
     sort = "kd"

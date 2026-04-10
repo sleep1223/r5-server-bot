@@ -100,8 +100,8 @@ GET /user/me
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `binding_id` | int | 绑定记录 ID |
-| `platform` | string | `"qq"` / `"kaiheila"` |
-| `platform_uid` | string | QQ号 |
+| `platform` | string | `"qq"` / `"kaiheila"` (仅机器人/内部带 Token 访问时返回) |
+| `platform_uid` | string | QQ号 (仅机器人/内部带 Token 访问时返回) |
 | `player_id` | int | 数据库玩家 ID |
 | `player_name` | string | 游戏昵称 |
 | `kd` | float | 玩家总 KD |
@@ -137,8 +137,6 @@ GET /teams?page_no=1&page_size=20
       "id": 1,
       "creator": {
         "binding_id": 1,
-        "platform": "qq",
-        "platform_uid": "123456789",
         "player_id": 42,
         "player_name": "PlayerA",
         "kd": 2.15
@@ -149,8 +147,6 @@ GET /teams?page_no=1&page_size=20
       "members": [
         {
           "binding_id": 1,
-          "platform": "qq",
-          "platform_uid": "123456789",
           "player_id": 42,
           "player_name": "PlayerA",
           "kd": 2.15,
@@ -159,8 +155,6 @@ GET /teams?page_no=1&page_size=20
         },
         {
           "binding_id": 3,
-          "platform": "qq",
-          "platform_uid": "987654321",
           "player_id": 88,
           "player_name": "PlayerB",
           "kd": 1.80,
@@ -175,6 +169,7 @@ GET /teams?page_no=1&page_size=20
 ```
 
 > 列表按创建者 KD 降序排列。
+> 公开访问不会返回 `platform` 和 `platform_uid`；机器人/内部带 Bearer Token 访问时会返回完整字段。
 
 ---
 
@@ -201,6 +196,8 @@ GET /teams/{team_id}
   "data": { /* Team 对象 */ }
 }
 ```
+
+> 公开访问不会返回 `platform` 和 `platform_uid`；机器人/内部带 Bearer Token 访问时会返回完整字段。
 
 **错误:**
 

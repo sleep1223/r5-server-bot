@@ -62,7 +62,7 @@ async def handle_check_weapons(event: Event, args: Message = CommandArg()) -> No
         except Exception:
             pass
         if not target:
-            await check_weapons.finish("⚠️ 请提供玩家名称或ID，或先绑定账号")
+            await check_weapons.finish("⚠️ 请提供玩家名称或ID，或先 /绑定 账号")
 
     sort = "kd"
     if "击杀" in content:

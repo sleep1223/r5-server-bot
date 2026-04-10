@@ -13,33 +13,34 @@ async def _get_player_kd(player_id: int) -> float:
     return round(kills / deaths, 2)
 
 
-async def _binding_to_dict(binding: UserBinding, include_kd: bool = True) -> dict:
+async def _binding_to_dict(binding: UserBinding, include_kd: bool = True, include_private_fields: bool = True) -> dict:
     if not hasattr(binding, "player") or binding.player is None:
         await binding.fetch_related("player")
     result = {
         "binding_id": binding.id,
-        "platform": binding.platform,
-        "platform_uid": binding.platform_uid,
         "player_id": binding.player.id,
         "player_name": binding.player.name,
     }
+    if include_private_fields:
+        result["platform"] = binding.platform
+        result["platform_uid"] = binding.platform_uid
     if include_kd:
         result["kd"] = await _get_player_kd(binding.player.id)
     return result
 
 
-async def _team_to_dict(team: TeamPost) -> dict:
+async def _team_to_dict(team: TeamPost, include_private_fields: bool = True) -> dict:
     await team.fetch_related("members__user_binding__player", "creator__player")
     members = []
     for m in team.members:
         members.append({
-            **(await _binding_to_dict(m.user_binding)),
+            **(await _binding_to_dict(m.user_binding, include_private_fields=include_private_fields)),
             "role": m.role,
             "joined_at": m.joined_at.isoformat() if m.joined_at else None,
         })
     return {
         "id": team.id,
-        "creator": await _binding_to_dict(team.creator),
+        "creator": await _binding_to_dict(team.creator, include_private_fields=include_private_fields),
         "slots_needed": team.slots_needed,
         "slots_remaining": team.slots_needed - (len(members) - 1),  # 减去创建者
         "status": team.status,
@@ -62,7 +63,7 @@ async def get_active_team(binding_id: int) -> TeamPost | None:
     return member.team if member else None
 
 
-async def create_team(binding_id: int, slots_needed: int) -> tuple[dict | None, str | None]:
+async def create_team(binding_id: int, slots_needed: int, include_private_fields: bool = True) -> tuple[dict | None, str | None]:
     """创建组队。返回 (team_dict, error_msg)。"""
     if slots_needed not in (1, 2):
         return None, "缺人数只能是 1 或 2"
@@ -75,24 +76,24 @@ async def create_team(binding_id: int, slots_needed: int) -> tuple[dict | None, 
         team = await TeamPost.create(creator_id=binding_id, slots_needed=slots_needed)
         await TeamMember.create(team=team, user_binding_id=binding_id, role="creator")
 
-    return await _team_to_dict(team), None
+    return await _team_to_dict(team, include_private_fields=include_private_fields), None
 
 
-async def list_open_teams(page_size: int = 20, offset: int = 0) -> tuple[list[dict], int]:
+async def list_open_teams(page_size: int = 20, offset: int = 0, include_private_fields: bool = False) -> tuple[list[dict], int]:
     """列出所有开放的队伍，按创建者 KD 排序。"""
     total = await TeamPost.filter(status="open").count()
     teams = await TeamPost.filter(status="open").prefetch_related("members__user_binding__player", "creator__player").order_by("-created_at").offset(offset).limit(page_size)
 
     results = []
     for team in teams:
-        results.append(await _team_to_dict(team))
+        results.append(await _team_to_dict(team, include_private_fields=include_private_fields))
 
     # 按创建者 KD 降序排序
     results.sort(key=lambda t: t["creator"].get("kd", 0), reverse=True)
     return results, total
 
 
-async def join_team(team_id: int, binding_id: int) -> tuple[dict | None, str | None]:
+async def join_team(team_id: int, binding_id: int, include_private_fields: bool = True) -> tuple[dict | None, str | None]:
     """加入队伍。返回 (team_dict, error_msg)。"""
     active = await get_active_team(binding_id)
     if active:
@@ -119,7 +120,7 @@ async def join_team(team_id: int, binding_id: int) -> tuple[dict | None, str | N
             team.status = "full"
             await team.save()
 
-    return await _team_to_dict(team), None
+    return await _team_to_dict(team, include_private_fields=include_private_fields), None
 
 
 async def cancel_team(team_id: int, binding_id: int) -> tuple[bool, str | None]:
@@ -149,12 +150,12 @@ async def leave_team(team_id: int, binding_id: int) -> tuple[bool, str | None]:
     return True, None
 
 
-async def get_team_detail(team_id: int) -> dict | None:
+async def get_team_detail(team_id: int, include_private_fields: bool = False) -> dict | None:
     """获取队伍详情。"""
     team = await TeamPost.filter(id=team_id).first()
     if not team:
         return None
-    return await _team_to_dict(team)
+    return await _team_to_dict(team, include_private_fields=include_private_fields)
 
 
 async def get_full_team_members(team_id: int) -> list[dict]:
