@@ -7,11 +7,7 @@ offline_package_url = "https://www.123684.com/s/C9r9-IkJhH"
 # 文档地址
 docs_url = "https://af3mroq0w3.feishu.cn/wiki/WgIhwpiOwi6aYgkEJrQcGc4snHg"
 
-# 启动器最新版本
-launcher_version = "0.3.0"
-
-# 启动器自更新下载地址
-launcher_update_url = ""
+# launcher_version 已从 launcher_update.toml 动态获取，无需在此配置
 
 # 是否强制更新
 force_update = true
