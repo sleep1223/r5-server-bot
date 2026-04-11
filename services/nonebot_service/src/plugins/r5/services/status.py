@@ -28,8 +28,12 @@ async def handle_server_status(args: Message = CommandArg()) -> None:
         params["server_name"] = content
 
     try:
-        resp = await api_client.get_server_status(
-            server_name=params.get("server_name"), timeout=5.0
+        # 只查询已经 RCON 同步的中国服，并使用 simple 模式减少返回体积
+        resp = await api_client.get_servers(
+            server_name=params.get("server_name"),
+            simple=True,
+            cn_only=True,
+            timeout=5.0,
         )
 
         if resp.status_code != 200:

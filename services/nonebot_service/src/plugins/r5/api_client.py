@@ -85,11 +85,22 @@ class R5ApiClient:
             params["weapon"] = weapon
         return await self._request("GET", "/leaderboard/weapon", params=params, timeout=timeout)
 
-    async def get_server_status(self, server_name: str | None = None, timeout: float = 5.0) -> httpx.Response:
-        params = {}
+    async def get_servers(
+        self,
+        server_name: str | None = None,
+        *,
+        simple: bool = False,
+        cn_only: bool = False,
+        timeout: float = 5.0,
+    ) -> httpx.Response:
+        params: dict[str, Any] = {}
         if server_name:
             params["server_name"] = server_name
-        return await self._request("GET", "/server/status", params=params, timeout=timeout)
+        if simple:
+            params["simple"] = "true"
+        if cn_only:
+            params["cn_only"] = "true"
+        return await self._request("GET", "/server", params=params, timeout=timeout)
 
     async def ban_player(self, target: str, reason: str, timeout: float = 5.0) -> httpx.Response:
         params = {"reason": reason}
