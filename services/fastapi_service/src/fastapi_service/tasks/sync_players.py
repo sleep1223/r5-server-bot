@@ -3,7 +3,6 @@ import re
 from datetime import datetime
 from typing import Any
 
-import httpx
 from loguru import logger
 from shared_lib.config import settings
 from shared_lib.models import IpInfo, Player
@@ -21,24 +20,17 @@ async def sync_players_task() -> None:
     target_keys = set(settings.r5_target_keys or [])
     rcon_key = settings.r5_rcon_key
     rcon_pwd = settings.r5_rcon_password
-    servers_url = settings.r5_servers_url
     if not rcon_key or not rcon_pwd:
         logger.warning("RCON sync disabled because r5_rcon_key or r5_rcon_password is empty")
         return
     while True:
         try:
-            server_list = None
-            try:
-
-                async def fetch_servers():
-                    async with httpx.AsyncClient() as client:
-                        response = await client.post(servers_url, timeout=10.0)
-                        response.raise_for_status()
-                        return response.json()["servers"]
-
-                server_list = await fetch_servers()
-            except Exception as e:
-                logger.error(f"Failed to fetch server list: {e}")
+            # 从 fetch_server_list_raw_task 填充的缓存读取，避免重复拉取远程接口
+            raw = server_cache.raw_response
+            raw_servers = raw.get("servers") if isinstance(raw, dict) else None
+            server_list = list(raw_servers) if isinstance(raw_servers, list) else None
+            if not server_list:
+                logger.debug("Raw server list cache is empty, waiting for fetch_server_list_raw_task")
             if server_list is not None:
                 try:
                     filtered_servers = []

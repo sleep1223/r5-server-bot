@@ -11,23 +11,30 @@ router = APIRouter()
 
 
 @router.get("/server")
-async def get_raw_server_list():
-    """获取原始服务器列表缓存数据，无需鉴权"""
-    return success(data=server_service.get_raw_server_list(), msg="Raw server list retrieved")
+async def get_server_list(
+    server_name: str | None = None,
+    simple: bool = False,
+    cn_only: bool = False,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
+):
+    """合并后的服务器列表查询接口。
+
+    参数：
+    - ``server_name``: 按服务器名模糊过滤（不区分大小写）。
+    - ``simple``: 精简字段，省略在线玩家列表等重字段。
+    - ``cn_only``: 只返回已通过 RCON 同步到本地的服务器（通常是中国服）。
+    """
+    is_admin = check_is_admin(credentials, settings.fastapi_access_tokens)
+    results = server_service.list_servers(
+        server_name=server_name,
+        simple=simple,
+        cn_only=cn_only,
+        is_admin=is_admin,
+    )
+    return success(data=results, msg=f"{len(results)} servers")
 
 
 @router.get("/server/info", dependencies=[Depends(verify_token)])
 async def get_server_info():
     results = server_service.get_server_info()
     return success(data=results, msg="Server info retrieved")
-
-
-@router.get("/server/status")
-async def get_server_status(
-    server_name: str | None = None,
-    credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
-):
-    """获取所有已连接服务器或特定服务器的状态。"""
-    is_admin = check_is_admin(credentials, settings.fastapi_access_tokens)
-    results = server_service.get_server_status(server_name=server_name, is_admin=is_admin)
-    return success(data=results, msg=f"Server status for {len(results)} servers")

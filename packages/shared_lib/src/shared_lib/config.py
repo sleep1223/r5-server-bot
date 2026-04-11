@@ -21,6 +21,8 @@ class Settings(BaseSettings):
 
     # R5 Service settings
     r5_servers_url: str = "https://r5r-sl.ugniushosting.com/servers"
+    # 拉取 r5_servers_url 远程服务器列表的时间间隔（秒）
+    r5_servers_fetch_interval: int = 180
     r5_target_keys: list[str] = []
     r5_rcon_key: str = ""
     r5_rcon_password: str = ""
