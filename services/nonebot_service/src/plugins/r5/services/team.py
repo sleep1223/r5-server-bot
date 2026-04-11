@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import traceback
@@ -6,7 +5,7 @@ from pathlib import Path
 
 import httpx
 from nonebot import on_command
-from nonebot.adapters.onebot.v11 import Bot, Event, Message, PrivateMessageEvent
+from nonebot.adapters.onebot.v11 import Event, Message, MessageSegment
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
 
@@ -126,81 +125,13 @@ def _find_member_by_uid(members: list[dict], platform_uid: str) -> dict | None:
     return None
 
 
-async def _send_private_notification(bot: Bot, user_id: str | int, message: str) -> None:
-    await bot.send_private_msg(user_id=int(user_id), message=message)
-
-
-async def _run_private_notification(bot: Bot, user_id: str | int, message: str, event_name: str, payload: dict) -> None:
-    try:
-        await _send_private_notification(bot, user_id, message)
-        _log_team_event(event_name, **payload)
-    except Exception:
-        team_logger.exception("%s_failed | user_id=%s", event_name, user_id)
-
-
-def _schedule_private_notification(bot: Bot, user_id: str | int, message: str, event_name: str, **payload) -> None:
-    task = asyncio.create_task(
-        _run_private_notification(bot, user_id, message, event_name, payload),
-        name=f"{event_name}-{user_id}",
-    )
-    _log_team_event(f"{event_name}_task_created", user_id=str(user_id), task_name=task.get_name(), **payload)
-
-
-async def _notify_full_team(bot: Bot, team_id: int, members: list[dict]) -> None:
-    """队伍满员时，私信通知所有成员。"""
-    member_snapshots = [_member_snapshot(member) for member in members]
-    msg = _format_team_overview(
-        team_id,
-        {
-            "members": members,
-            "slots_needed": max(len(members) - 1, 0),
-            "slots_remaining": 0,
-        },
-        "🎮 队伍已满员，已为你匹配到完整队伍",
-    )
-    _log_team_event("team_full_notify_started", team_id=team_id, members=member_snapshots, member_count=len(member_snapshots))
-
-    success_count = 0
-    failed_members: list[dict] = []
-    skipped_members: list[dict] = []
-
+def _build_at_members(members: list[dict]) -> Message:
+    """构建 @所有QQ成员 的消息段。"""
+    msg = Message()
     for member in members:
-        if member["platform"] != "qq":
-            skipped_members.append(_member_snapshot(member))
-            continue
-
-        try:
-            await bot.send_private_msg(user_id=int(member["platform_uid"]), message=msg)
-            success_count += 1
-            _log_team_event("team_full_notify_sent", team_id=team_id, member=_member_snapshot(member))
-        except Exception as e:
-            traceback.print_exc()
-            failed_members.append({
-                **_member_snapshot(member),
-                "error": str(e),
-            })
-            team_logger.exception("team_full_notify_failed | team_id=%s | platform_uid=%s", team_id, member.get("platform_uid"))
-
-    _log_team_event(
-        "team_full_notify_finished",
-        team_id=team_id,
-        success_count=success_count,
-        failed_members=failed_members,
-        skipped_members=skipped_members,
-    )
-
-
-async def _run_full_team_notification(bot: Bot, team_id: int, members: list[dict]) -> None:
-    try:
-        await _notify_full_team(bot, team_id, members)
-    except Exception:
-        team_logger.exception("team_full_notify_task_crashed | team_id=%s", team_id)
-
-
-def _schedule_full_team_notification(bot: Bot, team_id: int, members: list[dict]) -> None:
-    _log_team_event("team_full", team_id=team_id, members=[_member_snapshot(member) for member in members], member_count=len(members))
-    task = asyncio.create_task(_run_full_team_notification(bot, team_id, members), name=f"team-full-notify-{team_id}")
-    _log_team_event("team_full_notify_task_created", team_id=team_id, task_name=task.get_name())
+        if member.get("platform") == "qq":
+            msg += MessageSegment.at(int(member["platform_uid"])) + " "
+    return msg
 
 
 create_team_cmd = on_command("组队", priority=5, block=True)
@@ -246,8 +177,7 @@ async def handle_create_team(event: Event, args: Message = CommandArg()) -> None
             team=_team_snapshot(data),
         )
         msg = f"✅ 组队 #{team_id} 已发布！缺 {slots_needed} 人\n"
-        msg += f"其他玩家可发送: /加入 {team_id}\n"
-        msg += "💡 添加机器人为好友可接收组队通知"
+        msg += f"其他玩家可发送: /加入 {team_id}"
         await create_team_cmd.finish(msg)
 
     except FinishedException:
@@ -297,7 +227,7 @@ async def handle_list_teams() -> None:
 
 @join_team_cmd.handle()
 @team_svc.patch_handler()
-async def handle_join_team(bot: Bot, event: Event, args: Message = CommandArg()) -> None:
+async def handle_join_team(event: Event, args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
     if not content or not content.isdigit():
         await join_team_cmd.finish("⚠️ 请提供队伍ID，如: /加入 123")
@@ -333,30 +263,36 @@ async def handle_join_team(bot: Bot, event: Event, args: Message = CommandArg())
         members = team_info.get("members") or []
         creator = _find_creator_member(members)
         joined_member = _find_member_by_uid(members, user_id)
+
+        # @队长通知有新队员加入
         if creator and joined_member and str(creator.get("platform_uid")) != str(user_id) and creator.get("platform") == "qq":
-            creator_msg = (
-                f"🎮 你的队伍有新队员加入\n"
+            notify_msg = (
+                MessageSegment.at(int(creator["platform_uid"]))
+                + f" 🎮 你的队伍有新队员加入\n"
                 f"加入玩家: {joined_member.get('player_name', '未知')}\n"
-                f"加入QQ: {joined_member.get('platform_uid', '?')}\n"
                 f"加入玩家KD: {joined_member.get('kd', '?')}\n\n"
                 f"{_format_team_overview(team_id, team_info, '当前队伍信息')}"
             )
-            _schedule_private_notification(
-                bot,
-                creator["platform_uid"],
-                creator_msg,
+            _log_team_event(
                 "team_creator_notified_join",
                 team_id=team_id,
                 creator=_member_snapshot(creator),
                 joined_member=_member_snapshot(joined_member),
-                team=_team_snapshot(team_info),
             )
+            await join_team_cmd.send(notify_msg)
 
+        # 队伍满员，@所有成员
         if notify_members:
-            _schedule_full_team_notification(bot, team_id, notify_members)
-            await join_team_cmd.finish(f"✅ 已加入队伍 #{team_id}，队伍已满员！机器人正在后台通知所有队友。\n💡 未收到通知？请先添加机器人为好友")
+            _log_team_event("team_full", team_id=team_id, members=[_member_snapshot(m) for m in notify_members], member_count=len(notify_members))
+            full_msg = _build_at_members(notify_members) + "\n" + _format_team_overview(
+                team_id,
+                {"members": notify_members, "slots_needed": max(len(notify_members) - 1, 0), "slots_remaining": 0},
+                "🎮 队伍已满员，已为你匹配到完整队伍",
+            )
+            await join_team_cmd.send(full_msg)
+            await join_team_cmd.finish(f"✅ 已加入队伍 #{team_id}，队伍已满员！")
         else:
-            await join_team_cmd.finish(f"✅ 已加入队伍 #{team_id}，等待更多队友加入...\n💡 添加机器人为好友可接收组队通知")
+            await join_team_cmd.finish(f"✅ 已加入队伍 #{team_id}，等待更多队友加入...")
 
     except FinishedException:
         raise
@@ -409,7 +345,7 @@ async def handle_cancel_team(event: Event, args: Message = CommandArg()) -> None
 
 @leave_team_cmd.handle()
 @team_svc.patch_handler()
-async def handle_leave_team(bot: Bot, event: Event, args: Message = CommandArg()) -> None:
+async def handle_leave_team(event: Event, args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
     if not content or not content.isdigit():
         await leave_team_cmd.finish("⚠️ 请提供队伍ID，如: /退出队伍 123")
@@ -443,6 +379,8 @@ async def handle_leave_team(bot: Bot, event: Event, args: Message = CommandArg()
             await leave_team_cmd.finish(_maybe_binding_hint(req.get("msg", "退出失败")))
 
         _log_team_event("team_left", team_id=team_id, user_id=user_id)
+
+        # @队长通知有队员离开
         if (
             creator_before_leave
             and leaving_member_before_leave
@@ -459,23 +397,21 @@ async def handle_leave_team(bot: Bot, event: Event, args: Message = CommandArg()
                 "slots_needed": team_data.get("slots_needed"),
                 "slots_remaining": (team_data.get("slots_remaining") or 0) + 1,
             }
-            creator_msg = (
-                f"🎮 你的队伍有队员离开\n"
+            notify_msg = (
+                MessageSegment.at(int(creator_before_leave["platform_uid"]))
+                + f" 🎮 你的队伍有队员离开\n"
                 f"离开玩家: {leaving_member_before_leave.get('player_name', '未知')}\n"
-                f"离开QQ: {leaving_member_before_leave.get('platform_uid', '?')}\n"
                 f"离开玩家KD: {leaving_member_before_leave.get('kd', '?')}\n\n"
                 f"{_format_team_overview(team_id, updated_team_info, '当前队伍信息')}"
             )
-            _schedule_private_notification(
-                bot,
-                creator_before_leave["platform_uid"],
-                creator_msg,
+            _log_team_event(
                 "team_creator_notified_leave",
                 team_id=team_id,
                 creator=_member_snapshot(creator_before_leave),
                 leaving_member=_member_snapshot(leaving_member_before_leave),
-                team=_team_snapshot(updated_team_info),
             )
+            await leave_team_cmd.send(notify_msg)
+
         await leave_team_cmd.finish(f"✅ 已退出队伍 #{team_id}")
 
     except FinishedException:
@@ -491,7 +427,7 @@ async def handle_leave_team(bot: Bot, event: Event, args: Message = CommandArg()
 
 @invite_cmd.handle()
 @team_svc.patch_handler()
-async def handle_invite(bot: Bot, event: Event, args: Message = CommandArg()) -> None:
+async def handle_invite(event: Event, args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
     parts = content.split(maxsplit=1)
     if len(parts) < 2 or not parts[0].isdigit():
@@ -521,17 +457,6 @@ async def handle_invite(bot: Bot, event: Event, args: Message = CommandArg()) ->
         target_player = data.get("player_name", target_name)
         kd = data.get("kd", "?")
 
-        # 私信通知被邀请的玩家
-        dm_sent = False
-        if target_uid:
-            invite_msg = f"🎮 玩家邀请你加入队伍 #{team_id}\n队长 KD: 发送 /组队列表 查看\n回复: /接受 {team_id}"
-            try:
-                await bot.send_private_msg(user_id=int(target_uid), message=invite_msg)
-                dm_sent = True
-            except Exception:
-                traceback.print_exc()
-                team_logger.exception("team_invite_dm_failed | team_id=%s | target_uid=%s", team_id, target_uid)
-
         _log_team_event(
             "team_invited",
             team_id=team_id,
@@ -540,10 +465,13 @@ async def handle_invite(bot: Bot, event: Event, args: Message = CommandArg()) ->
             target_player=target_player,
             target_kd=kd,
         )
-        if dm_sent:
-            await invite_cmd.finish(f"✅ 已向 {target_player}(KD:{kd}) 发送邀请")
-        else:
-            await invite_cmd.finish(f"✅ 已向 {target_player}(KD:{kd}) 发送邀请\n⚠️ 私信通知失败，请提醒对方添加机器人为好友后发送: /接受 {team_id}")
+
+        # @被邀请玩家通知
+        if target_uid:
+            at_msg = MessageSegment.at(int(target_uid)) + f" 🎮 玩家邀请你加入队伍 #{team_id}\n回复: /接受 {team_id}"
+            await invite_cmd.send(at_msg)
+
+        await invite_cmd.finish(f"✅ 已向 {target_player}(KD:{kd}) 发送邀请")
 
     except FinishedException:
         raise
@@ -558,10 +486,7 @@ async def handle_invite(bot: Bot, event: Event, args: Message = CommandArg()) ->
 
 @accept_cmd.handle()
 @team_svc.patch_handler()
-async def handle_accept(bot: Bot, event: Event, args: Message = CommandArg()) -> None:
-    if not isinstance(event, PrivateMessageEvent):
-        await accept_cmd.finish("⚠️ 请私信机器人接受邀请")
-
+async def handle_accept(event: Event, args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
     if not content or not content.isdigit():
         await accept_cmd.finish("⚠️ 请提供队伍ID，如: /接受 123")
@@ -597,28 +522,34 @@ async def handle_accept(bot: Bot, event: Event, args: Message = CommandArg()) ->
         members = team_info.get("members") or []
         creator = _find_creator_member(members)
         joined_member = _find_member_by_uid(members, user_id)
+
+        # @队长通知有新队员加入
         if creator and joined_member and str(creator.get("platform_uid")) != str(user_id) and creator.get("platform") == "qq":
-            creator_msg = (
-                f"🎮 你的队伍有新队员加入\n"
+            notify_msg = (
+                MessageSegment.at(int(creator["platform_uid"]))
+                + f" 🎮 你的队伍有新队员加入\n"
                 f"加入玩家: {joined_member.get('player_name', '未知')}\n"
-                f"加入QQ: {joined_member.get('platform_uid', '?')}\n"
                 f"加入玩家KD: {joined_member.get('kd', '?')}\n\n"
                 f"{_format_team_overview(team_id, team_info, '当前队伍信息')}"
             )
-            _schedule_private_notification(
-                bot,
-                creator["platform_uid"],
-                creator_msg,
+            _log_team_event(
                 "team_creator_notified_join",
                 team_id=team_id,
                 creator=_member_snapshot(creator),
                 joined_member=_member_snapshot(joined_member),
-                team=_team_snapshot(team_info),
             )
+            await accept_cmd.send(notify_msg)
 
+        # 队伍满员，@所有成员
         if notify_members:
-            _schedule_full_team_notification(bot, team_id, notify_members)
-            await accept_cmd.finish(f"✅ 已加入队伍 #{team_id}，队伍已满员！机器人正在后台通知所有队友。\n💡 未收到通知？请先添加机器人为好友")
+            _log_team_event("team_full", team_id=team_id, members=[_member_snapshot(m) for m in notify_members], member_count=len(notify_members))
+            full_msg = _build_at_members(notify_members) + "\n" + _format_team_overview(
+                team_id,
+                {"members": notify_members, "slots_needed": max(len(notify_members) - 1, 0), "slots_remaining": 0},
+                "🎮 队伍已满员，已为你匹配到完整队伍",
+            )
+            await accept_cmd.send(full_msg)
+            await accept_cmd.finish(f"✅ 已加入队伍 #{team_id}，队伍已满员！")
         else:
             await accept_cmd.finish(f"✅ 已加入队伍 #{team_id}，等待更多队友...")
 

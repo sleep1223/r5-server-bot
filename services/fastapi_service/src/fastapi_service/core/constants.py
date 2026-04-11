@@ -1,5 +1,20 @@
 ALLOWED_REASONS = ["NO_COVER", "BE_POLITE", "CHEAT", "RULES"]
 
+# 允许 NO_COVER(撤回掩体) 行为的服务器。命中这些规则的服务器会跳过 NO_COVER 的 kick/ban。
+NO_COVER_ALLOWED_SERVER_HOSTS = {"106.75.50.197"}
+NO_COVER_ALLOWED_SERVER_NAME_MARKERS = ("[CN(Beijing)]",)
+
+
+def is_no_cover_allowed_server(server_host: str | None, server_name: str | None) -> bool:
+    """判断该服务器是否允许 NO_COVER(撤回掩体) 行为。"""
+    if server_host and server_host in NO_COVER_ALLOWED_SERVER_HOSTS:
+        return True
+    if server_name:
+        for marker in NO_COVER_ALLOWED_SERVER_NAME_MARKERS:
+            if marker in server_name:
+                return True
+    return False
+
 WEAPON_MAP: dict[str, str] = {
     "alternator": "mp_weapon_alternator_smg",
     "charge rifle": "mp_weapon_defender",
