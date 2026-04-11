@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     r5_rcon_key: str = ""
     r5_rcon_password: str = ""
 
+    # 无规则服务器(如北京服): 命中以下任一规则的服务器会跳过 NO_COVER(撤回掩体) 的 kick/ban 后台执行
+    no_cover_allowed_server_hosts: list[str] = ["106.75.50.197"]
+    no_cover_allowed_server_name_markers: list[str] = ["[CN(Beijing)]"]
+
     # Data settings
     qqwry_path: str = "services/fastapi_service/data/qqwry.dat"
     launcher_config_path: str = "services/fastapi_service/data/launcher_config.toml"

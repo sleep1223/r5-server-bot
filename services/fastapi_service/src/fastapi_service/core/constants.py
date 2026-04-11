@@ -1,16 +1,14 @@
-ALLOWED_REASONS = ["NO_COVER", "BE_POLITE", "CHEAT", "RULES"]
+from shared_lib.config import settings
 
-# 允许 NO_COVER(撤回掩体) 行为的服务器。命中这些规则的服务器会跳过 NO_COVER 的 kick/ban。
-NO_COVER_ALLOWED_SERVER_HOSTS = {"106.75.50.197"}
-NO_COVER_ALLOWED_SERVER_NAME_MARKERS = ("[CN(Beijing)]",)
+ALLOWED_REASONS = ["NO_COVER", "BE_POLITE", "CHEAT", "RULES"]
 
 
 def is_no_cover_allowed_server(server_host: str | None, server_name: str | None) -> bool:
-    """判断该服务器是否允许 NO_COVER(撤回掩体) 行为。"""
-    if server_host and server_host in NO_COVER_ALLOWED_SERVER_HOSTS:
+    """判断该服务器是否为无规则服务器(允许撤回掩体): 命中则跳过 NO_COVER 的 kick/ban 后台执行。"""
+    if server_host and server_host in settings.no_cover_allowed_server_hosts:
         return True
     if server_name:
-        for marker in NO_COVER_ALLOWED_SERVER_NAME_MARKERS:
+        for marker in settings.no_cover_allowed_server_name_markers:
             if marker in server_name:
                 return True
     return False
