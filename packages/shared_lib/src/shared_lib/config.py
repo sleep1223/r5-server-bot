@@ -34,6 +34,17 @@ class Settings(BaseSettings):
     launcher_config_path: str = "services/fastapi_service/data/launcher_config.toml"
     launcher_update_path: str = "services/fastapi_service/data/launcher_update.toml"
 
+    # Steam authentication / pylon master-server settings
+    steam_web_api_key: str = ""
+    steam_app_id: str = "480"  # Spacewar fallback for testing
+    steam_auth_timeout: float = 7.0
+    steam_persona_lookup: bool = True
+    jwt_private_key_path: str = "services/fastapi_service/data/jwt_private.pem"
+    jwt_public_key_path: str = "services/fastapi_service/data/jwt_public.pem"
+    jwt_private_key_passphrase: str = ""
+    jwt_token_ttl_seconds: int = 30
+    pylon_default_server_port: int = 37015
+
     @property
     def tortoise_orm(self) -> dict:
         return {
