@@ -5,7 +5,7 @@ from shared_lib.models import BanRecord
 
 from fastapi_service.core.auth import security_scheme, verify_token
 from fastapi_service.core.cache import server_cache
-from fastapi_service.core.constants import ALLOWED_REASONS
+from fastapi_service.core.constants import ALLOWED_REASONS, is_no_cover_allowed_server
 from fastapi_service.core.errors import ErrorCode
 from fastapi_service.core.response import error, paginated, success
 from fastapi_service.core.utils import check_is_admin
@@ -38,6 +38,18 @@ async def kick_player(
             msg=f"Player {player_obj.nucleus_id} is not online; kick count recorded for {reason}",
         )
     assert target_loc is not None
+
+    # 北京服等允许 NO_COVER 的服务器跳过此规则
+    if reason == "NO_COVER" and is_no_cover_allowed_server(target_loc.get("server_host"), target_loc.get("server_name")):
+        return success(
+            data={
+                "player_online": True,
+                "skipped": True,
+                "skip_reason": "no_cover_allowed",
+                "server": {"name": target_loc["server_name"], "host": target_loc["server_host"], "port": target_loc["server_port"]},
+            },
+            msg=f"Server {target_loc['server_name']} allows NO_COVER; kick skipped",
+        )
 
     rcon_key, rcon_pwd = require_rcon_config()
     kick_success = await admin_service.kick_player_on_server(player_obj.nucleus_id, reason, target_loc["server_host"], target_loc["server_port"], rcon_key, rcon_pwd)
@@ -73,11 +85,28 @@ async def ban_player(
     operator_name = "admin" if credentials else "system"
     target_loc, online_error = player_service.get_online_location(player_obj)
 
+    # NO_COVER 规则: 过滤掉允许 NO_COVER 的服务器(如北京服)
+    if reason == "NO_COVER":
+        online_servers = [s for s in online_servers if not is_no_cover_allowed_server(s.get("server_host"), s.get("server_name"))]
+
     # 1) 玩家在线: 先同步封禁所在服务器
     if not online_error and target_loc:
         target_host = target_loc["server_host"]
         target_port = target_loc["server_port"]
         target_server_name = target_loc["server_name"]
+
+        # 北京服等允许 NO_COVER 的服务器跳过此规则
+        if reason == "NO_COVER" and is_no_cover_allowed_server(target_host, target_server_name):
+            return success(
+                data={
+                    "player_online": True,
+                    "skipped": True,
+                    "skip_reason": "no_cover_allowed",
+                    "primary_server": {"name": target_server_name, "host": target_host, "port": target_port},
+                    "async_server_count": 0,
+                },
+                msg=f"Server {target_server_name} allows NO_COVER; ban skipped",
+            )
 
         ban_success = await admin_service.ban_player_on_server(player_obj.nucleus_id, reason, target_host, target_port, rcon_key, rcon_pwd)
 

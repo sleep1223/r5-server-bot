@@ -76,6 +76,11 @@ async def handle_ban(args: Message = CommandArg()) -> None:
         data = res.get("data") or {}
         async_count = data.get("async_server_count", 0)
 
+        if data.get("skipped") and data.get("skip_reason") == "no_cover_allowed":
+            primary = data.get("primary_server") or {}
+            server_name = _get_server_name(primary)
+            await cmd_ban.finish(f"⏭️ 已跳过封禁\n\n👤 玩家: {target}\n📌 原因: {reason_cn}\n🖥️ 服务器: {server_name}\n💡 该服务器允许撤回掩体，已跳过封禁")
+
         if data.get("player_online") is True:
             primary = data.get("primary_server") or {}
             server_name = _get_server_name(primary)
@@ -119,6 +124,11 @@ async def handle_kick(args: Message = CommandArg()) -> None:
             await cmd_kick.finish(f"❌ 踢出失败: {_error_msg(res)}")
 
         data = res.get("data") or {}
+
+        if data.get("skipped") and data.get("skip_reason") == "no_cover_allowed":
+            server = data.get("server") or {}
+            server_name = _get_server_name(server)
+            await cmd_kick.finish(f"⏭️ 已跳过踢出\n\n👤 玩家: {target}\n📌 原因: {reason_cn}\n🖥️ 服务器: {server_name}\n💡 该服务器允许撤回掩体，已跳过踢出")
 
         if data.get("player_online") is True:
             server = data.get("server") or {}

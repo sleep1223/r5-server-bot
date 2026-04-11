@@ -102,7 +102,7 @@ async def handle_check_kd(event: Event, args: Message = CommandArg()) -> None:
         # 尝试通过绑定信息获取玩家名
         user_id = event.get_user_id()
         try:
-            bind_resp = await api_client.get_binding(platform="qq", platform_uid=user_id, timeout=3.0)
+            bind_resp = await api_client.get_binding(platform="qq", platform_uid=user_id, timeout=5.0)
             bind_data = bind_resp.json()
             if bind_data.get("code") == "0000" and bind_data.get("data"):
                 target = bind_data["data"].get("player_name", "")
