@@ -73,7 +73,89 @@ nonebot_service → NoneBot 2 chat bot plugins calling fastapi_service over HTTP
 - Authentication: `HTTPBearer` with token list from `settings.fastapi_access_tokens`.
 - Background tasks started in lifespan: server list fetch (5s interval), IP resolution, player sync.
 - Caches in `api/v1/r5/cache.py`: `global_server_cache`, `raw_server_response_cache`, `banned_player_server_cache`.
-- API routes under `/v1/r5/` — endpoints for server info, player queries, KD stats, weapon stats, bans/kicks, donations.
+- Bot API routes under `/v1/r5/` — endpoints for server info, player queries, KD stats, weapon stats, bans/kicks, donations.
+- **Pylon master-server routes under `/v1/`** (no `/r5` prefix) — implement the
+  R5 SDK master-server protocol so this service can act as the auth backend
+  for game clients/servers. See *Pylon / Steam Authentication* below.
+
+## Pylon / Steam Authentication
+
+The bot doubles as a minimal R5 master server that hands out RS256 JWTs after
+verifying a Steam `AuthSessionTicket`. Game servers verify the JWT locally
+against the public key served by `/server/auth/keyinfo`. Two layers:
+
+- `services/fastapi_service/src/fastapi_service/services/`
+  - `steam_auth_service.py` — calls Steam Web API
+    `ISteamUserAuth/AuthenticateUserTicket/v1` (with one auto-retry on
+    "Invalid ticket") and optionally fetches the persona name.
+  - `jwt_auth_service.py` — RS256 signing + public-key distribution; computes
+    `sessionId = sha256(f"{userId}-{playerName}-{serverEndpoint}")` so the
+    game server's `CClient::Authenticate` validation matches.
+  - `pylon_db_service.py` — `SteamAuthLog` audit writer + ban lookup against
+    the existing `Player` / `BanRecord` tables (currently keyed off
+    `Player.nucleus_id`; Steam-only users will simply miss until a future
+    `Player.steam_id` field is added).
+- `services/fastapi_service/src/fastapi_service/api/v1/pylon.py` — exposes:
+  - `POST /v1/client/auth`           — Steam ticket → JWT (canonical path)
+  - `POST /v1/client/authenticate`   — legacy r5r_sdk alias (accepts `id` as
+    a JSON number too)
+  - `POST /v1/server/auth/keyinfo`   — JWT public-key distribution; honours
+    `keyHash` for the no-change short-circuit at `pylon.cpp:504`
+  - `POST /v1/banlist/isBanned`      — single-player ban check used per
+    connect by r5r_sdk dedis
+  - `POST /v1/banlist/bulkCheck`     — periodic bulk ban check
+  - `POST /v1/eula`                  — EULA shim; clients gate every other
+    pylon call on this passing
+  - `POST /v1/servers/add`           — dedicated-server keep-alive shim
+    (echoes `ip`/`port`; optional `token` for hidden servers)
+
+After the reverse proxy strips `/api`, these endpoints live at
+`https://r5.sleep0.de/api/v1/...`.
+
+### Required configuration
+
+In `env/.env`:
+
+```ini
+steam_web_api_key="<get one at https://steamcommunity.com/dev/apikey>"
+steam_app_id="480"  # use the real app id in production
+jwt_private_key_path="services/fastapi_service/data/jwt_private.pem"
+jwt_public_key_path="services/fastapi_service/data/jwt_public.pem"
+jwt_token_ttl_seconds=30
+pylon_default_server_port=37015
+```
+
+Generate the JWT keypair once on the deploy host:
+
+```bash
+openssl genpkey -algorithm RSA -out services/fastapi_service/data/jwt_private.pem -pkeyopt rsa_keygen_bits:2048
+openssl rsa -in services/fastapi_service/data/jwt_private.pem -pubout -out services/fastapi_service/data/jwt_public.pem
+chmod 600 services/fastapi_service/data/jwt_private.pem
+```
+
+The keypair powers both `/server/auth/keyinfo` (returns the public key,
+base64-encoded, with `keyHash = sha256(pem)`) and `/client/auth` (signs
+short-lived JWTs with the private key). Rotate by replacing both files; the
+service hot-reloads on file mtime change.
+
+### Database
+
+`SteamAuthLog` (table `steam_auth_log`) is added by migration
+`packages/shared_lib/migrations/models/10_20260411150000_steam_auth_log.py`.
+On first boot `Tortoise.generate_schemas()` will create the table for fresh
+DBs; existing prod DBs need `aerich upgrade` (or running the migration's
+SQL manually).
+
+### Compatibility matrix
+
+- **r5v_sdk** (Steam-native, hardcoded JWT public key in
+  `engine/client/client.cpp:81`) — use `/v1/client/auth`. The SDK's hardcoded
+  public key must match the one served at `/v1/server/auth/keyinfo`, so
+  either align keys with r5v upstream or recompile r5v_sdk with your own.
+- **r5r_sdk** (Origin legacy, fetches public key at runtime) — call
+  `/v1/client/authenticate` and `/v1/server/auth/keyinfo`. Requires the
+  per-client Steam plugin DLL described in the project's docs to actually
+  send a Steam ticket; otherwise this endpoint is unused.
 
 ## NoneBot Service Details
 
