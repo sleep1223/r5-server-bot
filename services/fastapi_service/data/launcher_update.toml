@@ -2,19 +2,19 @@
 # 由 /v1/r5/launcher/update/{target}/{arch}/{current_version} 接口读取并返回
 
 # 当前最新版本号（必须对应下方某个 [[versions]] 条目）
-latest = "0.4.0"
+latest = "0.9.0"
 
 # 版本列表，新版本追加在前面
 # platforms key 格式: {target}-{arch}，如 windows-x86_64, linux-x86_64, darwin-aarch64
 
 [[versions]]
-version = "0.4.0"
+version = "0.9.0"
 notes = "初始版本"
-pub_date = "2026-04-10T00:00:00Z"
+pub_date = "2026-04-13T00:00:00Z"
 
 [versions.platforms.windows-x86_64]
 signature = ""
-url = "https://github.com/sleep1223/r5r-cn-launcher/releases/download/v0.4.0/R5R-CN-Launcher_0.4.0_x64-setup.nsis.zip"
+url = "https://github.com/sleep1223/r5r-cn-launcher/releases/download/v0.9.0/R5R-CN-Launcher_0.9.0_x64-setup.nsis.zip"
 
 # [[versions]]
 # version = "0.5.0"

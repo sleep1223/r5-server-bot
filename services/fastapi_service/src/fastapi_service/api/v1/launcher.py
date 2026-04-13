@@ -35,6 +35,17 @@ async def get_launcher_config():
     data = _load_toml(Path(settings.launcher_config_path))
     update_data = _load_toml(Path(settings.launcher_update_path))
     data["launcher_version"] = update_data.get("latest", "")
+
+    # 从最新版本的平台信息中提取下载地址，默认取 windows-x86_64
+    latest_version = data["launcher_version"]
+    versions: list[dict] = update_data.get("versions", [])
+    version_info = next((v for v in versions if v.get("version") == latest_version), None)
+    if version_info:
+        platform_info = version_info.get("platforms", {}).get("windows-x86_64", {})
+        data["launcher_update_url"] = platform_info.get("url", "")
+    else:
+        data["launcher_update_url"] = ""
+
     return success(data=data, msg="Launcher config retrieved")
 
 
