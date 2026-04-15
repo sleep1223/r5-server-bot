@@ -1,6 +1,9 @@
 # R5RC N Launcher 配置信息
 # 由 /v1/r5/launcher/config 接口读取并返回
 
+# 下载域名
+download_domain = "r5r.org"
+
 # 离线包下载地址
 offline_package_url = "https://www.123684.com/s/C9r9-IkJhH"
 
