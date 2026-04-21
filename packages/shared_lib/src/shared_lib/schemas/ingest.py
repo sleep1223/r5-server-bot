@@ -43,6 +43,12 @@ class GameStateChangedIn(_BaseEventIn):
     state: str
 
 
+class MatchStateEndIn(_BaseEventIn):
+    type: Literal["match_state_end"] = "match_state_end"
+    state: str  # 通常是 "WinnerDetermined"
+    winners: list[dict] | None = None
+
+
 class CharacterSelectedIn(_BaseEventIn):
     type: Literal["character_selected"] = "character_selected"
     player: PlayerInfo
@@ -79,6 +85,7 @@ IngestEvent = Annotated[
         InitEventIn,
         MatchSetupIn,
         GameStateChangedIn,
+        MatchStateEndIn,
         CharacterSelectedIn,
         PlayerConnectedIn,
         PlayerDisconnectedIn,

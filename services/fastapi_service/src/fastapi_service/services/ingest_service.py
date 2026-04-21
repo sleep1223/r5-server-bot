@@ -10,6 +10,7 @@ from shared_lib.models import (
     InitEvent,
     Match,
     MatchSetup,
+    MatchStateEnd,
     Player,
     PlayerConnected,
     PlayerDisconnected,
@@ -23,6 +24,7 @@ from shared_lib.schemas.ingest import (
     IngestResult,
     InitEventIn,
     MatchSetupIn,
+    MatchStateEndIn,
     PlayerConnectedIn,
     PlayerDisconnectedIn,
     PlayerInfo,
@@ -51,6 +53,8 @@ _ACTIVE_MATCH_BY_SERVER: dict[int, int] = {}
 _STATE_PLAYING = "Playing"
 # 新一轮 Prematch 出现时，若上一局已进过 Playing 则视为对局结束
 _STATE_PREMATCH = "Prematch"
+# 注：SDK 的 LiveAPI_OnGameStateChanged 在 WinnerDetermined 时只 emit matchStateEnd
+# 事件，不会再 emit gameStateChanged(state="WinnerDetermined")。关闭信号靠 MatchStateEndIn。
 
 
 async def restore_active_matches() -> None:
@@ -226,10 +230,19 @@ async def _close_match(match_id: int, server_id: int, ts: int, reason: str) -> N
         logger.info(f"Match 关闭: id={match_id}, reason={reason}")
 
 
-async def _create_match(server: Server, ts: int, event: MatchSetupIn) -> Match:
-    """根据 MatchSetup 新建 Match；full_match_id 冲突时追加序号重试。"""
+async def _insert_match(
+    server: Server,
+    ts: int,
+    *,
+    map_name: str,
+    playlist_name: str,
+    playlist_desc: str,
+    datacenter,
+    aim_assist_on: bool,
+    has_entered_playing: bool = False,
+) -> Match:
+    """通用 Match 创建：生成 full_match_id 并写库；冲突时追加序号重试。"""
     started_at = _ts_to_dt(ts)
-    # full_match_id 用上海时间显示更直观（started_at 列本身仍按 UTC 存储）
     local = started_at.astimezone(_CN_TZ)
     base_id = f"{server.host}-{local:%Y%m%d-%H%M%S}"
     for attempt in range(5):
@@ -238,25 +251,80 @@ async def _create_match(server: Server, ts: int, event: MatchSetupIn) -> Match:
             match = await Match.create(
                 full_match_id=candidate,
                 server=server,
-                map_name=event.map_name,
-                playlist_name=event.playlist_name,
-                playlist_desc=event.playlist_desc,
-                datacenter=event.datacenter,
-                aim_assist_on=event.aim_assist_on,
+                map_name=map_name,
+                playlist_name=playlist_name,
+                playlist_desc=playlist_desc,
+                datacenter=datacenter,
+                aim_assist_on=aim_assist_on,
                 started_at=started_at,
                 status="active",
+                has_entered_playing=has_entered_playing,
             )
             _ACTIVE_MATCH_BY_SERVER[server.id] = match.id
-            logger.info(f"Match 创建: id={match.id}, full_match_id={candidate}")
             return match
         except IntegrityError:
             continue
     raise RuntimeError(f"无法生成唯一 full_match_id: base={base_id}")
 
 
+async def _create_match(server: Server, ts: int, event: MatchSetupIn) -> Match:
+    """根据 MatchSetup 新建 Match。"""
+    match = await _insert_match(
+        server,
+        ts,
+        map_name=event.map_name,
+        playlist_name=event.playlist_name,
+        playlist_desc=event.playlist_desc,
+        datacenter=event.datacenter,
+        aim_assist_on=event.aim_assist_on,
+    )
+    logger.info(f"Match 创建 (match_setup): id={match.id}, full_match_id={match.full_match_id}")
+    return match
+
+
+async def _synthesize_match(server: Server, ts: int) -> Match | None:
+    """GameStateChanged=Playing 时 active 为空：从该服务器最近一条 MatchSetup 继承元数据合成一条。
+
+    SDK 现状：MatchSetup 在服务器启动时仅 emit 一次，后续每局只有 GameStateChanged 状态流。
+    所以自第二局起，我们得靠 Playing 状态兜底创建 Match。
+    若该 server 从未出现过 MatchSetup（新接入），则返回 None。
+    """
+    latest_setup = (
+        await MatchSetup.filter(match__server_id=server.id)
+        .order_by("-timestamp")
+        .first()
+    )
+    if latest_setup is None:
+        logger.warning(
+            f"Playing 无活跃对局且无历史 MatchSetup 可继承: server_id={server.id}"
+        )
+        return None
+
+    match = await _insert_match(
+        server,
+        ts,
+        map_name=latest_setup.map_name,
+        playlist_name=latest_setup.playlist_name,
+        playlist_desc=latest_setup.playlist_desc,
+        datacenter=latest_setup.datacenter,
+        aim_assist_on=latest_setup.aim_assist_on,
+        has_entered_playing=True,  # 进 Playing 才合成
+    )
+    logger.info(
+        f"Match 创建 (synth from last match_setup): id={match.id}, "
+        f"full_match_id={match.full_match_id}, "
+        f"map={latest_setup.map_name}/{latest_setup.playlist_name}"
+    )
+    return match
+
+
 async def _apply_state_transition(match: Match, state: str, ts: int, server_id: int) -> Match | None:
-    """根据 GameStateChanged 更新 match 或触发关闭。返回更新后的 match（关闭时返回 None）。"""
-    # 下一轮 Prematch + 上一局已进过 Playing → 关闭
+    """根据 GameStateChanged 更新 match 或触发关闭。返回更新后的 match（关闭时返回 None）。
+
+    注意 WinnerDetermined **不会** 以 GameStateChanged 到达（SDK 转成 matchStateEnd），
+    所以关闭信号在 MatchStateEndIn 分支里处理；这里兜底 Prematch 循环。
+    """
+    # 兜底：下一轮 Prematch + 上一局已进过 Playing → 视为结束（matchStateEnd 丢失时生效）
     if state == _STATE_PREMATCH and match.has_entered_playing:
         await _close_match(match.id, server_id, ts, "prematch_cycle")
         return None
@@ -361,17 +429,40 @@ async def _dispatch_event(
     if isinstance(event, GameStateChangedIn):
         next_match = active_match
         if active_match:
-            next_match = await _apply_state_transition(active_match, event.state, event.timestamp, server.id)
+            next_match = await _apply_state_transition(
+                active_match, event.state, event.timestamp, server.id
+            )
+        elif event.state == _STATE_PLAYING:
+            # 活跃 match 空 + 进入 Playing → 从该服务器最近一条 MatchSetup 继承元数据合成。
+            # 覆盖 1v1/自定义房 SDK 只在服务器启动时 emit 一次 MatchSetup 的场景。
+            next_match = await _synthesize_match(server, event.timestamp)
         queue(
             GameStateChanged(
                 timestamp=event.timestamp,
                 category=event.category,
                 state=event.state,
-                match=next_match,  # 关闭时写 None，事件仍归属刚结束的一局？—— 故意不绑 old match，保持语义清晰
+                match=next_match,  # 关闭后的事件 match=None，语义上它属于刚结束的一局之外
                 server=server,
             )
         )
         return next_match
+
+    if isinstance(event, MatchStateEndIn):
+        # SDK 最可靠的"一局结束"信号：关闭 active match 并把 winners 存档
+        closed_match = active_match
+        if active_match:
+            await _close_match(active_match.id, server.id, event.timestamp, "winner_determined")
+        queue(
+            MatchStateEnd(
+                timestamp=event.timestamp,
+                category=event.category,
+                state=event.state,
+                winners=event.winners,
+                match=closed_match,
+                server=server,
+            )
+        )
+        return None
 
     if isinstance(event, CharacterSelectedIn):
         player = _lookup(player_map, event.player)

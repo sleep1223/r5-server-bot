@@ -80,6 +80,22 @@ class MatchSetup(BaseEvent):
         table = "match_setup"
 
 
+class MatchStateEnd(BaseEvent):
+    """SDK 在 `GameStateChanged=WinnerDetermined` 时发的独立事件（带 winners）。
+
+    注意：WinnerDetermined 状态**不会**以 GameStateChanged 的形式到达，SDK 把
+    它转成了 matchStateEnd 事件发送。这是最可靠的"一局结束"信号。
+    """
+
+    state = fields.CharField(max_length=100)  # 通常是 "WinnerDetermined"
+    winners = fields.JSONField(null=True)  # [{name, teamId, nucleusHash, ...}, ...]
+    match = fields.ForeignKeyField("models.Match", related_name="state_end_events", null=True, db_index=True)
+    server = fields.ForeignKeyField("models.Server", related_name="state_end_events", null=True, db_index=True)
+
+    class Meta:
+        table = "match_state_end"
+
+
 class PlayerConnected(BaseEvent):
     player = fields.ForeignKeyField("models.Player", related_name="connections")
     player_data = fields.JSONField()
