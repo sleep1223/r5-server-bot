@@ -15,6 +15,7 @@ from shared_lib.schemas.ingest import (
     IngestBatch,
     InitEventIn,
     MatchSetupIn,
+    MatchStateEndIn,
     PlayerConnectedIn,
     PlayerDisconnectedIn,
     PlayerInfo,
@@ -233,6 +234,15 @@ class LiveAPIListener:
     def on_MatchStateEnd(self, msg):
         winner_names = [p.name for p in msg.winners]
         logger.info(f"[比赛状态结束] 状态: {msg.state}, 获胜者: {', '.join(winner_names)}")
+        winners = [MessageToDict(p, preserving_proto_field_name=True) for p in msg.winners]
+        self._enqueue(
+            MatchStateEndIn(
+                timestamp=msg.timestamp,
+                category=msg.category,
+                state=msg.state,
+                winners=winners,
+            )
+        )
 
     def on_RingStartClosing(self, msg):
         logger.info(f"[缩圈开始] 阶段: {msg.stage}, 半径: {msg.currentRadius} -> {msg.endRadius}, 持续时间: {msg.shrinkDuration}秒")

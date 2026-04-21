@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     match_no_activity_timeout_seconds: int = 1800
     # close_stale_matches 后台任务扫描间隔（秒）
     match_closer_interval_seconds: int = 60
+    # reconcile_matches 对账任务：周期间隔 + 宽限期（防止跟事件驱动路径抢）
+    match_reconcile_interval_seconds: int = 180
+    match_reconcile_grace_seconds: int = 120
     # /对局：每场 top1 击杀数低于此值则不显示
     recent_match_top_kills_threshold: int = 50
     # /竞技：每人每天按击杀取前 N 场计入周榜

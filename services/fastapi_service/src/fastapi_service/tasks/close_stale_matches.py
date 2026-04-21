@@ -28,11 +28,16 @@ async def _close_no_activity_matches(now: datetime) -> None:
     """无击杀活动超过阈值 → 标记为 completed/no_activity。
 
     覆盖"玩家全退 → 游戏服不再 emit Prematch"这类场景。给一段宽限期
-    (started_at < now - N) 避免把刚创建、还没开始的空对局误关。
+    (started_at < now - N **且** created_at < now - N) 避免把刚写入但 started_at
+    回溯的 back-dated match（比如 ws_service 重启后 replay 的旧 MatchSetup）秒死。
     """
     grace = timedelta(seconds=settings.match_no_activity_timeout_seconds)
     cutoff = now - grace
-    candidates = await Match.filter(status="active", started_at__lt=cutoff).all()
+    candidates = await Match.filter(
+        status="active",
+        started_at__lt=cutoff,
+        created_at__lt=cutoff,
+    ).all()
     if not candidates:
         return
 
@@ -52,9 +57,17 @@ async def _close_no_activity_matches(now: datetime) -> None:
 
 
 async def _close_hard_timeout_matches(now: datetime) -> None:
-    """总时长 safety net（默认 2h）→ 标记为 abandoned/inactivity。"""
+    """总时长 safety net（默认 2h）→ 标记为 abandoned/inactivity。
+
+    同样要求 started_at 和 created_at 都早于 cutoff，避免 back-dated MatchSetup
+    （ws_service 重启后 replay）刚插入就被秒判超时。
+    """
     cutoff = now - timedelta(seconds=settings.match_inactivity_timeout_seconds)
-    stale = await Match.filter(status="active", started_at__lt=cutoff).all()
+    stale = await Match.filter(
+        status="active",
+        started_at__lt=cutoff,
+        created_at__lt=cutoff,
+    ).all()
     for m in stale:
         await _close_one(m, now, status="abandoned", reason="inactivity")
 
