@@ -282,38 +282,62 @@ async def _create_match(server: Server, ts: int, event: MatchSetupIn) -> Match:
     return match
 
 
-async def _synthesize_match(server: Server, ts: int) -> Match | None:
-    """GameStateChanged=Playing 时 active 为空：从该服务器最近一条 MatchSetup 继承元数据合成一条。
+async def _synthesize_match(server: Server, ts: int) -> Match:
+    """active 为空时合成一条 Match（元数据取优先级：历史 MatchSetup > Server 表 > stub）。
 
-    SDK 现状：MatchSetup 在服务器启动时仅 emit 一次，后续每局只有 GameStateChanged 状态流。
-    所以自第二局起，我们得靠 Playing 状态兜底创建 Match。
-    若该 server 从未出现过 MatchSetup（新接入），则返回 None。
+    r5r_sdk 现状：`LiveAPI_OnMatchSetup()` 在服务器 boot 最早阶段触发，此时 ws 握手可能
+    还没完成，`LiveAPI_IsValidToRun()` 挡掉事件 → **每次 boot MatchSetup 基本都丢**。
+    所以本函数是 Match 创建的主力入口（而不是 MatchSetup 事件分支）。
+
+    元数据来源优先级：
+    1. **历史 MatchSetup**：该 server 过去某次 boot 有漏网之鱼
+    2. **Server 表**：`fetch_server_list_raw_task` 每 180s 拉远程服务器列表刷新 map/playlist
+    3. **stub 占位**：以上都没有，用 unknown；等后续真 MatchSetup 来了替换
     """
     latest_setup = (
         await MatchSetup.filter(match__server_id=server.id)
         .order_by("-timestamp")
         .first()
     )
-    if latest_setup is None:
+    if latest_setup is not None:
+        map_name = latest_setup.map_name
+        playlist_name = latest_setup.playlist_name
+        playlist_desc = latest_setup.playlist_desc
+        datacenter = latest_setup.datacenter
+        aim_assist_on = latest_setup.aim_assist_on
+        source_label = f"last match_setup (map={map_name}/{playlist_name})"
+    elif server.map or server.playlist:
+        # 从远程服务器列表拉到的真实 map/playlist（正常运行下总有值）
+        map_name = server.map or "unknown"
+        playlist_name = server.playlist or "unknown"
+        playlist_desc = ""
+        datacenter = None
+        aim_assist_on = False
+        source_label = f"server-list (map={map_name}/{playlist_name})"
+    else:
+        # 兜底 stub；等下次真 MatchSetup 到达会用 new_match 关闭它
+        map_name = "unknown"
+        playlist_name = "unknown"
+        playlist_desc = ""
+        datacenter = None
+        aim_assist_on = False
+        source_label = "stub (no metadata available)"
         logger.warning(
-            f"Playing 无活跃对局且无历史 MatchSetup 可继承: server_id={server.id}"
+            f"Synth Match 用 stub (server_id={server.id}): 既无历史 MatchSetup 也无远程 Server 元数据"
         )
-        return None
 
     match = await _insert_match(
         server,
         ts,
-        map_name=latest_setup.map_name,
-        playlist_name=latest_setup.playlist_name,
-        playlist_desc=latest_setup.playlist_desc,
-        datacenter=latest_setup.datacenter,
-        aim_assist_on=latest_setup.aim_assist_on,
-        has_entered_playing=True,  # 进 Playing 才合成
+        map_name=map_name,
+        playlist_name=playlist_name,
+        playlist_desc=playlist_desc,
+        datacenter=datacenter,
+        aim_assist_on=aim_assist_on,
+        has_entered_playing=True,
     )
     logger.info(
-        f"Match 创建 (synth from last match_setup): id={match.id}, "
-        f"full_match_id={match.full_match_id}, "
-        f"map={latest_setup.map_name}/{latest_setup.playlist_name}"
+        f"Match 创建 (synth from {source_label}): id={match.id}, full_match_id={match.full_match_id}"
     )
     return match
 
