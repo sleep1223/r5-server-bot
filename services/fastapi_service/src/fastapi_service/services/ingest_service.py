@@ -19,6 +19,7 @@ from shared_lib.models import (
 )
 from shared_lib.schemas.ingest import (
     CharacterSelectedIn,
+    ConnectionBoundaryIn,
     GameStateChangedIn,
     IngestBatch,
     IngestResult,
@@ -486,6 +487,15 @@ async def _dispatch_event(
                 server=server,
             )
         )
+        return None
+
+    if isinstance(event, ConnectionBoundaryIn):
+        # ws_service 自生成：WS 连接断开 → 关闭 active match，下次事件触发 synth。
+        # 主要覆盖 1v1 playlist 下游戏服每 ~50s 自断重连的 wave 边界。
+        # BR 场景下 ws 不会这么频繁断，所以这个 reason 自然只在 1v1 生效，无副作用。
+        if event.reason == "ws_closed" and active_match:
+            await _close_match(active_match.id, server.id, event.timestamp, "ws_cycle")
+        # 不入队事件日志；boundary 本身不值得落库
         return None
 
     if isinstance(event, CharacterSelectedIn):

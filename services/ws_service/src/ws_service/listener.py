@@ -1,4 +1,5 @@
 import asyncio
+import time
 import uuid
 from collections import deque
 from typing import Any as TypingAny
@@ -11,6 +12,7 @@ from loguru import logger
 from shared_lib.config import settings
 from shared_lib.schemas.ingest import (
     CharacterSelectedIn,
+    ConnectionBoundaryIn,
     GameStateChangedIn,
     IngestBatch,
     InitEventIn,
@@ -164,6 +166,18 @@ class LiveAPIListener:
             logger.info("连接已关闭")
         except Exception as e:
             logger.error(f"连接处理程序错误: {e}")
+        finally:
+            # WS 断开即一轮对局边界（r5 的 LiveAPI client 每 ~50s 自断重连，
+            # 对应 1v1 playlist 一拨并行 duel 的生命周期）。入队 + 立即 flush，
+            # 不等 30s batch，确保关闭信号尽快到达 ingest。
+            self._enqueue(
+                ConnectionBoundaryIn(
+                    timestamp=int(time.time()),
+                    category="connection_boundary",
+                    reason="ws_closed",
+                )
+            )
+            await self._flush()
 
     def parse_message(self, data):
         try:

@@ -80,6 +80,18 @@ class PlayerKilledIn(_BaseEventIn):
     weapon: str
 
 
+class ConnectionBoundaryIn(_BaseEventIn):
+    """ws_service 自生成的信号：游戏服的 LiveAPI WebSocket 连接生命周期边界。
+
+    r5 游戏服的 DirtySDK WS 客户端每 ~50s 自动断开重连一次；在 `fs_1v1` / 自定义房
+    playlist 下，这个周期大致对应一"波"并行 duel 的生命周期，可当作 match 边界。
+    由 ws_service 在 `handle_connection` 的 finally 发出，立即 flush 不等 batch。
+    """
+
+    type: Literal["connection_boundary"] = "connection_boundary"
+    reason: str  # "ws_closed"（目前只需要 closed；opened 由下次 Playing/PlayerKilled 触发 synth）
+
+
 IngestEvent = Annotated[
     Union[
         InitEventIn,
@@ -90,6 +102,7 @@ IngestEvent = Annotated[
         PlayerConnectedIn,
         PlayerDisconnectedIn,
         PlayerKilledIn,
+        ConnectionBoundaryIn,
     ],
     Field(discriminator="type"),
 ]
