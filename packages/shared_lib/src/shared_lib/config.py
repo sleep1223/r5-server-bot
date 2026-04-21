@@ -54,6 +54,18 @@ class Settings(BaseSettings):
     launcher_config_path: str = "services/fastapi_service/data/launcher_config.toml"
     launcher_update_path: str = "services/fastapi_service/data/launcher_update.toml"
 
+    # Match tracking settings
+    # 活跃 match 超过此秒数未关闭即标记为 abandoned（safety net，典型 BR 一场 ~25min）
+    match_inactivity_timeout_seconds: int = 7200
+    # close_stale_matches 后台任务扫描间隔（秒）
+    match_closer_interval_seconds: int = 60
+    # /对局：每场 top1 击杀数低于此值则不显示
+    recent_match_top_kills_threshold: int = 50
+    # /竞技：每人每天按击杀取前 N 场计入周榜
+    competitive_daily_match_limit: int = 3
+    # /个人对局：默认返回最近 N 场
+    personal_match_default_limit: int = 3
+
     # Steam authentication / pylon master-server settings
     steam_web_api_key: str = ""
     steam_app_id: str = "480"  # Spacewar fallback for testing

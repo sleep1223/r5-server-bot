@@ -40,6 +40,8 @@ class BaseEvent(models.Model):
 class CharacterSelected(BaseEvent):
     player = fields.ForeignKeyField("models.Player", related_name="character_selections")
     player_data = fields.JSONField()  # Store snapshot of player state at this event
+    match = fields.ForeignKeyField("models.Match", related_name="character_selections", null=True, db_index=True)
+    server = fields.ForeignKeyField("models.Server", related_name="character_selections", null=True, db_index=True)
 
     class Meta:
         table = "character_selected"
@@ -47,6 +49,8 @@ class CharacterSelected(BaseEvent):
 
 class GameStateChanged(BaseEvent):
     state = fields.CharField(max_length=100)
+    match = fields.ForeignKeyField("models.Match", related_name="game_state_events", null=True, db_index=True)
+    server = fields.ForeignKeyField("models.Server", related_name="game_state_events", null=True, db_index=True)
 
     class Meta:
         table = "game_state_changed"
@@ -67,7 +71,10 @@ class MatchSetup(BaseEvent):
     playlist_desc = fields.CharField(max_length=100)
     datacenter = fields.JSONField()
     aim_assist_on = fields.BooleanField()
+    # LiveAPI proto 里的 server_id（字符串标识符，保留原值供审计）
     server_id = fields.CharField(max_length=100)
+    # 业务 Match 聚合实体（server 可通过 match.server 反查）
+    match = fields.ForeignKeyField("models.Match", related_name="setup_events", null=True, db_index=True)
 
     class Meta:
         table = "match_setup"
@@ -76,6 +83,8 @@ class MatchSetup(BaseEvent):
 class PlayerConnected(BaseEvent):
     player = fields.ForeignKeyField("models.Player", related_name="connections")
     player_data = fields.JSONField()
+    match = fields.ForeignKeyField("models.Match", related_name="player_connections", null=True, db_index=True)
+    server = fields.ForeignKeyField("models.Server", related_name="player_connections", null=True, db_index=True)
 
     class Meta:
         table = "player_connected"
@@ -86,6 +95,8 @@ class PlayerDisconnected(BaseEvent):
     player_data = fields.JSONField()
     can_reconnect = fields.BooleanField(null=True)
     is_alive = fields.BooleanField(null=True)
+    match = fields.ForeignKeyField("models.Match", related_name="player_disconnections", null=True, db_index=True)
+    server = fields.ForeignKeyField("models.Server", related_name="player_disconnections", null=True, db_index=True)
 
     class Meta:
         table = "player_disconnected"
@@ -100,6 +111,7 @@ class PlayerKilled(BaseEvent):
     awarded_to_data = fields.JSONField(null=True)
     weapon = fields.CharField(max_length=100, db_index=True)
     server = fields.ForeignKeyField("models.Server", related_name="kills", null=True, db_index=True)
+    match = fields.ForeignKeyField("models.Match", related_name="kills", null=True, db_index=True)
 
     class Meta:
         table = "player_killed"
@@ -128,9 +140,44 @@ class Server(models.Model):
     updated_at = fields.DatetimeField(auto_now=True)
 
     kills: fields.ReverseRelation["PlayerKilled"]
+    matches: fields.ReverseRelation["Match"]
 
     class Meta:
         table = "servers"
+
+
+class Match(models.Model):
+    """一场对局的聚合实体。
+
+    MatchSetup 事件触发创建；下一次对局的 Prematch(has_entered_playing=True 前提下)、
+    新 MatchSetup、或 inactivity 超时触发关闭。
+    status: active / completed / abandoned
+    end_reason: prematch_cycle / new_match / inactivity
+    """
+
+    id = fields.IntField(pk=True)
+    full_match_id = fields.CharField(max_length=128, unique=True)  # "{host}-{YYYYMMDD}-{HHMMSS}"
+    server = fields.ForeignKeyField("models.Server", related_name="matches", db_index=True)
+    server_id: int  # Tortoise 隐式 FK id 字段，给 Pyright 看
+    map_name = fields.CharField(max_length=100)
+    playlist_name = fields.CharField(max_length=100)
+    playlist_desc = fields.CharField(max_length=100)
+    datacenter = fields.JSONField(null=True)
+    aim_assist_on = fields.BooleanField(default=False)
+    started_at = fields.DatetimeField(db_index=True)
+    ended_at = fields.DatetimeField(null=True, db_index=True)
+    status = fields.CharField(max_length=20, default="active", db_index=True)
+    end_reason = fields.CharField(max_length=30, null=True)
+    current_state = fields.CharField(max_length=30, null=True)  # 最近一次 GameStateChanged.state
+    has_entered_playing = fields.BooleanField(default=False)
+    created_at = fields.DatetimeField(auto_now_add=True)
+    updated_at = fields.DatetimeField(auto_now=True)
+
+    kills: fields.ReverseRelation["PlayerKilled"]
+    setup_events: fields.ReverseRelation["MatchSetup"]
+
+    class Meta:
+        table = "matches"
 
 
 class IpInfo(models.Model):
