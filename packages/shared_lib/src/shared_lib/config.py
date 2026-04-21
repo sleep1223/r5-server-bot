@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     fastapi_port: int = 8000
     fastapi_cors_origins: list[str] = ["*"]
     fastapi_access_tokens: list[str] = []
+    # Granian TCP backlog / backpressure。workers 固定 1（ASGI 单事件循环）。
+    fastapi_backlog: int = 1024
+    fastapi_backpressure: int = 128
+    # Ingest 子服务：独立 Granian 进程 (workers=1) 避免进程内缓存/后台任务重复
+    fastapi_ingest_host: str = "0.0.0.0"
+    fastapi_ingest_port: int = 8010
 
     # R5 Service settings
     r5_servers_url: str = "https://r5r-sl.ugniushosting.com/servers"
