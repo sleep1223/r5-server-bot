@@ -33,8 +33,6 @@ if [ "$MODE" = "ws" ]; then
   zip -r r5-server-bot-ws.zip \
     packages/shared_lib \
     services/ws_service \
-    pyproject.toml \
-    uv.toml \
     "${EXCLUDES[@]}"
 else
   zip -r r5-server-bot.zip \

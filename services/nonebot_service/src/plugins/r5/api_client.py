@@ -97,6 +97,55 @@ class R5ApiClient:
             params["server"] = server
         return await self._request("GET", "/leaderboard/weapon", params=params, timeout=timeout)
 
+    async def get_recent_matches(
+        self,
+        limit: int = 10,
+        min_top_kills: int | None = None,
+        server: str | None = None,
+        timeout: float = 5.0,
+    ) -> httpx.Response:
+        params: dict[str, Any] = {"limit": limit}
+        if min_top_kills is not None:
+            params["min_top_kills"] = min_top_kills
+        if server:
+            params["server"] = server
+        return await self._request("GET", "/matches/recent", params=params, timeout=timeout)
+
+    async def get_player_matches(
+        self,
+        target: str,
+        limit: int | None = None,
+        sort: str = "time",
+        server: str | None = None,
+        timeout: float = 5.0,
+    ) -> httpx.Response:
+        params: dict[str, Any] = {"sort": sort}
+        if limit is not None:
+            params["limit"] = limit
+        if server:
+            params["server"] = server
+        return await self._request("GET", f"/matches/player/{target}", params=params, timeout=timeout)
+
+    async def get_competitive_leaderboard(
+        self,
+        range_type: str = "today",
+        page_no: int = 1,
+        page_size: int = 20,
+        top_per_day: int | None = None,
+        server: str | None = None,
+        timeout: float = 5.0,
+    ) -> httpx.Response:
+        params: dict[str, Any] = {
+            "range": range_type,
+            "page_no": page_no,
+            "page_size": page_size,
+        }
+        if top_per_day is not None:
+            params["top_per_day"] = top_per_day
+        if server:
+            params["server"] = server
+        return await self._request("GET", "/leaderboard/competitive", params=params, timeout=timeout)
+
     async def set_server_alias(self, host: str, short_name: str | None, timeout: float = 5.0) -> httpx.Response:
         data = {"short_name": short_name}
         return await self._request("PATCH", f"/server/by-host/{host}/alias", json=data, timeout=timeout)

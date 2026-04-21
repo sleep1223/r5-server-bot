@@ -55,6 +55,12 @@ def get_date_range(range_type: str) -> tuple[datetime | None, datetime | None]:
         start_of_week = now.date() - timedelta(days=now.weekday())
         start_time = datetime.combine(start_of_week, time.min, tzinfo=CN_TZ)
         end_time = now
+    elif range_type == "last_week":
+        start_of_this_week = now.date() - timedelta(days=now.weekday())
+        start_of_last_week = start_of_this_week - timedelta(days=7)
+        end_of_last_week = start_of_this_week - timedelta(days=1)
+        start_time = datetime.combine(start_of_last_week, time.min, tzinfo=CN_TZ)
+        end_time = datetime.combine(end_of_last_week, time.max, tzinfo=CN_TZ)
     elif range_type == "month":
         start_time = datetime.combine(now.date().replace(day=1), time.min, tzinfo=CN_TZ)
         end_time = now
