@@ -1,6 +1,7 @@
 import asyncio
 from collections import OrderedDict
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 from shared_lib.models import (
@@ -29,6 +30,8 @@ from shared_lib.schemas.ingest import (
     ServerRef,
 )
 from tortoise.exceptions import IntegrityError
+
+_CN_TZ = ZoneInfo("Asia/Shanghai")
 
 _SEEN_BATCH_IDS: "OrderedDict[str, None]" = OrderedDict()
 _SEEN_BATCH_CAP = 2048
@@ -205,9 +208,14 @@ async def _load_active_match(server_id: int) -> Match | None:
     return m
 
 
-async def _close_match(match_id: int, server_id: int, ts_ms: int, reason: str) -> None:
+def _ts_to_dt(ts: int) -> datetime:
+    """LiveAPI 的 `timestamp` 是秒级（Unix epoch seconds）。转成带 UTC tz 的 datetime。"""
+    return datetime.fromtimestamp(ts, tz=timezone.utc)
+
+
+async def _close_match(match_id: int, server_id: int, ts: int, reason: str) -> None:
     """关闭对局：只有仍在 active 状态时 UPDATE 才生效（CAS）。"""
-    ended_at = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+    ended_at = _ts_to_dt(ts)
     rows = await Match.filter(id=match_id, status="active").update(
         status="completed",
         ended_at=ended_at,
@@ -218,10 +226,12 @@ async def _close_match(match_id: int, server_id: int, ts_ms: int, reason: str) -
         logger.info(f"Match 关闭: id={match_id}, reason={reason}")
 
 
-async def _create_match(server: Server, ts_ms: int, event: MatchSetupIn) -> Match:
+async def _create_match(server: Server, ts: int, event: MatchSetupIn) -> Match:
     """根据 MatchSetup 新建 Match；full_match_id 冲突时追加序号重试。"""
-    started_at = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-    base_id = f"{server.host}-{started_at:%Y%m%d-%H%M%S}"
+    started_at = _ts_to_dt(ts)
+    # full_match_id 用上海时间显示更直观（started_at 列本身仍按 UTC 存储）
+    local = started_at.astimezone(_CN_TZ)
+    base_id = f"{server.host}-{local:%Y%m%d-%H%M%S}"
     for attempt in range(5):
         candidate = base_id if attempt == 0 else f"{base_id}-{attempt}"
         try:
@@ -244,11 +254,11 @@ async def _create_match(server: Server, ts_ms: int, event: MatchSetupIn) -> Matc
     raise RuntimeError(f"无法生成唯一 full_match_id: base={base_id}")
 
 
-async def _apply_state_transition(match: Match, state: str, ts_ms: int, server_id: int) -> Match | None:
+async def _apply_state_transition(match: Match, state: str, ts: int, server_id: int) -> Match | None:
     """根据 GameStateChanged 更新 match 或触发关闭。返回更新后的 match（关闭时返回 None）。"""
     # 下一轮 Prematch + 上一局已进过 Playing → 关闭
     if state == _STATE_PREMATCH and match.has_entered_playing:
-        await _close_match(match.id, server_id, ts_ms, "prematch_cycle")
+        await _close_match(match.id, server_id, ts, "prematch_cycle")
         return None
 
     # 首次进入 Playing：标记 has_entered_playing
