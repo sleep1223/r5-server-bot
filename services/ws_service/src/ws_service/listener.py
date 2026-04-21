@@ -1,135 +1,132 @@
 import asyncio
 import logging
-from collections import defaultdict
-from collections.abc import Callable, Coroutine
+import uuid
+from collections import deque
 from typing import Any as TypingAny
 
 import websockets
 from google.protobuf import symbol_database
 from google.protobuf.any_pb2 import Any
 from google.protobuf.json_format import MessageToDict
-from shared_lib import close_db, init_db
-from shared_lib.models import (
-    CharacterSelected,
-    GameStateChanged,
-    InitEvent,
-    MatchSetup,
-    Player,
-    PlayerConnected,
-    PlayerDisconnected,
-    PlayerKilled,
+from shared_lib.config import settings
+from shared_lib.schemas.ingest import (
+    CharacterSelectedIn,
+    GameStateChangedIn,
+    IngestBatch,
+    InitEventIn,
+    MatchSetupIn,
+    PlayerConnectedIn,
+    PlayerDisconnectedIn,
+    PlayerInfo,
+    PlayerKilledIn,
+    ServerRef,
 )
+from shared_lib.utils.public_ip import resolve_public_ip
 from utils.protos import events_pb2
+
+from .ingest_client import IngestClient
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("LiveAPI")
 
 
+def _player_info(msg) -> PlayerInfo | None:
+    if not msg or not getattr(msg, "nucleusHash", ""):
+        return None
+    return PlayerInfo(
+        nucleus_hash=msg.nucleusHash,
+        name=getattr(msg, "name", "") or "",
+        hardware_name=getattr(msg, "hardwareName", None) or None,
+        ip=getattr(msg, "ip", None) or None,
+    )
+
+
 class LiveAPIListener:
-    def __init__(self, host="127.0.0.1", port=7771, db_config=None, batch_interval: int = 60, batch_max_retries: int = 3):
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 7771,
+        batch_interval: int = 30,
+        batch_max_retries: int = 3,
+        ingest_client: IngestClient | None = None,
+        server_ref: ServerRef | None = None,
+        buffer_max: int = 100_000,
+    ):
         self.host = host
         self.port = port
         self.server = None
-        self.db_config = db_config
         self.batch_interval = batch_interval
         self.batch_max_retries = batch_max_retries
-        self._pending_records: defaultdict[type, list] = defaultdict(list)
-        self._pending_tasks: list[Callable[[], Coroutine[TypingAny, TypingAny, TypingAny]]] = []
+        self.ingest = ingest_client
+        self.server_ref = server_ref
+        self._pending_events: deque = deque(maxlen=buffer_max)
         self._flush_task: asyncio.Task | None = None
 
     async def start(self):
-        await init_db(self.db_config)
+        if self.ingest is None:
+            self.ingest = IngestClient(
+                base_url=settings.ws_ingest_base_url,
+                token=settings.ws_ingest_token,
+                timeout=settings.ws_ingest_timeout,
+                max_retries=self.batch_max_retries,
+            )
+        if self.server_ref is None:
+            public_ip = await resolve_public_ip(settings.ws_public_ip)
+            self.server_ref = ServerRef(
+                host=public_ip,
+                port=settings.ws_public_port,
+                name=f"server-{public_ip}",
+            )
+            logger.info(f"本机 Server 上报标识: host={public_ip}, port={settings.ws_public_port}")
+
         logger.info(f"正在启动 LiveAPI 监听器于 {self.host}:{self.port}")
-        logger.info(f"批量写入配置: 间隔={self.batch_interval}s, 最大重试={self.batch_max_retries}次")
+        logger.info(f"批量上报配置: 间隔={self.batch_interval}s, 最大重试={self.batch_max_retries}次, 目标={settings.ws_ingest_base_url}")
         self._flush_task = asyncio.create_task(self._flush_loop())
         self.server = await websockets.serve(self.handle_connection, self.host, self.port)
         try:
             await self.server.wait_closed()
         finally:
-            self._flush_task.cancel()
+            if self._flush_task:
+                self._flush_task.cancel()
             # 关闭前刷写剩余数据
             await self._flush()
-            await close_db()
+            await self.ingest.close()
 
     async def _flush_loop(self):
-        """定时批量刷写循环"""
+        """定时批量上报循环"""
         while True:
             await asyncio.sleep(self.batch_interval)
             await self._flush()
 
     async def _flush(self):
-        """将缓存的事件批量写入数据库"""
-        if not self._pending_records and not self._pending_tasks:
+        """将缓存的事件批量 POST 给 FastAPI ingest 接口。"""
+        if not self._pending_events:
+            return
+        if self.ingest is None or self.server_ref is None:
+            logger.error("ingest client 未初始化，丢弃当前批次")
+            self._pending_events.clear()
             return
 
-        tasks = self._pending_tasks
-        self._pending_tasks = []
-        records = self._pending_records
-        self._pending_records = defaultdict(list)
+        events = list(self._pending_events)
+        self._pending_events.clear()
 
-        total = sum(len(v) for v in records.values()) + len(tasks)
-        logger.info(f"开始批量写入 {total} 条记录...")
+        batch = IngestBatch(
+            batch_id=str(uuid.uuid4()),
+            server=self.server_ref,
+            events=events,  # type: ignore[arg-type]
+        )
+        logger.info(f"开始上报 {len(events)} 条事件, batch_id={batch.batch_id}")
+        ok = await self.ingest.post_batch(batch)
+        if ok:
+            logger.info(f"上报完成: batch_id={batch.batch_id}, count={len(events)}")
+        else:
+            logger.error(f"上报失败: batch_id={batch.batch_id}, count={len(events)}, 重新入队等待下一轮")
+            # 放回队首，等下次 flush 合并重试；deque maxlen 防止 OOM
+            self._pending_events.extendleft(reversed(events))
 
-        # 执行异步任务（玩家查询/更新，生成事件记录加入 _pending_records）
-        for task_fn in tasks:
-            try:
-                await task_fn()
-            except Exception as e:
-                logger.error(f"任务执行失败: {e}")
-
-        # 合并任务中产生的记录
-        for model_cls, instances in self._pending_records.items():
-            records[model_cls].extend(instances)
-        self._pending_records = defaultdict(list)
-
-        # 按模型类型 bulk_create 批量写入
-        total_records = sum(len(v) for v in records.values())
-        success_count = 0
-        for model_cls, instances in records.items():
-            if not instances:
-                continue
-            for attempt in range(1, self.batch_max_retries + 1):
-                try:
-                    await model_cls.bulk_create(instances)
-                    success_count += len(instances)
-                    break
-                except Exception as e:
-                    logger.error(f"批量创建 {model_cls.__name__} 失败 (第 {attempt}/{self.batch_max_retries} 次): {e}")
-                    if attempt == self.batch_max_retries:
-                        logger.error(f"{model_cls.__name__}: {len(instances)} 条记录在 {self.batch_max_retries} 次重试后仍未成功")
-
-        if success_count > 0:
-            logger.info(f"批量写入完成: 成功 {success_count}/{total_records}")
-        if success_count < total_records:
-            logger.error(f"批量写入最终失败: {total_records - success_count} 条记录")
-
-    async def get_or_update_player(self, player_msg):
-        """Helper to get or update a player record"""
-        if not player_msg or not player_msg.nucleusHash:
-            return None
-
-        try:
-            defaults = {"name": player_msg.name, "hardware_name": player_msg.hardwareName}
-            # 如果 LiveAPI 提供 IP 和 ping 信息，这里可以一起更新
-            if getattr(player_msg, "ip", None):
-                defaults["ip"] = player_msg.ip
-            # if getattr(player_msg, "ping", None):
-            #     defaults["ping"] = player_msg.ping
-
-            player, created = await Player.update_or_create(nucleus_hash=player_msg.nucleusHash, defaults=defaults)
-            return player
-        except Exception as e:
-            logger.error(f"Error updating player: {e}")
-            raise
-
-    def save_record(self, instance):
-        """将模型实例加入缓存队列，等待 bulk_create 批量写入"""
-        self._pending_records[type(instance)].append(instance)
-
-    def save_task(self, task_fn: Callable[[], Coroutine[TypingAny, TypingAny, TypingAny]]):
-        """将异步任务加入队列（用于需要先查询玩家的复杂操作）"""
-        self._pending_tasks.append(task_fn)
+    def _enqueue(self, event) -> None:
+        self._pending_events.append(event)
 
     async def handle_connection(self, websocket):
         logger.info(f"新连接来自 {websocket.remote_address}")
@@ -194,7 +191,7 @@ class LiveAPIListener:
         except Exception as e:
             logger.error(f"处理游戏消息错误: {e}")
 
-    def on_event(self, type_name, message):
+    def on_event(self, type_name: str, message: TypingAny) -> None:
         """Default handler for unhandled events"""
         logger.info(f"[{type_name}] {message}")
 
@@ -204,16 +201,20 @@ class LiveAPIListener:
 
     def on_Init(self, msg):
         logger.info(f"[初始化] 版本: {msg.gameVersion} 平台: {msg.platform}")
-        self.save_record(
-            InitEvent(
-                timestamp=msg.timestamp, category=msg.category, game_version=msg.gameVersion, api_version=MessageToDict(msg.apiVersion, preserving_proto_field_name=True), platform=msg.platform
+        self._enqueue(
+            InitEventIn(
+                timestamp=msg.timestamp,
+                category=msg.category,
+                game_version=msg.gameVersion,
+                api_version=MessageToDict(msg.apiVersion, preserving_proto_field_name=True),
+                platform=msg.platform,
             )
         )
 
     def on_MatchSetup(self, msg):
         logger.info(f"[比赛设置] 地图: {msg.map}, 模式: {msg.playlistName}, 服务器ID: {msg.serverId}")
-        self.save_record(
-            MatchSetup(
+        self._enqueue(
+            MatchSetupIn(
                 timestamp=msg.timestamp,
                 category=msg.category,
                 map_name=msg.map,
@@ -227,7 +228,7 @@ class LiveAPIListener:
 
     def on_GameStateChanged(self, msg):
         logger.info(f"[游戏状态变更] 新状态: {msg.state}")
-        self.save_record(GameStateChanged(timestamp=msg.timestamp, category=msg.category, state=msg.state))
+        self._enqueue(GameStateChangedIn(timestamp=msg.timestamp, category=msg.category, state=msg.state))
 
     def on_MatchStateEnd(self, msg):
         winner_names = [p.name for p in msg.winners]
@@ -241,88 +242,61 @@ class LiveAPIListener:
 
     def on_PlayerConnected(self, msg):
         logger.info(f"[玩家连接] {msg.player.name} (队伍 {msg.player.teamId})")
-
-        async def task():
-            player = await self.get_or_update_player(msg.player)
-            if player:
-                player.status = "online"
-                await player.save()
-                self.save_record(PlayerConnected(timestamp=msg.timestamp, category=msg.category, player=player, player_data=MessageToDict(msg.player, preserving_proto_field_name=True)))
-
-        self.save_task(task)
+        info = _player_info(msg.player)
+        if not info:
+            return
+        self._enqueue(
+            PlayerConnectedIn(
+                timestamp=msg.timestamp,
+                category=msg.category,
+                player=info,
+                player_data=MessageToDict(msg.player, preserving_proto_field_name=True),
+            )
+        )
 
     def on_PlayerDisconnected(self, msg):
         logger.info(f"[玩家断开] {msg.player.name} (可重连: {msg.canReconnect})")
-
-        async def task():
-            player = await self.get_or_update_player(msg.player)
-            if player:
-                if player.status not in ["banned", "kicked"]:
-                    if player.online_at:
-                        from datetime import datetime, timezone
-
-                        session_seconds = int((datetime.now(timezone.utc) - player.online_at).total_seconds())
-                        if session_seconds > 0:
-                            player.total_playtime_seconds += session_seconds
-                    player.status = "offline"
-                    await player.save()
-
-                self.save_record(
-                    PlayerDisconnected(
-                        timestamp=msg.timestamp,
-                        category=msg.category,
-                        player=player,
-                        player_data=MessageToDict(msg.player, preserving_proto_field_name=True),
-                        can_reconnect=msg.canReconnect,
-                        is_alive=getattr(msg, "isAlive", None),
-                    )
-                )
-
-        self.save_task(task)
+        info = _player_info(msg.player)
+        if not info:
+            return
+        self._enqueue(
+            PlayerDisconnectedIn(
+                timestamp=msg.timestamp,
+                category=msg.category,
+                player=info,
+                player_data=MessageToDict(msg.player, preserving_proto_field_name=True),
+                can_reconnect=msg.canReconnect,
+                is_alive=getattr(msg, "isAlive", None),
+            )
+        )
 
     def on_PlayerStatChanged(self, msg):
-        # Handle oneof field for value
-        # value = "Unknown"
-        # if msg.HasField("intValue"):
-        #     value = msg.intValue
-        # elif msg.HasField("floatValue"):
-        #     value = msg.floatValue
-        # elif msg.HasField("boolValue"):
-        #     value = msg.boolValue
-
-        # logger.info(f"[玩家统计变更] {msg.player.name}: {msg.statName} = {value}")
         ...
 
     def on_PlayerUpgradeTierChanged(self, msg):
         logger.info(f"[玩家升级] {msg.player.name} 达到等级 {msg.level}")
 
     def on_PlayerDamaged(self, msg):
-        # logger.info(f"[玩家受伤] {msg.attacker.name} -> {msg.victim.name} (伤害: {msg.damageInflicted}) 使用武器: {msg.weapon}")
         ...
 
     def on_PlayerKilled(self, msg):
         logger.info(f"[玩家被杀] {msg.attacker.name} 击杀了 {msg.victim.name} 使用武器: {msg.weapon}")
-
-        async def task():
-            attacker = await self.get_or_update_player(msg.attacker)
-            victim = await self.get_or_update_player(msg.victim)
-            awarded_to = await self.get_or_update_player(msg.awardedTo)
-
-            self.save_record(
-                PlayerKilled(
-                    timestamp=msg.timestamp,
-                    category=msg.category,
-                    attacker=attacker,
-                    victim=victim,
-                    awarded_to=awarded_to,
-                    attacker_data=MessageToDict(msg.attacker, preserving_proto_field_name=True) if msg.HasField("attacker") else None,
-                    victim_data=MessageToDict(msg.victim, preserving_proto_field_name=True) if msg.HasField("victim") else None,
-                    awarded_to_data=MessageToDict(msg.awardedTo, preserving_proto_field_name=True) if msg.HasField("awardedTo") else None,
-                    weapon=msg.weapon,
-                )
+        attacker = _player_info(msg.attacker) if msg.HasField("attacker") else None
+        victim = _player_info(msg.victim) if msg.HasField("victim") else None
+        awarded_to = _player_info(msg.awardedTo) if msg.HasField("awardedTo") else None
+        self._enqueue(
+            PlayerKilledIn(
+                timestamp=msg.timestamp,
+                category=msg.category,
+                attacker=attacker,
+                victim=victim,
+                awarded_to=awarded_to,
+                attacker_data=MessageToDict(msg.attacker, preserving_proto_field_name=True) if msg.HasField("attacker") else None,
+                victim_data=MessageToDict(msg.victim, preserving_proto_field_name=True) if msg.HasField("victim") else None,
+                awarded_to_data=MessageToDict(msg.awardedTo, preserving_proto_field_name=True) if msg.HasField("awardedTo") else None,
+                weapon=msg.weapon,
             )
-
-        self.save_task(task)
+        )
 
     def on_PlayerDowned(self, msg):
         logger.info(f"[玩家倒地] {msg.attacker.name} 击倒了 {msg.victim.name} 使用武器: {msg.weapon}")
@@ -386,7 +360,6 @@ class LiveAPIListener:
         logger.info(f"[传送门使用] {msg.player.name} 使用了传送门")
 
     def on_AmmoUsed(self, msg):
-        # logger.info(f"[弹药消耗] {msg.player.name} 消耗了 {msg.amountUsed} {msg.ammoType} 弹药 ({msg.oldAmmoCount} -> {msg.newAmmoCount})")
         ...
 
     def on_WeaponSwitched(self, msg):
@@ -403,10 +376,14 @@ class LiveAPIListener:
 
     def on_CharacterSelected(self, msg):
         logger.info(f"[角色选择] {msg.player.name} 选择了 {msg.player.character}")
-
-        async def task():
-            player = await self.get_or_update_player(msg.player)
-            if player:
-                self.save_record(CharacterSelected(timestamp=msg.timestamp, category=msg.category, player=player, player_data=MessageToDict(msg.player, preserving_proto_field_name=True)))
-
-        self.save_task(task)
+        info = _player_info(msg.player)
+        if not info:
+            return
+        self._enqueue(
+            CharacterSelectedIn(
+                timestamp=msg.timestamp,
+                category=msg.category,
+                player=info,
+                player_data=MessageToDict(msg.player, preserving_proto_field_name=True),
+            )
+        )

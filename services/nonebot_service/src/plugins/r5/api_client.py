@@ -28,9 +28,10 @@ class R5ApiClient:
         sort: str = "kd",
         min_kills: int = 100,
         min_deaths: int = 0,
+        server: str | None = None,
         timeout: float = 3.0,
     ) -> httpx.Response:
-        params = {
+        params: dict[str, Any] = {
             "range": range_type,
             "page_no": page_no,
             "page_size": page_size,
@@ -38,6 +39,8 @@ class R5ApiClient:
             "min_kills": min_kills,
             "min_deaths": min_deaths,
         }
+        if server:
+            params["server"] = server
         return await self._request("GET", "/leaderboard/kd", params=params, timeout=timeout)
 
     async def get_player_vs_all(
@@ -46,9 +49,12 @@ class R5ApiClient:
         page_no: int = 1,
         page_size: int = 20,
         sort: str = "kd",
+        server: str | None = None,
         timeout: float = 3.0,
     ) -> httpx.Response:
-        params = {"page_no": page_no, "page_size": page_size, "sort": sort}
+        params: dict[str, Any] = {"page_no": page_no, "page_size": page_size, "sort": sort}
+        if server:
+            params["server"] = server
         return await self._request("GET", f"/players/{target}/vs_all", params=params, timeout=timeout)
 
     async def get_player_weapons(
@@ -57,9 +63,12 @@ class R5ApiClient:
         page_no: int = 1,
         page_size: int = 20,
         sort: str = "kd",
+        server: str | None = None,
         timeout: float = 3.0,
     ) -> httpx.Response:
-        params = {"page_no": page_no, "page_size": page_size, "sort": sort}
+        params: dict[str, Any] = {"page_no": page_no, "page_size": page_size, "sort": sort}
+        if server:
+            params["server"] = server
         return await self._request("GET", f"/players/{target}/weapons", params=params, timeout=timeout)
 
     async def get_weapon_leaderboard(
@@ -71,6 +80,7 @@ class R5ApiClient:
         sort: str = "kd",
         min_kills: int = 1,
         min_deaths: int = 0,
+        server: str | None = None,
         timeout: float = 3.0,
     ) -> httpx.Response:
         params: dict[str, Any] = {
@@ -83,7 +93,13 @@ class R5ApiClient:
         }
         if weapon:
             params["weapon"] = weapon
+        if server:
+            params["server"] = server
         return await self._request("GET", "/leaderboard/weapon", params=params, timeout=timeout)
+
+    async def set_server_alias(self, host: str, short_name: str | None, timeout: float = 5.0) -> httpx.Response:
+        data = {"short_name": short_name}
+        return await self._request("PATCH", f"/server/by-host/{host}/alias", json=data, timeout=timeout)
 
     async def get_servers(
         self,

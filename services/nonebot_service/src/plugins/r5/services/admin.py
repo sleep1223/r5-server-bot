@@ -14,6 +14,7 @@ admin_service = r5_service.create_subservice("admin")
 ban_service = admin_service.create_subservice("ban")
 kick_service = admin_service.create_subservice("kick")
 unban_service = admin_service.create_subservice("unban")
+alias_service = admin_service.create_subservice("alias")
 
 ALLOWED_REASONS = ["NO_COVER", "BE_POLITE", "CHEAT", "RULES"]
 REASON_CN = {
@@ -33,6 +34,8 @@ ERROR_CN = {
 cmd_ban = on_command("ban", priority=5, block=True)
 cmd_kick = on_command("kick", priority=5, block=True)
 cmd_unban = on_command("unban", priority=5, block=True)
+cmd_set_alias = on_command("设置别名", aliases={"server_alias", "服务器别名"}, priority=5, block=True)
+cmd_clear_alias = on_command("清除别名", aliases={"server_alias_clear"}, priority=5, block=True)
 
 
 def _get_server_name(server: dict) -> str:
@@ -182,3 +185,49 @@ async def handle_unban(args: Message = CommandArg()) -> None:
     except Exception as e:
         traceback.print_exc()
         await cmd_unban.finish(f"❌ 执行出错: {e}")
+
+
+@cmd_set_alias.handle()
+@alias_service.patch_handler()
+async def handle_set_alias(args: Message = CommandArg()) -> None:
+    text = args.extract_plain_text().strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2:
+        await cmd_set_alias.finish("⚠️ 用法: /设置别名 <服务器IP> <中文别名>")
+
+    host, alias = parts[0].strip(), parts[1].strip()
+    if not host or not alias:
+        await cmd_set_alias.finish("⚠️ 用法: /设置别名 <服务器IP> <中文别名>")
+
+    try:
+        resp = await api_client.set_server_alias(host, alias, timeout=5.0)
+        res = resp.json()
+        if res.get("code") != "0000":
+            await cmd_set_alias.finish(f"❌ 设置失败: {res.get('msg') or '未知错误'}")
+        data = res.get("data") or {}
+        await cmd_set_alias.finish(f"✅ 别名已设置\n🖥️ {data.get('host')} → {data.get('short_name')}")
+    except FinishedException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        await cmd_set_alias.finish(f"❌ 执行出错: {e}")
+
+
+@cmd_clear_alias.handle()
+@alias_service.patch_handler()
+async def handle_clear_alias(args: Message = CommandArg()) -> None:
+    host = args.extract_plain_text().strip()
+    if not host:
+        await cmd_clear_alias.finish("⚠️ 用法: /清除别名 <服务器IP>")
+
+    try:
+        resp = await api_client.set_server_alias(host, None, timeout=5.0)
+        res = resp.json()
+        if res.get("code") != "0000":
+            await cmd_clear_alias.finish(f"❌ 清除失败: {res.get('msg') or '未知错误'}")
+        await cmd_clear_alias.finish(f"✅ 别名已清空: {host}")
+    except FinishedException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        await cmd_clear_alias.finish(f"❌ 执行出错: {e}")

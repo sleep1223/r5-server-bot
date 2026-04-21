@@ -11,6 +11,7 @@ async def main() -> None:
         port=settings.ws_port,
         batch_interval=settings.ws_batch_interval,
         batch_max_retries=settings.ws_batch_max_retries,
+        buffer_max=settings.ws_ingest_buffer_max,
     )
     await listener.start()
 

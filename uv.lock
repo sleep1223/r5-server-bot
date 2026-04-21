@@ -768,7 +768,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
     { name = "qqwry-py3", specifier = ">=1.2.1" },
-    { name = "tortoise-orm", extras = ["asyncpg"], specifier = ">=0.25.3" },
+    { name = "tortoise-orm", extras = ["asyncpg"], specifier = ">=0.25.3,<1.0.0" },
 ]
 provides-extras = ["dev"]
 
@@ -908,6 +908,7 @@ name = "ws-service"
 version = "0.1.0"
 source = { editable = "services/ws_service" }
 dependencies = [
+    { name = "httpx" },
     { name = "shared-lib" },
     { name = "uvicorn" },
     { name = "websockets" },
@@ -915,6 +916,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.27.0" },
     { name = "shared-lib", editable = "packages/shared_lib" },
     { name = "uvicorn" },
     { name = "websockets", specifier = ">=16.0" },

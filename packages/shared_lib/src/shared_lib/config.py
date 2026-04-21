@@ -10,8 +10,20 @@ class Settings(BaseSettings):
     # WS Service settings
     ws_host: str = "0.0.0.0"
     ws_port: int = 8000
-    ws_batch_interval: int = 60  # 批量写入间隔（秒）
-    ws_batch_max_retries: int = 3  # 批量写入失败最大重试次数
+    ws_batch_interval: int = 30  # 批量上报间隔（秒）
+    ws_batch_max_retries: int = 3  # 批量上报失败最大重试次数
+    # 本机在外网的 IP；不设则启动时通过公共探测接口自动解析
+    ws_public_ip: str = ""
+    # 游戏服对外端口（填入 Server.port 初值）
+    ws_public_port: int = 37015
+    # WS 上报给 FastAPI 的 HTTP 接口前缀（带 /v1/r5/ingest）
+    ws_ingest_base_url: str = "http://127.0.0.1:8000/v1/r5/ingest"
+    # Bearer token，必须是 fastapi_access_tokens 中的一个
+    ws_ingest_token: str = ""
+    # 单次 POST 超时时间（秒）
+    ws_ingest_timeout: float = 15.0
+    # 内存缓冲的最大事件数量，超出后丢弃最旧事件（避免上报长时间失败导致 OOM）
+    ws_ingest_buffer_max: int = 100000
 
     # FastAPI Service settings
     fastapi_host: str = "0.0.0.0"

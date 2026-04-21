@@ -99,12 +99,38 @@ class PlayerKilled(BaseEvent):
     victim_data = fields.JSONField(null=True)
     awarded_to_data = fields.JSONField(null=True)
     weapon = fields.CharField(max_length=100, db_index=True)
+    server = fields.ForeignKeyField("models.Server", related_name="kills", null=True, db_index=True)
 
     class Meta:
         table = "player_killed"
         indexes = [
             ("created_at",),
         ]
+
+
+class Server(models.Model):
+    id = fields.IntField(pk=True)
+    host = fields.CharField(max_length=64, unique=True)  # 公网 IP，唯一
+    port = fields.IntField(default=37015)
+    region = fields.CharField(max_length=50, null=True)
+    netkey = fields.CharField(max_length=255, null=True)
+    ping = fields.IntField(default=0)
+    name = fields.CharField(max_length=255, db_index=True)
+    short_name = fields.CharField(max_length=100, null=True, db_index=True)
+    playlist = fields.CharField(max_length=100, null=True)
+    map = fields.CharField(max_length=100, null=True)
+    player_count = fields.IntField(default=0)
+    max_players = fields.IntField(default=0)
+    is_self_hosted = fields.BooleanField(default=False)
+    has_status = fields.BooleanField(default=False, db_index=True)
+    last_seen_at = fields.DatetimeField(null=True, db_index=True)
+    created_at = fields.DatetimeField(auto_now_add=True)
+    updated_at = fields.DatetimeField(auto_now=True)
+
+    kills: fields.ReverseRelation["PlayerKilled"]
+
+    class Meta:
+        table = "servers"
 
 
 class IpInfo(models.Model):

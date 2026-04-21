@@ -20,6 +20,7 @@ class ErrorCode:
 
     # 4xxx — 资源未找到
     DONATION_NOT_FOUND = "4001"
+    SERVER_NOT_FOUND = "4002"
 
     # 5xxx — 参数校验
     INVALID_REASON = "5001"

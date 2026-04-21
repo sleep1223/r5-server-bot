@@ -8,6 +8,7 @@ from nonebot.params import CommandArg
 
 from ..api_client import api_client
 from .common import r5_service
+from .server_arg import pop_server_arg
 
 weapons_service = r5_service.create_subservice("weapons")
 check_service = weapons_service.create_subservice("check")
@@ -49,7 +50,8 @@ weapon_map = {
 @check_weapons.handle()
 @check_service.patch_handler()
 async def handle_check_weapons(event: Event, args: Message = CommandArg()) -> None:
-    content = args.extract_plain_text().strip()
+    raw = args.extract_plain_text().strip()
+    content, server_arg = pop_server_arg(raw)
     target = content
     if not target:
         # 尝试通过绑定信息获取玩家名
@@ -71,13 +73,15 @@ async def handle_check_weapons(event: Event, args: Message = CommandArg()) -> No
         sort = "deaths"
 
     try:
-        resp = await api_client.get_player_weapons(target=target, sort=sort, timeout=3.0)
+        resp = await api_client.get_player_weapons(target=target, sort=sort, server=server_arg, timeout=3.0)
         if resp.status_code != 200:
             await check_weapons.finish(f"❌ 查询失败: HTTP {resp.status_code}")
         req = resp.json()
 
         if req.get("code") == "4001":
             await check_weapons.finish(f"❌ 未找到玩家: {target}")
+        if req.get("code") == "4002":
+            await check_weapons.finish(f"❌ 未找到服务器: {server_arg}")
 
         data = req.get("data", [])
         if not data:
@@ -86,7 +90,10 @@ async def handle_check_weapons(event: Event, args: Message = CommandArg()) -> No
         player_info = req.get("player") or {}
         player_name = player_info.get("name") or target
 
-        msg = f"🔫 {player_name} 武器统计\n"
+        server_info = req.get("server") or {}
+        scope = server_info.get("short_name") or server_info.get("name") or server_info.get("host")
+        title_suffix = f" @{scope}" if scope else ""
+        msg = f"🔫 {player_name} 武器统计{title_suffix}\n"
 
         if player_info:
             country = player_info.get("country") or "未知"
@@ -130,6 +137,7 @@ async def handle_check_weapons(event: Event, args: Message = CommandArg()) -> No
 @lb_service.patch_handler()
 async def handle_weapon_leaderboard(args: Message = CommandArg()) -> None:
     content = args.extract_plain_text().strip()
+    content, server_arg = pop_server_arg(content)
     sort = "kd"
     if "击杀" in content:
         sort = "kills"
@@ -158,7 +166,7 @@ async def handle_weapon_leaderboard(args: Message = CommandArg()) -> None:
     try:
         base_min_kills = 10
         dynamic_min_kills = base_min_kills if range_type in ["today", "yesterday"] else base_min_kills * 3
-        params = {
+        params: dict = {
             "weapon": ["r99", "volt", "wingman", "flatline", "r301", "player"],
             "range_type": range_type,
             "page_no": 1,
@@ -167,17 +175,22 @@ async def handle_weapon_leaderboard(args: Message = CommandArg()) -> None:
             "min_kills": dynamic_min_kills,
             "min_deaths": 0,
         }
+        if server_arg:
+            params["server"] = server_arg
         resp = await api_client.get_weapon_leaderboard(**params, timeout=3.0)
         if resp.status_code != 200:
             await weapon_leaderboard.finish(f"❌ 查询失败: HTTP {resp.status_code}")
         req = resp.json()
+        if req.get("code") == "4002":
+            await weapon_leaderboard.finish(f"❌ 未找到服务器: {server_arg}")
         data = req.get("data", [])
         total = req.get("total", 0)
-        msg = "🔫 武器排行榜\n"
-        msg += "-" * 30 + "\n"
 
         # Format message
-        msg = f"🏆 R5 武器排行榜 ({range_type})\n"
+        server_info = req.get("server") or {}
+        scope = server_info.get("short_name") or server_info.get("name") or server_info.get("host")
+        title_suffix = f" @{scope}" if scope else ""
+        msg = f"🏆 R5 武器排行榜 ({range_type}){title_suffix}\n"
         msg += f"筛选: 至少 {params['min_kills']} 击杀\t排序: {params['sort']}\n"
         msg += "武器 | 最佳玩家 | K/D | 击杀数\n"
         msg += "-" * 30 + "\n"

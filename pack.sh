@@ -5,6 +5,7 @@ zip -r r5-server-bot.zip \
   services/nonebot_service \
   services/ws_service \
   pyproject.toml \
+  uv.toml \
   -x "*__pycache__*" \
   -x "*.py[cod]" \
   -x "*\$py.class" \
@@ -24,7 +25,4 @@ zip -r r5-server-bot.zip \
   -x "*/.git/*" \
   -x ".ruff_cache/*" \
   -x "*/data/*" \
-  -x "*.lock" \
-  -x "*_pb2.py" \
-  -x "*_pb2.pyi" \
-  -x "*.proto"
+  -x "*.lock"

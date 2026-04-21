@@ -76,9 +76,11 @@ async def get_kd_ranking(
     min_deaths: int,
     offset: int,
     page_size: int,
+    server_id: int | None = None,
 ) -> tuple[list[dict], int]:
     start_time, end_time = get_date_range(range_type)
-    stats = await _aggregate_kills_deaths(start_time, end_time)
+    extra_filters = {"server_id": server_id} if server_id is not None else None
+    stats = await _aggregate_kills_deaths(start_time, end_time, extra_filters=extra_filters)
 
     if not stats:
         return [], 0
@@ -117,6 +119,7 @@ async def get_weapon_ranking(
     min_deaths: int,
     offset: int,
     page_size: int,
+    server_id: int | None = None,
 ) -> tuple[list[dict], int, str]:
     internal_weapons = [to_internal_weapon(w) for w in weapons]
     internal_weapons = [w for w in internal_weapons if w]
@@ -129,6 +132,8 @@ async def get_weapon_ranking(
     filters: dict = {}
     if start_time and end_time:
         filters["created_at__range"] = (start_time, end_time)
+    if server_id is not None:
+        filters["server_id"] = server_id
 
     # Aggregate by (weapon, player)
     stats_by_weapon: dict[str, dict[int, dict[str, int]]] = {iw: {} for iw in internal_weapons}
@@ -222,9 +227,11 @@ async def get_player_vs_all(
     sort: str,
     offset: int,
     page_size: int,
+    server_id: int | None = None,
 ) -> tuple[list[dict], int, dict]:
-    kills_list = await PlayerKilled.filter(attacker_id=player_id, victim_id__not_isnull=True).values("victim_id")
-    deaths_list = await PlayerKilled.filter(victim_id=player_id, attacker_id__not_isnull=True).values("attacker_id")
+    server_filter = {"server_id": server_id} if server_id is not None else {}
+    kills_list = await PlayerKilled.filter(attacker_id=player_id, victim_id__not_isnull=True, **server_filter).values("victim_id")
+    deaths_list = await PlayerKilled.filter(victim_id=player_id, attacker_id__not_isnull=True, **server_filter).values("attacker_id")
 
     opponents_stats: dict[int, dict[str, int]] = {}
     for k in kills_list:
@@ -314,9 +321,11 @@ async def get_player_weapon_stats(
     sort: str,
     offset: int,
     page_size: int,
+    server_id: int | None = None,
 ) -> tuple[list[dict], int, dict]:
-    kills_list = await PlayerKilled.filter(attacker_id=player_id, victim_id__not_isnull=True).values("weapon")
-    deaths_list = await PlayerKilled.filter(victim_id=player_id, attacker_id__not_isnull=True).values("weapon")
+    server_filter = {"server_id": server_id} if server_id is not None else {}
+    kills_list = await PlayerKilled.filter(attacker_id=player_id, victim_id__not_isnull=True, **server_filter).values("weapon")
+    deaths_list = await PlayerKilled.filter(victim_id=player_id, attacker_id__not_isnull=True, **server_filter).values("weapon")
 
     weapon_stats: dict[str, dict[str, int]] = {}
 
