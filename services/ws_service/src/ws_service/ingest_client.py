@@ -1,10 +1,8 @@
 import asyncio
-import logging
 
 import httpx
+from loguru import logger
 from shared_lib.schemas.ingest import IngestBatch
-
-logger = logging.getLogger("LiveAPI.ingest")
 
 
 class IngestClient:
