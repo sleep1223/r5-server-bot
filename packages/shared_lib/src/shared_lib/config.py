@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     r5_target_keys: list[str] = []
     r5_rcon_key: str = ""
     r5_rcon_password: str = ""
+    # RCON 同步玩家列表的时间间隔（秒）
+    r5_rcon_sync_interval: int = 180
 
     # 无规则服务器(如北京服): 命中以下任一规则的服务器会跳过 NO_COVER(撤回掩体) 的 kick/ban 后台执行
     no_cover_allowed_server_hosts: list[str] = ["106.75.50.197"]

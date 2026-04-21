@@ -181,4 +181,4 @@ async def sync_players_task() -> None:
             break
         except Exception as e:
             logger.error(f"Error in sync_players_task: {e}")
-        await asyncio.sleep(10)
+        await asyncio.sleep(settings.r5_rcon_sync_interval)
