@@ -3,33 +3,77 @@ from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 from shared_lib.config import settings
-from shared_lib.models import Match
+from shared_lib.models import Match, PlayerKilled
 
 from fastapi_service.services.ingest_service import _ACTIVE_MATCH_BY_SERVER
 
 
-async def close_stale_matches_task() -> None:
-    """定时把超时未关闭的 active match 标记为 abandoned。
+async def _close_one(match: Match, ended_at: datetime, *, status: str, reason: str) -> bool:
+    """CAS 关闭指定 match；返回是否更新成功。"""
+    rows = await Match.filter(id=match.id, status="active").update(
+        status=status,
+        ended_at=ended_at,
+        end_reason=reason,
+    )
+    _ACTIVE_MATCH_BY_SERVER.pop(match.server_id, None)
+    if rows:
+        logger.info(
+            f"Match {status}: id={match.id}, full_match_id={match.full_match_id}, "
+            f"reason={reason}, started_at={match.started_at}"
+        )
+    return bool(rows)
 
-    正常路径由 ingest_service 通过 Prematch / 新 MatchSetup 关闭对局；
-    本任务是 safety net（游戏服崩溃、LiveAPI 掉线等异常场景的兜底）。
-    超时阈值建议 >= 两场典型 BR 时长 (~30min)。
+
+async def _close_no_activity_matches(now: datetime) -> None:
+    """无击杀活动超过阈值 → 标记为 completed/no_activity。
+
+    覆盖"玩家全退 → 游戏服不再 emit Prematch"这类场景。给一段宽限期
+    (started_at < now - N) 避免把刚创建、还没开始的空对局误关。
+    """
+    grace = timedelta(seconds=settings.match_no_activity_timeout_seconds)
+    cutoff = now - grace
+    candidates = await Match.filter(status="active", started_at__lt=cutoff).all()
+    if not candidates:
+        return
+
+    candidate_ids = [m.id for m in candidates]
+    # 一次 GROUP BY 判出谁还有近活动，避开 N+1
+    recent_kill_rows = (
+        await PlayerKilled.filter(match_id__in=candidate_ids, created_at__gte=cutoff)
+        .distinct()
+        .values_list("match_id", flat=True)
+    )
+    has_recent = {mid for mid in recent_kill_rows if mid is not None}
+
+    for m in candidates:
+        if m.id in has_recent:
+            continue
+        await _close_one(m, now, status="completed", reason="no_activity")
+
+
+async def _close_hard_timeout_matches(now: datetime) -> None:
+    """总时长 safety net（默认 2h）→ 标记为 abandoned/inactivity。"""
+    cutoff = now - timedelta(seconds=settings.match_inactivity_timeout_seconds)
+    stale = await Match.filter(status="active", started_at__lt=cutoff).all()
+    for m in stale:
+        await _close_one(m, now, status="abandoned", reason="inactivity")
+
+
+async def close_stale_matches_task() -> None:
+    """定时关闭超时/无活动的 active match。
+
+    两道门，顺序不能颠倒：
+    1. 先看"无击杀活动 > match_no_activity_timeout_seconds"（默认 30min）→ completed/no_activity
+    2. 再看"总时长 > match_inactivity_timeout_seconds"（默认 2h）→ abandoned/inactivity
+
+    正常路径仍由 ingest_service 通过 Prematch / 新 MatchSetup 关闭。
     """
     interval = settings.match_closer_interval_seconds
-    timeout_seconds = settings.match_inactivity_timeout_seconds
     while True:
         try:
-            cutoff = datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
-            stale = await Match.filter(status="active", started_at__lt=cutoff).all()
-            for m in stale:
-                rows = await Match.filter(id=m.id, status="active").update(
-                    status="abandoned",
-                    ended_at=datetime.now(timezone.utc),
-                    end_reason="inactivity",
-                )
-                _ACTIVE_MATCH_BY_SERVER.pop(m.server_id, None)
-                if rows:
-                    logger.info(f"Match abandon: id={m.id}, full_match_id={m.full_match_id}, started_at={m.started_at}")
+            now = datetime.now(timezone.utc)
+            await _close_no_activity_matches(now)
+            await _close_hard_timeout_matches(now)
         except Exception as e:
             logger.error(f"close_stale_matches_task 异常: {e}")
         await asyncio.sleep(interval)

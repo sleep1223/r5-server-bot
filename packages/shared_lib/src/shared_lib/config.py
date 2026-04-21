@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # Match tracking settings
     # 活跃 match 超过此秒数未关闭即标记为 abandoned（safety net，典型 BR 一场 ~25min）
     match_inactivity_timeout_seconds: int = 7200
+    # 更积极的"无活动"关闭：无击杀超过此秒数（默认 30min）→ 标记 completed/no_activity
+    # 覆盖"玩家全退 → 状态机 Prematch 信号不再到达"这类场景
+    match_no_activity_timeout_seconds: int = 1800
     # close_stale_matches 后台任务扫描间隔（秒）
     match_closer_interval_seconds: int = 60
     # /对局：每场 top1 击杀数低于此值则不显示
