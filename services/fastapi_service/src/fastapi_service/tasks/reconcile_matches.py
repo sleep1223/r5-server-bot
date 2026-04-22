@@ -8,6 +8,7 @@ from shared_lib.models import GameStateChanged, Match, PlayerKilled
 from fastapi_service.services.ingest_service import (
     _ACTIVE_MATCH_BY_SERVER,
     _synthesize_match,
+    _ts_to_dt,
 )
 
 
@@ -52,27 +53,36 @@ async def _run_once(grace_cutoff: datetime) -> None:
         if sid not in latest_by_server:
             latest_by_server[sid] = row
 
-    for sid, row in latest_by_server.items():
-        if row["state"] != "Playing":
-            continue
-        if sid in active_by_server:
-            continue
-        # 最近 30min 内该 server 有过击杀活动才值得补；避免给老的空 server 制造幻影 match
-        recent_kill = await PlayerKilled.filter(
-            server_id=sid, created_at__gte=grace_cutoff
-        ).exists()
-        if not recent_kill:
-            continue
-        # 需要一个 Server 实例；match 合成里只用到 id/host/等，从 DB 取
-        from shared_lib.models import Server
+    from shared_lib.models import Server
 
-        server = await Server.get_or_none(id=sid)
-        if not server:
-            continue
-        match = await _synthesize_match(server, row["timestamp"])
-        if match:
-            _ACTIVE_MATCH_BY_SERVER[sid] = match.id
-            logger.info(
-                f"reconcile: synth match id={match.id} server_id={sid} "
-                f"(last game_state=Playing @ {row['created_at']})"
-            )
+    for sid, row in latest_by_server.items():
+        try:
+            if row["state"] != "Playing":
+                continue
+            if sid in active_by_server:
+                continue
+            # 最近 30min 内该 server 有过击杀活动才值得补；避免给老的空 server 制造幻影 match
+            recent_kill = await PlayerKilled.filter(
+                server_id=sid, created_at__gte=grace_cutoff
+            ).exists()
+            if not recent_kill:
+                continue
+            # 已经为这条 Playing 合成过 match（可能已被 close_stale_matches 关掉）→ 跳过，
+            # 否则会反复用同一个 ts 重复合成，撞 full_match_id 死循环直到 5 次耗尽抛错
+            already_synthed = await Match.filter(
+                server_id=sid, started_at=_ts_to_dt(row["timestamp"])
+            ).exists()
+            if already_synthed:
+                continue
+            server = await Server.get_or_none(id=sid)
+            if not server:
+                continue
+            match = await _synthesize_match(server, row["timestamp"])
+            if match:
+                _ACTIVE_MATCH_BY_SERVER[sid] = match.id
+                logger.info(
+                    f"reconcile: synth match id={match.id} server_id={sid} "
+                    f"(last game_state=Playing @ {row['created_at']})"
+                )
+        except Exception as e:
+            logger.error(f"reconcile: server_id={sid} 处理失败: {e}")
