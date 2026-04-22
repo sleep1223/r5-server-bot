@@ -119,6 +119,12 @@ class PlayerDisconnected(BaseEvent):
 
 
 class PlayerKilled(BaseEvent):
+    """击杀事件 —— PG 层按 `created_at` 月度分区（pg_partman v5），复合主键 `(id, created_at)`。
+
+    新增查询务必带 `created_at` 范围过滤，否则扫描所有分区。按 `match_id` / `server_id`
+    过滤的聚合也建议从关联对象的时间字段推导出 `created_at` 边界再加上。
+    """
+
     attacker = fields.ForeignKeyField("models.Player", related_name="kills", null=True, db_index=True)
     victim = fields.ForeignKeyField("models.Player", related_name="deaths", null=True, db_index=True)
     awarded_to = fields.ForeignKeyField("models.Player", related_name="awarded_kills", null=True)
@@ -131,9 +137,7 @@ class PlayerKilled(BaseEvent):
 
     class Meta:
         table = "player_killed"
-        indexes = [
-            ("created_at",),
-        ]
+        # created_at 索引和复合 PK 由 PG 分区建表 SQL 创建，不再由 Tortoise generate_schemas 管理
 
 
 class Server(models.Model):
