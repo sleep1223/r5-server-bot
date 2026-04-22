@@ -1,11 +1,33 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from shared_lib.models import Match, Player, PlayerKilled, Server
 from tortoise import connections
 from tortoise.expressions import Q
 from tortoise.functions import Count
 
 from fastapi_service.core.utils import calc_kd, get_date_range
+
+# PlayerKilled 按 created_at 月度分区；按 match_id 聚合时用 match 时间推出
+# created_at 边界，保证分区裁剪命中。两端留 buffer 覆盖事件处理抖动。
+_PARTITION_PRUNE_LEAD = timedelta(hours=2)  # match started_at 之前写入的事件容差
+_PARTITION_PRUNE_TAIL = timedelta(minutes=30)  # ended_at 之后仍可能写入的尾巴
+
+
+def _pk_created_at_bounds(matches: list[dict]) -> dict:
+    """根据一批 match 的 started_at/ended_at 推出 PlayerKilled.created_at 过滤范围。
+
+    目的：让 PG 走分区裁剪。matches 为空或缺时间时返回空 dict（退化为不加约束）。
+    """
+    started = [m["started_at"] for m in matches if m.get("started_at")]
+    ended = [m["ended_at"] for m in matches if m.get("ended_at")]
+    if not started:
+        return {}
+    bounds: dict = {"created_at__gte": min(started) - _PARTITION_PRUNE_LEAD}
+    if ended:
+        bounds["created_at__lte"] = max(ended) + _PARTITION_PRUNE_TAIL
+    return bounds
 
 
 async def get_recent_matches(
@@ -44,16 +66,17 @@ async def get_recent_matches(
         return []
 
     match_ids = [m["id"] for m in matches]
+    pk_bounds = _pk_created_at_bounds(matches)
 
     # 批量聚合击杀 / 死亡。单 SQL 搞定所有 match。
     kill_rows = (
-        await PlayerKilled.filter(match_id__in=match_ids, attacker_id__isnull=False)
+        await PlayerKilled.filter(match_id__in=match_ids, attacker_id__isnull=False, **pk_bounds)
         .group_by("match_id", "attacker_id")
         .annotate(k_count=Count("id"))
         .values("match_id", "attacker_id", "k_count")
     )
     death_rows = (
-        await PlayerKilled.filter(match_id__in=match_ids, victim_id__isnull=False)
+        await PlayerKilled.filter(match_id__in=match_ids, victim_id__isnull=False, **pk_bounds)
         .group_by("match_id", "victim_id")
         .annotate(d_count=Count("id"))
         .values("match_id", "victim_id", "d_count")
@@ -184,16 +207,17 @@ async def get_player_matches(
         return []
 
     scoped_match_ids = [m["id"] for m in matches]
+    pk_bounds = _pk_created_at_bounds(matches)
 
     # 3) 批量聚合本人在这些场次的击杀 / 死亡
     kill_rows = (
-        await PlayerKilled.filter(match_id__in=scoped_match_ids, attacker_id=player_id)
+        await PlayerKilled.filter(match_id__in=scoped_match_ids, attacker_id=player_id, **pk_bounds)
         .group_by("match_id")
         .annotate(k_count=Count("id"))
         .values("match_id", "k_count")
     )
     death_rows = (
-        await PlayerKilled.filter(match_id__in=scoped_match_ids, victim_id=player_id)
+        await PlayerKilled.filter(match_id__in=scoped_match_ids, victim_id=player_id, **pk_bounds)
         .group_by("match_id")
         .annotate(d_count=Count("id"))
         .values("match_id", "d_count")
@@ -273,6 +297,8 @@ async def get_competitive_ranking(
     offset_idx = len(params) + 2
     page_params = [*params, limit, offset]
 
+    # pk.created_at 边界用于 PG 分区裁剪：match 可持续数小时，留 2h lead / 30min tail
+    # 覆盖首杀早于 ended_at 窗口和末尾事件晚于 ended_at 的情形
     sql = f"""
     WITH player_match_kills AS (
         SELECT pk.attacker_id,
@@ -282,6 +308,7 @@ async def get_competitive_ranking(
         FROM player_killed pk
         JOIN matches m ON pk.match_id = m.id
         WHERE m.ended_at BETWEEN $1 AND $2
+          AND pk.created_at BETWEEN $1 - interval '2 hours' AND $2 + interval '30 minutes'
           AND m.status = 'completed'
           AND pk.attacker_id IS NOT NULL
           {server_clause}
