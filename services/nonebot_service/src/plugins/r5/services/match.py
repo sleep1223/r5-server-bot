@@ -44,7 +44,7 @@ async def handle_recent_matches(args: Message = CommandArg()) -> None:
     _, server_arg = pop_server_arg(content)
 
     try:
-        resp = await api_client.get_recent_matches(limit=10, server=server_arg, timeout=5.0)
+        resp = await api_client.get_recent_matches(limit=3, server=server_arg, timeout=5.0)
 
         if resp.status_code != 200:
             await recent_matches.finish(f"❌ 查询失败: HTTP {resp.status_code}")
@@ -124,7 +124,7 @@ async def handle_personal_matches(event: Event, args: Message = CommandArg()) ->
             await personal_matches.finish("⚠️ 请提供玩家名称或ID，或先 /绑定 账号")
 
     try:
-        resp = await api_client.get_player_matches(target, sort=sort, server=server_arg, timeout=5.0)
+        resp = await api_client.get_player_matches(target, limit=3, sort=sort, server=server_arg, timeout=5.0)
         if resp.status_code != 200:
             await personal_matches.finish(f"❌ 查询失败: HTTP {resp.status_code}")
         req = resp.json()
