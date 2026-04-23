@@ -10,11 +10,20 @@ async def create_or_update_donation(
     currency: str,
     message: str | None,
 ) -> tuple[Donation, bool]:
-    donation, created = await Donation.update_or_create(
+    existing = await Donation.filter(donor_name=donor_name, currency=currency).first()
+    if existing:
+        existing.amount = existing.amount + amount
+        if message:
+            existing.message = message
+        await existing.save()
+        return existing, False
+    donation = await Donation.create(
         donor_name=donor_name,
-        defaults=dict(amount=amount, currency=currency, message=message),
+        amount=amount,
+        currency=currency,
+        message=message,
     )
-    return donation, created
+    return donation, True
 
 
 async def list_donations(*, page_size: int = 1000, offset: int = 0) -> tuple[list, int]:

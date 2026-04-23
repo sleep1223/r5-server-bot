@@ -1,4 +1,5 @@
 from shared_lib.models import Player, PlayerKilled
+from tortoise.expressions import F
 from tortoise.functions import Count
 
 
@@ -20,6 +21,7 @@ async def get_kd_leaderboard(player_name: str):
     kills_query = (
         PlayerKilled
         .filter(attacker=player)
+        .exclude(victim_id=player.id)
         .annotate(count=Count("id"))
         .group_by("victim_id")  # Group by ID to be safe, though FK field works
         .values("victim__name", "count")
@@ -28,7 +30,13 @@ async def get_kd_leaderboard(player_name: str):
 
     # 3. Get Deaths: Where target player is the victim
     # Group by attacker
-    deaths_query = PlayerKilled.filter(victim=player).annotate(count=Count("id")).group_by("attacker_id").values("attacker__name", "count")
+    deaths_query = (
+        PlayerKilled.filter(victim=player)
+        .exclude(attacker_id=player.id)
+        .annotate(count=Count("id"))
+        .group_by("attacker_id")
+        .values("attacker__name", "count")
+    )
     deaths_data = await deaths_query
 
     # 4. Aggregate data
@@ -94,7 +102,13 @@ async def get_global_kill_leaderboard(limit: int = 20):
     # Group by attacker and count kills
     # We filter out null attackers just in case
     # Use attacker_id to check for null FK
-    leaderboard_query = PlayerKilled.filter(attacker_id__isnull=False).annotate(total_kills=Count("id")).group_by("attacker_id").values("attacker__name", "total_kills")
+    leaderboard_query = (
+        PlayerKilled.filter(attacker_id__isnull=False)
+        .exclude(attacker_id=F("victim_id"))
+        .annotate(total_kills=Count("id"))
+        .group_by("attacker_id")
+        .values("attacker__name", "total_kills")
+    )
 
     results = await leaderboard_query
 

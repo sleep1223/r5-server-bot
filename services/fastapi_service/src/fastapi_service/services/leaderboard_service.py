@@ -2,13 +2,24 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from shared_lib.models import Player, PlayerKilled
+from shared_lib.config import settings
+from shared_lib.models import Player, PlayerKilled, Server
+from tortoise.expressions import F
 from tortoise.functions import Count
 
 from fastapi_service.core.constants import WEAPON_NAME_MAP, to_display_weapon, to_internal_weapon
 from fastapi_service.core.utils import calc_kd, get_date_range
 
 # ── Common helpers ──
+
+
+async def _get_excluded_server_ids() -> list[int]:
+    """解析 settings.kd_excluded_server_hosts 配置为服务器 id 列表，用于统计时排除。"""
+    hosts = settings.kd_excluded_server_hosts
+    if not hosts:
+        return []
+    rows = await Server.filter(host__in=hosts).values("id")
+    return [r["id"] for r in rows]
 
 
 def _sort_results(results: list[dict], sort: str, *, secondary_key: str = "kills") -> None:
@@ -32,6 +43,7 @@ async def _aggregate_kills_deaths(
     extra_filters: dict | None = None,
     group_kills_by: str = "attacker_id",
     group_deaths_by: str = "victim_id",
+    excluded_server_ids: list[int] | None = None,
 ) -> dict[int, dict[str, int]]:
     """统一的 kill/death 聚合，返回 {player_id: {"kills": N, "deaths": N}}"""
     filters: dict = {}
@@ -41,12 +53,26 @@ async def _aggregate_kills_deaths(
         filters["created_at__lte"] = end_time
     if extra_filters:
         filters.update(extra_filters)
+    if excluded_server_ids:
+        filters["server_id__not_in"] = excluded_server_ids
 
     kills_filter = {**filters, f"{group_kills_by}__isnull": False}
-    kills_data = await PlayerKilled.filter(**kills_filter).group_by(group_kills_by).annotate(k_count=Count("id")).values(group_kills_by, "k_count")
+    kills_data = (
+        await PlayerKilled.filter(**kills_filter)
+        .exclude(attacker_id=F("victim_id"))
+        .group_by(group_kills_by)
+        .annotate(k_count=Count("id"))
+        .values(group_kills_by, "k_count")
+    )
 
     deaths_filter = {**filters, f"{group_deaths_by}__isnull": False}
-    deaths_data = await PlayerKilled.filter(**deaths_filter).group_by(group_deaths_by).annotate(d_count=Count("id")).values(group_deaths_by, "d_count")
+    deaths_data = (
+        await PlayerKilled.filter(**deaths_filter)
+        .exclude(attacker_id=F("victim_id"))
+        .group_by(group_deaths_by)
+        .annotate(d_count=Count("id"))
+        .values(group_deaths_by, "d_count")
+    )
 
     stats: dict[int, dict[str, int]] = {}
     for k in kills_data:
@@ -80,7 +106,9 @@ async def get_kd_ranking(
 ) -> tuple[list[dict], int]:
     start_time, end_time = get_date_range(range_type)
     extra_filters = {"server_id": server_id} if server_id is not None else None
-    stats = await _aggregate_kills_deaths(start_time, end_time, extra_filters=extra_filters)
+    # 显式指定 server_id 时不再应用全局排除，允许单独查看被排除服务器的数据
+    excluded_ids = None if server_id is not None else await _get_excluded_server_ids()
+    stats = await _aggregate_kills_deaths(start_time, end_time, extra_filters=extra_filters, excluded_server_ids=excluded_ids)
 
     if not stats:
         return [], 0
@@ -134,6 +162,10 @@ async def get_weapon_ranking(
         filters["created_at__range"] = (start_time, end_time)
     if server_id is not None:
         filters["server_id"] = server_id
+    else:
+        excluded_ids = await _get_excluded_server_ids()
+        if excluded_ids:
+            filters["server_id__not_in"] = excluded_ids
 
     # Aggregate by (weapon, player)
     stats_by_weapon: dict[str, dict[int, dict[str, int]]] = {iw: {} for iw in internal_weapons}
@@ -141,12 +173,17 @@ async def get_weapon_ranking(
     kills_data = await (
         PlayerKilled
         .filter(**filters, attacker_id__not_isnull=True, weapon__in=internal_weapons)
+        .exclude(attacker_id=F("victim_id"))
         .group_by("weapon", "attacker_id")
         .annotate(k_count=Count("id"))
         .values("weapon", "attacker_id", "k_count")
     )
     deaths_data = await (
-        PlayerKilled.filter(**filters, victim_id__not_isnull=True, weapon__in=internal_weapons).group_by("weapon", "victim_id").annotate(d_count=Count("id")).values("weapon", "victim_id", "d_count")
+        PlayerKilled.filter(**filters, victim_id__not_isnull=True, weapon__in=internal_weapons)
+        .exclude(attacker_id=F("victim_id"))
+        .group_by("weapon", "victim_id")
+        .annotate(d_count=Count("id"))
+        .values("weapon", "victim_id", "d_count")
     )
 
     for k in kills_data:
@@ -229,9 +266,23 @@ async def get_player_vs_all(
     page_size: int,
     server_id: int | None = None,
 ) -> tuple[list[dict], int, dict]:
-    server_filter = {"server_id": server_id} if server_id is not None else {}
-    kills_list = await PlayerKilled.filter(attacker_id=player_id, victim_id__not_isnull=True, **server_filter).values("victim_id")
-    deaths_list = await PlayerKilled.filter(victim_id=player_id, attacker_id__not_isnull=True, **server_filter).values("attacker_id")
+    server_filter: dict = {}
+    if server_id is not None:
+        server_filter["server_id"] = server_id
+    else:
+        excluded_ids = await _get_excluded_server_ids()
+        if excluded_ids:
+            server_filter["server_id__not_in"] = excluded_ids
+    kills_list = (
+        await PlayerKilled.filter(attacker_id=player_id, victim_id__not_isnull=True, **server_filter)
+        .exclude(victim_id=player_id)
+        .values("victim_id")
+    )
+    deaths_list = (
+        await PlayerKilled.filter(victim_id=player_id, attacker_id__not_isnull=True, **server_filter)
+        .exclude(attacker_id=player_id)
+        .values("attacker_id")
+    )
 
     opponents_stats: dict[int, dict[str, int]] = {}
     for k in kills_list:
@@ -323,9 +374,23 @@ async def get_player_weapon_stats(
     page_size: int,
     server_id: int | None = None,
 ) -> tuple[list[dict], int, dict]:
-    server_filter = {"server_id": server_id} if server_id is not None else {}
-    kills_list = await PlayerKilled.filter(attacker_id=player_id, victim_id__not_isnull=True, **server_filter).values("weapon")
-    deaths_list = await PlayerKilled.filter(victim_id=player_id, attacker_id__not_isnull=True, **server_filter).values("weapon")
+    server_filter: dict = {}
+    if server_id is not None:
+        server_filter["server_id"] = server_id
+    else:
+        excluded_ids = await _get_excluded_server_ids()
+        if excluded_ids:
+            server_filter["server_id__not_in"] = excluded_ids
+    kills_list = (
+        await PlayerKilled.filter(attacker_id=player_id, victim_id__not_isnull=True, **server_filter)
+        .exclude(victim_id=player_id)
+        .values("weapon")
+    )
+    deaths_list = (
+        await PlayerKilled.filter(victim_id=player_id, attacker_id__not_isnull=True, **server_filter)
+        .exclude(attacker_id=player_id)
+        .values("weapon")
+    )
 
     weapon_stats: dict[str, dict[str, int]] = {}
 

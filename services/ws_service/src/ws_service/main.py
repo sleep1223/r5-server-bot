@@ -5,6 +5,8 @@ import sys
 from loguru import logger
 from shared_lib.config import settings
 
+from .dashboard import dashboard_live, is_interactive
+from .display import state
 from .listener import LiveAPIListener
 
 
@@ -23,23 +25,39 @@ class _InterceptHandler(logging.Handler):
         logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
+def _sink_milestone(message) -> None:
+    """WARNING/ERROR loguru 消息 → 推进 dashboard milestones，避免 stderr 打断画面。"""
+    record = message.record
+    level = record["level"].name
+    icon = "⚠️" if level == "WARNING" else "🛑"
+    state.push_milestone(icon, level, record["message"])
+
+
 def _configure_logging() -> None:
     logger.remove()
-    logger.add(
-        sys.stderr,
-        format=(
-            "<green>{time:HH:mm:ss}</green> "
-            "<level>{level: <7}</level> "
-            "<level>{message}</level>"
-        ),
-        level="INFO",
-        colorize=True,
-    )
+    if is_interactive():
+        # TTY 下 stderr 会被 rich.Live 持续覆盖，把 loguru 路由进仪表盘 milestones
+        logger.add(_sink_milestone, level="WARNING", format="{message}")
+        logger.add(
+            "logs/ws_service.log",
+            level="DEBUG",
+            rotation="50 MB",
+            retention=5,
+            enqueue=True,
+            format="{time:YYYY-MM-DD HH:mm:ss} {level: <7} {message}",
+        )
+    else:
+        # 非 TTY（systemd/nohup）走原来的滚动模式
+        logger.add(
+            sys.stderr,
+            format=("<green>{time:HH:mm:ss}</green> <level>{level: <7}</level> <level>{message}</level>"),
+            level="INFO",
+            colorize=True,
+        )
     logging.basicConfig(handlers=[_InterceptHandler()], level=logging.INFO, force=True)
 
 
-async def main() -> None:
-    _configure_logging()
+async def _run() -> None:
     listener = LiveAPIListener(
         host=settings.ws_host,
         port=settings.ws_port,
@@ -47,8 +65,20 @@ async def main() -> None:
         batch_max_retries=settings.ws_batch_max_retries,
         buffer_max=settings.ws_ingest_buffer_max,
     )
-    await listener.start()
+    async with dashboard_live():
+        await listener.start()
+
+
+async def main() -> None:
+    _configure_logging()
+    try:
+        await _run()
+    except KeyboardInterrupt:
+        logger.info("收到中断信号，退出")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
