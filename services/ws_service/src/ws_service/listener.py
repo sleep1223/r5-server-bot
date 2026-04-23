@@ -1,6 +1,9 @@
 import asyncio
+import time
 import uuid
 from collections import deque
+from datetime import datetime
+from time import monotonic
 from typing import Any as TypingAny
 
 import websockets
@@ -25,7 +28,7 @@ from shared_lib.schemas.ingest import (
 from shared_lib.utils.public_ip import resolve_public_ip
 from utils.protos import events_pb2
 
-from .display import BURST_FLUSH_INTERVAL, HEARTBEAT_INTERVAL, aggregator, match_tracker
+from .display import BURST_FLUSH_INTERVAL, aggregator, match_tracker, state
 from .ingest_client import IngestClient
 
 
@@ -58,10 +61,15 @@ class LiveAPIListener:
         self.batch_max_retries = batch_max_retries
         self.ingest = ingest_client
         self.server_ref = server_ref
+        self._buffer_max = buffer_max
         self._pending_events: deque = deque(maxlen=buffer_max)
         self._flush_task: asyncio.Task | None = None
         self._burst_task: asyncio.Task | None = None
-        self._heartbeat_task: asyncio.Task | None = None
+        # dashboard state 初始化
+        state.service.listen_host = self.host
+        state.service.listen_port = self.port
+        state.ingest.buffer_max = buffer_max
+        state.ingest.next_batch_at = monotonic() + batch_interval
 
     async def start(self):
         if self.ingest is None:
@@ -79,25 +87,24 @@ class LiveAPIListener:
                 name=f"server-{public_ip}",
             )
             logger.info(f"本机 Server 上报标识: host={public_ip}, port={settings.ws_public_port}")
+        state.service.public_host = self.server_ref.host
+        state.service.public_port = self.server_ref.port
+        state.service.ingest_url = settings.ws_ingest_base_url
 
         logger.info(f"正在启动 LiveAPI 监听器于 {self.host}:{self.port}")
-        logger.info(
-            f"批量上报配置: 间隔={self.batch_interval}s, 最大重试={self.batch_max_retries}次, "
-            f"目标={settings.ws_ingest_base_url}"
-        )
+        logger.info(f"批量上报配置: 间隔={self.batch_interval}s, 最大重试={self.batch_max_retries}次, 目标={settings.ws_ingest_base_url}")
         self._flush_task = asyncio.create_task(self._flush_loop())
         self._burst_task = asyncio.create_task(self._burst_flush_loop())
-        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         self.server = await websockets.serve(self.handle_connection, self.host, self.port)
         try:
             await self.server.wait_closed()
         finally:
-            for task in (self._flush_task, self._burst_task, self._heartbeat_task):
+            for task in (self._flush_task, self._burst_task):
                 if task:
                     task.cancel()
             # 关闭前刷写剩余数据
             await self._flush()
-            aggregator.flush()
+            aggregator.reset_window()
             await self.ingest.close()
 
     async def _flush_loop(self):
@@ -107,34 +114,29 @@ class LiveAPIListener:
             await self._flush()
 
     async def _burst_flush_loop(self):
-        """爆发事件聚合输出循环"""
+        """爆发事件窗口清零循环（展示由仪表盘持续渲染，无需打印）"""
         while True:
             await asyncio.sleep(BURST_FLUSH_INTERVAL)
             try:
-                aggregator.flush()
+                aggregator.reset_window()
             except Exception as e:
-                logger.error(f"aggregator.flush 失败: {e}")
-
-    async def _heartbeat_loop(self):
-        """当前比赛心跳循环"""
-        while True:
-            await asyncio.sleep(HEARTBEAT_INTERVAL)
-            try:
-                match_tracker.heartbeat()
-            except Exception as e:
-                logger.error(f"match_tracker.heartbeat 失败: {e}")
+                logger.error(f"aggregator.reset_window 失败: {e}")
 
     async def _flush(self):
         """将缓存的事件批量 POST 给 FastAPI ingest 接口。"""
+        state.ingest.next_batch_at = monotonic() + self.batch_interval
         if not self._pending_events:
+            state.ingest.buffer_len = 0
             return
         if self.ingest is None or self.server_ref is None:
             logger.error("ingest client 未初始化，丢弃当前批次")
             self._pending_events.clear()
+            state.ingest.buffer_len = 0
             return
 
         events = list(self._pending_events)
         self._pending_events.clear()
+        state.ingest.buffer_len = 0
 
         batch = IngestBatch(
             batch_id=str(uuid.uuid4()),
@@ -142,28 +144,45 @@ class LiveAPIListener:
             events=events,  # type: ignore[arg-type]
         )
         logger.debug(f"开始上报 {len(events)} 条事件, batch_id={batch.batch_id}")
+        started = time.perf_counter()
         ok = await self.ingest.post_batch(batch)
+        latency_ms = int((time.perf_counter() - started) * 1000)
+
+        state.ingest.last_ok = ok
+        state.ingest.last_ts = datetime.now().astimezone()
+        state.ingest.last_batch_id = batch.batch_id
+        state.ingest.last_count = len(events)
+        state.ingest.last_latency_ms = latency_ms
         if ok:
-            logger.info(f"📤 上报完成 batch_id={batch.batch_id[:8]} count={len(events)}")
+            state.ingest.batches_ok += 1
+            state.ingest.events_uploaded += len(events)
+            logger.debug(f"📤 上报完成 batch_id={batch.batch_id[:8]} count={len(events)}")
         else:
-            logger.error(
-                f"上报失败: batch_id={batch.batch_id}, count={len(events)}, 重新入队等待下一轮"
-            )
+            state.ingest.batches_fail += 1
+            logger.error(f"上报失败: batch_id={batch.batch_id}, count={len(events)}, 重新入队等待下一轮")
             # 放回队首，等下次 flush 合并重试；deque maxlen 防止 OOM
             self._pending_events.extendleft(reversed(events))
+            state.ingest.buffer_len = len(self._pending_events)
 
     def _enqueue(self, event) -> None:
         self._pending_events.append(event)
+        state.ingest.buffer_len = len(self._pending_events)
 
     async def handle_connection(self, websocket):
-        logger.info(f"🔗 新连接 {websocket.remote_address}")
+        peer = websocket.remote_address
+        state.service.ws_clients += 1
+        state.push_milestone("🔗", "WS Connected", f"{peer[0]}:{peer[1]}")
+        logger.debug(f"🔗 新连接 {peer}")
         try:
             async for message in websocket:
                 self.parse_message(message)
         except websockets.exceptions.ConnectionClosed:
-            logger.info("连接已关闭")
+            logger.debug("连接已关闭")
         except Exception as e:
             logger.error(f"连接处理程序错误: {e}")
+        finally:
+            state.service.ws_clients = max(0, state.service.ws_clients - 1)
+            state.push_milestone("🔌", "WS Disconnected", f"{peer[0]}:{peer[1]}")
 
     def parse_message(self, data):
         try:
@@ -227,7 +246,7 @@ class LiveAPIListener:
     # ==========================================
 
     def on_Init(self, msg):
-        logger.info(f"🛠  INIT 版本={msg.gameVersion} 平台={msg.platform}")
+        state.push_milestone("🛠", "Init", f"version={msg.gameVersion} platform={msg.platform}")
         self._enqueue(
             InitEventIn(
                 timestamp=msg.timestamp,
@@ -244,7 +263,14 @@ class LiveAPIListener:
             map_name=msg.map,
             playlist_name=msg.playlistName,
             playlist_desc=msg.playlistDesc,
+            aim_assist_on=msg.aimAssistOn,
             started_ts=msg.timestamp,
+        )
+        aggregator.reset_match()
+        state.push_milestone(
+            "🎮",
+            "MatchSetup",
+            f"{msg.map} · {msg.playlistName}",
         )
         self._enqueue(
             MatchSetupIn(
@@ -260,14 +286,18 @@ class LiveAPIListener:
         )
 
     def on_GameStateChanged(self, msg):
-        logger.info(f"▶️  STATE → {msg.state}")
-        self._enqueue(
-            GameStateChangedIn(timestamp=msg.timestamp, category=msg.category, state=msg.state)
-        )
+        match_tracker.on_state_changed(msg.state)
+        state.push_milestone("▶️", "GameStateChanged", f"→ {msg.state}")
+        self._enqueue(GameStateChangedIn(timestamp=msg.timestamp, category=msg.category, state=msg.state))
 
     def on_MatchStateEnd(self, msg):
         winner_names = [p.name for p in msg.winners]
-        match_tracker.on_match_end(winner_names)
+        match_tracker.on_match_end()
+        state.push_milestone(
+            "🏁",
+            "MatchStateEnd",
+            f"winners={', '.join(winner_names) if winner_names else '-'}",
+        )
         winners = [MessageToDict(p, preserving_proto_field_name=True) for p in msg.winners]
         self._enqueue(
             MatchStateEndIn(
@@ -279,17 +309,23 @@ class LiveAPIListener:
         )
 
     def on_RingStartClosing(self, msg):
-        logger.info(
-            f"⭕ ring 开始 stage={msg.stage} "
-            f"radius={msg.currentRadius}→{msg.endRadius} duration={msg.shrinkDuration}s"
+        match_tracker.on_ring_start_closing(msg.stage, msg.shrinkDuration)
+        state.push_milestone(
+            "⭕",
+            "RingStartClosing",
+            f"stage {msg.stage}  shrink {msg.shrinkDuration}s  radius {msg.currentRadius}→{msg.endRadius}",
         )
 
     def on_RingFinishedClosing(self, msg):
-        logger.info(f"⭕ ring 收缩完成 stage={msg.stage} radius={msg.currentRadius}")
+        state.push_milestone(
+            "⭕",
+            "RingFinishedClosing",
+            f"stage {msg.stage}  radius {msg.currentRadius}",
+        )
 
     def on_PlayerConnected(self, msg):
         name = msg.player.name
-        logger.info(f"🔌+ {name} (teamId={msg.player.teamId})")
+        state.push_milestone("🟢", "PlayerConnected", f"{name} team={msg.player.teamId}")
         match_tracker.on_player_connected(name)
         info = _player_info(msg.player)
         if not info:
@@ -305,7 +341,7 @@ class LiveAPIListener:
 
     def on_PlayerDisconnected(self, msg):
         name = msg.player.name
-        logger.info(f"🔌- {name} (reconnect={msg.canReconnect})")
+        state.push_milestone("🔴", "PlayerDisconnected", f"{name} reconnect={bool(msg.canReconnect)}")
         match_tracker.on_player_disconnected(name)
         info = _player_info(msg.player)
         if not info:
@@ -322,7 +358,7 @@ class LiveAPIListener:
         )
 
     def on_CharacterSelected(self, msg):
-        logger.info(f"🎭 {msg.player.name} 选择了 {msg.player.character}")
+        state.push_milestone("🎭", "CharacterSelected", f"{msg.player.name} → {msg.player.character}")
         info = _player_info(msg.player)
         if not info:
             return
@@ -351,15 +387,9 @@ class LiveAPIListener:
                 attacker=attacker,
                 victim=victim,
                 awarded_to=awarded_to,
-                attacker_data=MessageToDict(msg.attacker, preserving_proto_field_name=True)
-                if msg.HasField("attacker")
-                else None,
-                victim_data=MessageToDict(msg.victim, preserving_proto_field_name=True)
-                if msg.HasField("victim")
-                else None,
-                awarded_to_data=MessageToDict(msg.awardedTo, preserving_proto_field_name=True)
-                if msg.HasField("awardedTo")
-                else None,
+                attacker_data=MessageToDict(msg.attacker, preserving_proto_field_name=True) if msg.HasField("attacker") else None,
+                victim_data=MessageToDict(msg.victim, preserving_proto_field_name=True) if msg.HasField("victim") else None,
+                awarded_to_data=MessageToDict(msg.awardedTo, preserving_proto_field_name=True) if msg.HasField("awardedTo") else None,
                 weapon=msg.weapon,
             )
         )
@@ -402,20 +432,17 @@ class LiveAPIListener:
     # ==========================================
 
     def on_PlayerUpgradeTierChanged(self, msg):
-        logger.info(f"⬆️  {msg.player.name} 升级 Lv.{msg.level}")
+        state.push_milestone("⬆️", "UpgradeTier", f"{msg.player.name} → Lv.{msg.level}")
 
     def on_SquadEliminated(self, msg):
-        logger.info(f"❎ 小队淘汰 ({len(msg.players)} 人)")
+        match_tracker.on_squad_eliminated()
+        state.push_milestone("❎", "SquadEliminated", f"{len(msg.players)} 人")
 
     def on_GibraltarShieldAbsorbed(self, msg):
-        logger.debug(
-            f"🛡  {msg.victim.name} 护盾吸收了 {msg.attacker.name} 的 {msg.damageInflicted} dmg"
-        )
+        logger.debug(f"🛡  {msg.victim.name} 护盾吸收了 {msg.attacker.name} 的 {msg.damageInflicted} dmg")
 
     def on_RevenantForgedShadowDamaged(self, msg):
-        logger.debug(
-            f"👻 {msg.victim.name} 暗影吸收 {msg.attacker.name} 的 {msg.damageInflicted} dmg"
-        )
+        logger.debug(f"👻 {msg.victim.name} 暗影吸收 {msg.attacker.name} 的 {msg.damageInflicted} dmg")
 
     def on_PlayerRespawnTeam(self, msg):
         respawned_names = [p.name for p in msg.respawned]
