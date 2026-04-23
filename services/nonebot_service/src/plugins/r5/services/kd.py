@@ -50,7 +50,7 @@ async def handle_kd_rank(args: Message = CommandArg()) -> None:
     dynamic_min_kills = base_min_kills if range_type in ["today", "yesterday"] else base_min_kills * 3
     params: dict = {
         "range_type": range_type,
-        "page_size": 20,
+        "page_size": 10,
         "sort": "kd",
         "min_kills": dynamic_min_kills,
     }
@@ -193,8 +193,8 @@ async def handle_check_kd(event: Event, args: Message = CommandArg()) -> None:
         msg += "对手 | K/D | 击杀/死亡\n"
         msg += "-" * 30 + "\n"
 
-        # Limit to top 20
-        display_data = data[:20]
+        # Limit to top 10
+        display_data = data[:10]
 
         for p in display_data:
             op_name = p.get("opponent_name", "Unknown")
@@ -203,8 +203,8 @@ async def handle_check_kd(event: Event, args: Message = CommandArg()) -> None:
             d = p.get("deaths", 0)
             msg += f"{op_name}: {kd} ({k}/{d})\n"
 
-        if len(data) > 20:
-            msg += f"\n... 以及其他 {len(data) - 20} 名玩家"
+        if len(data) > 10:
+            msg += f"\n... 以及其他 {len(data) - 10} 名玩家"
 
         msg += f"\n🖥️ 详细数据: https://r5.sleep0.de/player/{player_name}"
         await check_kd.finish(msg.strip())

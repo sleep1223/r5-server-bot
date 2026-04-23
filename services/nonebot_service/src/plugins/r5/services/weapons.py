@@ -110,7 +110,7 @@ async def handle_check_weapons(event: Event, args: Message = CommandArg()) -> No
         msg += "武器 | K/D | 击杀/死亡\n"
         msg += "-" * 30 + "\n"
 
-        display = data[:20]
+        display = data[:10]
         for w in display:
             weapon_key = w.get("weapon", "unknown")
             weapon = weapon_map.get(weapon_key.lower(), weapon_key)
@@ -119,8 +119,8 @@ async def handle_check_weapons(event: Event, args: Message = CommandArg()) -> No
             d = w.get("deaths", 0)
             msg += f"{weapon}: {kd} ({k}/{d})\n"
 
-        if len(data) > 20:
-            msg += f"\n... 以及其他 {len(data) - 20} 个武器"
+        if len(data) > 10:
+            msg += f"\n... 以及其他 {len(data) - 10} 个武器"
 
         msg += f"\n🖥️ 详细数据: https://r5.sleep0.de/player/{player_name}"
         await check_weapons.finish(msg.strip())
@@ -170,7 +170,7 @@ async def handle_weapon_leaderboard(args: Message = CommandArg()) -> None:
             "weapon": ["r99", "volt", "wingman", "flatline", "r301", "player"],
             "range_type": range_type,
             "page_no": 1,
-            "page_size": 20,
+            "page_size": 10,
             "sort": sort,
             "min_kills": dynamic_min_kills,
             "min_deaths": 0,
@@ -198,7 +198,7 @@ async def handle_weapon_leaderboard(args: Message = CommandArg()) -> None:
         if not data:
             msg += "ℹ️ 暂无数据"
             await weapon_leaderboard.finish(msg.strip())
-        display = data[:20]
+        display = data[:10]
         for w in display:
             weapon_key = w.get("weapon", "unknown")
             weapon_name = weapon_map.get(weapon_key.lower(), weapon_key)
