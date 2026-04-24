@@ -155,12 +155,16 @@ class R5NetConsole:
                     break
                 await asyncio.sleep(1)
 
-    async def authenticate_and_start(self, password: str) -> bool:
+    async def authenticate_and_start(self, password: str, timeout: float = 5.0) -> bool:
         # 我们需要在启动后台读取器之前手动处理认证
         logger.info("正在认证...")
         await self.send_request(netcon_pb2.SERVERDATA_REQUEST_AUTH, password)
 
-        resp = await self.receive_response()
+        try:
+            resp = await asyncio.wait_for(self.receive_response(), timeout=timeout)
+        except TimeoutError:
+            logger.error(f"{self.host}:{self.port} 认证响应超时（{timeout}s）。")
+            return False
         if resp and resp.responseType == netcon_pb2.SERVERDATA_RESPONSE_AUTH:
             try:
                 val = int(resp.responseVal) if resp.responseVal else 0
