@@ -49,7 +49,7 @@ async def _sync_one_server(
         full_name = status_data["_api_name"]
         match_complex = re.match(r"^\[(.*?)]\s*(.*?)\s*server QQ group\(\d+\)\s*(.*)$", full_name, re.IGNORECASE)
         if match_complex:
-            status_data["short_name"] = f"{match_complex.group(1)} {match_complex.group(2)} {match_complex.group(3)}".strip()
+            status_data["short_name"] = f"[{match_complex.group(1)}] {match_complex.group(2)} {match_complex.group(3)}".strip()
         else:
             status_data["short_name"] = full_name
         ip_info = ip_info_map.get(s_ip)
