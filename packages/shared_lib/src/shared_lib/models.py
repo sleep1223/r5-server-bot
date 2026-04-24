@@ -118,6 +118,20 @@ class PlayerDisconnected(BaseEvent):
         table = "player_disconnected"
 
 
+# class PlayerKilled(BaseEvent):
+#     attacker = fields.ForeignKeyField("models.Player", related_name="kills", null=True, db_index=True)
+#     victim = fields.ForeignKeyField("models.Player", related_name="deaths", null=True, db_index=True)
+#     awarded_to = fields.ForeignKeyField("models.Player", related_name="awarded_kills", null=True)
+#     attacker_data = fields.JSONField(null=True)
+#     victim_data = fields.JSONField(null=True)
+#     awarded_to_data = fields.JSONField(null=True)
+#     weapon = fields.CharField(max_length=100, db_index=True)
+#     server = fields.ForeignKeyField("models.Server", related_name="kills", null=True, db_index=True)
+#     match = fields.ForeignKeyField("models.Match", related_name="kills", null=True, db_index=True)
+
+
+#     class Meta:
+#         table = "player_killed"
 class PlayerKilled(BaseEvent):
     """击杀事件 —— PG 层按 `created_at` 月度分区（pg_partman v5），复合主键 `(id, created_at)`。
 
@@ -125,15 +139,15 @@ class PlayerKilled(BaseEvent):
     过滤的聚合也建议从关联对象的时间字段推导出 `created_at` 边界再加上。
     """
 
-    attacker = fields.ForeignKeyField("models.Player", related_name="kills", null=True, db_index=True)
-    victim = fields.ForeignKeyField("models.Player", related_name="deaths", null=True, db_index=True)
+    attacker = fields.ForeignKeyField("models.Player", related_name="kills", null=True)
+    victim = fields.ForeignKeyField("models.Player", related_name="deaths", null=True)
     awarded_to = fields.ForeignKeyField("models.Player", related_name="awarded_kills", null=True)
     attacker_data = fields.JSONField(null=True)
     victim_data = fields.JSONField(null=True)
     awarded_to_data = fields.JSONField(null=True)
-    weapon = fields.CharField(max_length=100, db_index=True)
-    server = fields.ForeignKeyField("models.Server", related_name="kills", null=True, db_index=True)
-    match = fields.ForeignKeyField("models.Match", related_name="kills", null=True, db_index=True)
+    weapon = fields.CharField(max_length=100)
+    server = fields.ForeignKeyField("models.Server", related_name="kills", null=True)
+    match = fields.ForeignKeyField("models.Match", related_name="kills", null=True)
 
     class Meta:
         table = "player_killed"
