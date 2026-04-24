@@ -24,6 +24,14 @@ class ServerCache:
         self._servers.clear()
         self._servers.update(data)
 
+    def set_server(self, key: str, data: dict) -> None:
+        self._servers[key] = data
+
+    def retain_servers(self, keys: set[str]) -> None:
+        for k in list(self._servers.keys()):
+            if k not in keys:
+                self._servers.pop(k, None)
+
     # ── Raw server response ──
 
     @property
