@@ -95,6 +95,7 @@ async def fetch_server_list_raw_task() -> None:
                 raw_list = [s for s in raw_servers if isinstance(s, dict)]
                 try:
                     await _upsert_servers_from_raw(raw_list)
+                    logger.info(f"Raw server list fetched: {len(raw_list)} servers")
                 except Exception as e:
                     logger.error(f"Error upserting Server rows: {e}")
             else:
