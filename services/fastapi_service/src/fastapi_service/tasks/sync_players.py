@@ -135,6 +135,8 @@ async def sync_players_task() -> None:
             server_list = list(raw_servers) if isinstance(raw_servers, list) else None
             if not server_list:
                 logger.debug("Raw server list cache is empty, waiting for fetch_server_list_raw_task")
+                await asyncio.sleep(2)
+                continue
             if server_list is not None:
                 try:
                     filtered_servers = []
