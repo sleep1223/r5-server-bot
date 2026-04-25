@@ -138,7 +138,17 @@ async def handle_kick(args: Message = CommandArg()) -> None:
             server_name = _get_server_name(server)
             await cmd_kick.finish(f"👢 踢出成功\n\n👤 玩家: {target}\n📌 原因: {reason_cn}\n🖥️ 服务器: {server_name}")
         elif data.get("player_online") is False:
-            await cmd_kick.finish(f"👢 踢出记录 +1\n\n👤 玩家: {target}\n📌 原因: {reason_cn}\n🔴 状态: 离线 (已记录踢出次数)")
+            broadcast_total = data.get("broadcast_total", 0)
+            fail_reason = data.get("fail_reason")
+            if fail_reason == "no_online_servers":
+                detail = "⚠️ 当前无在线服务器,RCON 踢出未执行"
+            elif fail_reason == "no_server_hit":
+                detail = f"⚠️ 已广播 {broadcast_total} 台服务器但未命中玩家\n可能玩家已离线,或玩家列表尚未刷新到该玩家"
+            else:
+                detail = "🔴 状态: 离线"
+            await cmd_kick.finish(
+                f"👢 踢出记录 +1\n\n👤 玩家: {target}\n📌 原因: {reason_cn}\n{detail}\n(已记录踢出次数)"
+            )
         else:
             await cmd_kick.finish(f"👢 踢出已提交: {target}")
 

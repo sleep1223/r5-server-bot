@@ -30,17 +30,12 @@ async def kick_player(
         return err
     assert player_obj is not None
 
-    target_loc, err = player_service.get_online_location(player_obj)
-    if err:
-        await admin_service.record_kick_offline(player_obj)
-        return success(
-            data={"player_online": False},
-            msg=f"Player {player_obj.nucleus_id} is not online; kick count recorded for {reason}",
-        )
-    assert target_loc is not None
+    rcon_key, rcon_pwd = require_rcon_config()
+    online_servers = server_cache.get_online_servers()
+    target_loc, _ = player_service.get_online_location(player_obj)
 
-    # 北京服等允许 NO_COVER 的服务器跳过此规则
-    if reason == "NO_COVER" and is_no_cover_allowed_server(target_loc.get("server_host"), target_loc.get("server_name")):
+    # NO_COVER: 缓存命中且目标服允许 NO_COVER 时跳过
+    if reason == "NO_COVER" and target_loc and is_no_cover_allowed_server(target_loc.get("server_host"), target_loc.get("server_name")):
         return success(
             data={
                 "player_online": True,
@@ -51,19 +46,52 @@ async def kick_player(
             msg=f"Server {target_loc['server_name']} allows NO_COVER; kick skipped",
         )
 
-    rcon_key, rcon_pwd = require_rcon_config()
-    kick_success = await admin_service.kick_player_on_server(player_obj.nucleus_id, reason, target_loc["server_host"], target_loc["server_port"], rcon_key, rcon_pwd)
+    # NO_COVER: 过滤掉允许 NO_COVER 的服务器(如北京服)
+    if reason == "NO_COVER":
+        online_servers = [s for s in online_servers if not is_no_cover_allowed_server(s.get("server_host"), s.get("server_name"))]
 
-    if kick_success:
-        await admin_service.record_kick(player_obj)
+    # 无论后续 RCON 是否成功,先统一记录一次踢出次数
+    await admin_service.record_kick_offline(player_obj)
+
+    if not online_servers:
+        return success(
+            data={
+                "player_online": False,
+                "broadcast_total": 0,
+                "rcon_failed": True,
+                "fail_reason": "no_online_servers",
+            },
+            msg=f"当前无可用在线服务器,RCON 踢出未执行;踢出次数仍已记录(原因 {reason})",
+        )
+
+    # 不依赖可能过期的位置缓存:并行尝试所有在线服务器,谁返回 kick 成功就是玩家真实所在服
+    _, hit_server = await admin_service.broadcast_kick_player(player_obj.nucleus_id, reason, online_servers, rcon_key, rcon_pwd)
+
+    if hit_server:
+        # 命中后再把状态置为 kicked (record_kick_offline 已经把 kick_count + 1)
+        await admin_service.mark_status_kicked(player_obj)
         return success(
             data={
                 "player_online": True,
-                "server": {"name": target_loc["server_name"], "host": target_loc["server_host"], "port": target_loc["server_port"]},
+                "server": {"name": hit_server["server_name"], "host": hit_server["server_host"], "port": hit_server["server_port"]},
+                "broadcast_total": len(online_servers),
             },
-            msg=f"Player {player_obj.nucleus_id} kicked from {target_loc['server_name']} for {reason}",
+            msg=f"Player {player_obj.nucleus_id} kicked from {hit_server['server_name']} for {reason}",
         )
-    return error(ErrorCode.RCON_OPERATION_FAILED, msg=f"Failed to kick player {player_obj.nucleus_id}")
+
+    # 没有任何服务器命中该玩家 → 视作离线 / 玩家列表尚未刷新到该玩家
+    return success(
+        data={
+            "player_online": False,
+            "broadcast_total": len(online_servers),
+            "rcon_failed": True,
+            "fail_reason": "no_server_hit",
+        },
+        msg=(
+            f"已广播 {len(online_servers)} 台在线服务器,但均未命中玩家 {player_obj.nucleus_id}"
+            f"(可能已离线或玩家列表尚未刷新);踢出次数已记录(原因 {reason})"
+        ),
+    )
 
 
 @router.post("/players/{nucleus_id_or_player_name}/ban", dependencies=[Depends(verify_token)])
@@ -83,77 +111,80 @@ async def ban_player(
     rcon_key, rcon_pwd = require_rcon_config()
     online_servers = server_cache.get_online_servers()
     operator_name = "admin" if credentials else "system"
-    target_loc, online_error = player_service.get_online_location(player_obj)
+    target_loc, _ = player_service.get_online_location(player_obj)
 
-    # NO_COVER 规则: 过滤掉允许 NO_COVER 的服务器(如北京服)
+    # NO_COVER: 缓存命中且目标服允许 NO_COVER 时跳过
+    if reason == "NO_COVER" and target_loc and is_no_cover_allowed_server(target_loc.get("server_host"), target_loc.get("server_name")):
+        return success(
+            data={
+                "player_online": True,
+                "skipped": True,
+                "skip_reason": "no_cover_allowed",
+                "primary_server": {"name": target_loc["server_name"], "host": target_loc["server_host"], "port": target_loc["server_port"]},
+                "async_server_count": 0,
+            },
+            msg=f"Server {target_loc['server_name']} allows NO_COVER; ban skipped",
+        )
+
+    # NO_COVER: 过滤掉允许 NO_COVER 的服务器(如北京服)
     if reason == "NO_COVER":
         online_servers = [s for s in online_servers if not is_no_cover_allowed_server(s.get("server_host"), s.get("server_name"))]
 
-    # 1) 玩家在线: 先同步封禁所在服务器
-    if not online_error and target_loc:
-        target_host = target_loc["server_host"]
-        target_port = target_loc["server_port"]
-        target_server_name = target_loc["server_name"]
-
-        # 北京服等允许 NO_COVER 的服务器跳过此规则
-        if reason == "NO_COVER" and is_no_cover_allowed_server(target_host, target_server_name):
-            return success(
-                data={
-                    "player_online": True,
-                    "skipped": True,
-                    "skip_reason": "no_cover_allowed",
-                    "primary_server": {"name": target_server_name, "host": target_host, "port": target_port},
-                    "async_server_count": 0,
-                },
-                msg=f"Server {target_server_name} allows NO_COVER; ban skipped",
-            )
-
-        ban_success = await admin_service.ban_player_on_server(player_obj.nucleus_id, reason, target_host, target_port, rcon_key, rcon_pwd)
-
-        if not ban_success:
-            return error(
-                ErrorCode.RCON_OPERATION_FAILED,
-                msg=f"Failed to ban player {player_obj.nucleus_id} on online server {target_server_name}",
-                data={"player_online": True, "primary_server": {"name": target_server_name, "host": target_host, "port": target_port}},
-            )
-
+    # 没有可用在线服务器: 仅记录封禁
+    if not online_servers:
         await admin_service.record_ban(player_obj, reason, operator_name)
-        server_cache.cache_ban_location(player_obj.nucleus_id, server_name=target_server_name, server_host=target_host, server_port=target_port)
-
-        remain_servers = [s for s in online_servers if not (s["server_host"] == target_host and s["server_port"] == target_port)]
-        if remain_servers:
-            admin_service.schedule_ban_background(
-                player_id=player_obj.id,
-                nucleus_id=player_obj.nucleus_id,
-                reason=reason,
-                operator_name=operator_name,
-                servers=remain_servers,
-                update_record_on_success=False,
-                cache_server_on_first_success=False,
-            )
-
         return success(
-            data={"player_online": True, "primary_server": {"name": target_server_name, "host": target_host, "port": target_port}, "async_server_count": len(remain_servers)},
-            msg=f"Player {player_obj.nucleus_id} banned on online server {target_server_name}; background sync started",
+            data={"player_online": False, "async_server_count": 0, "broadcast_total": 0},
+            msg=f"No online servers; ban recorded for {player_obj.nucleus_id}",
         )
 
-    # 2) 玩家不在线: 立即记录封禁，再异步在所有在线服务器执行 RCON
+    # 不依赖可能过期的位置缓存:并行 bann (= kickid + banid) 所有在线服务器,
+    # 这样玩家在哪台服都会被踢出,封禁列表也同步落地。
+    success_count, hits = await admin_service.broadcast_bann_player(
+        player_obj.nucleus_id, reason, online_servers, rcon_key, rcon_pwd,
+    )
+
+    if success_count == 0:
+        return error(
+            ErrorCode.RCON_OPERATION_FAILED,
+            msg=f"Failed to ban player {player_obj.nucleus_id} on any online server",
+            data={"broadcast_total": len(online_servers)},
+        )
+
     await admin_service.record_ban(player_obj, reason, operator_name)
 
-    if online_servers:
-        admin_service.schedule_ban_background(
-            player_id=player_obj.id,
-            nucleus_id=player_obj.nucleus_id,
-            reason=reason,
-            operator_name=operator_name,
-            servers=online_servers,
-            update_record_on_success=False,
-            cache_server_on_first_success=True,
+    # primary_server: 优先用缓存定位,否则取任一命中
+    primary: dict | None = None
+    if target_loc:
+        primary = {
+            "server_name": target_loc["server_name"],
+            "server_host": target_loc["server_host"],
+            "server_port": target_loc["server_port"],
+        }
+    elif hits:
+        primary = {
+            "server_name": hits[0]["server_name"],
+            "server_host": hits[0]["server_host"],
+            "server_port": hits[0]["server_port"],
+        }
+
+    if primary:
+        server_cache.cache_ban_location(
+            player_obj.nucleus_id,
+            server_name=primary["server_name"],
+            server_host=primary["server_host"],
+            server_port=primary["server_port"],
         )
 
     return success(
-        data={"player_online": False, "async_server_count": len(online_servers)},
-        msg=f"Player {player_obj.nucleus_id} is not online; ban recorded, background RCON task started",
+        data={
+            "player_online": bool(target_loc),
+            "primary_server": ({"name": primary["server_name"], "host": primary["server_host"], "port": primary["server_port"]} if primary else None),
+            "async_server_count": max(0, success_count - 1),
+            "broadcast_total": len(online_servers),
+            "broadcast_success_count": success_count,
+        },
+        msg=f"Player {player_obj.nucleus_id} banned on {success_count}/{len(online_servers)} server(s) for {reason}",
     )
 
 

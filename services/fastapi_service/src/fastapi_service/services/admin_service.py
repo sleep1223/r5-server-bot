@@ -10,22 +10,65 @@ from fastapi_service.core.cache import server_cache
 from .rcon import rcon_session
 
 
-async def kick_player_on_server(nucleus_id: int, reason: str, host: str, port: int, rcon_key: str, rcon_pwd: str) -> bool:
-    try:
-        async with rcon_session(host, port, rcon_key, rcon_pwd) as client:
-            return await client.kick(nucleus_id, f"#KICK_REASON_{reason}")
-    except Exception as e:
-        logger.error(f"Failed to kick player on {host}:{port}: {e}")
-        return False
+async def broadcast_kick_player(
+    nucleus_id: int,
+    reason: str,
+    servers: list[dict],
+    rcon_key: str,
+    rcon_pwd: str,
+    *,
+    per_server_timeout: float = 3.0,
+) -> tuple[int, dict | None]:
+    """在所有给定服务器并行 kickid，避免依赖可能过期的玩家位置缓存。
+
+    返回 (success_count, hit_server)。kick 仅在玩家所在服返回成功，
+    success_count 最多为 1。
+    """
+    if not servers:
+        return 0, None
+
+    async def _kick_one(s: dict) -> tuple[dict, bool]:
+        try:
+            async with rcon_session(s["server_host"], s["server_port"], rcon_key, rcon_pwd, timeout=per_server_timeout) as client:
+                ok = await client.kick(nucleus_id, f"#KICK_REASON_{reason}")
+                return s, ok
+        except Exception as e:
+            logger.warning(f"Broadcast kick failed on {s.get('server_key')}: {e}")
+            return s, False
+
+    results = await asyncio.gather(*[_kick_one(s) for s in servers])
+    hit = next((s for s, ok in results if ok), None)
+    return sum(1 for _, ok in results if ok), hit
 
 
-async def ban_player_on_server(nucleus_id: int, reason: str, host: str, port: int, rcon_key: str, rcon_pwd: str) -> bool:
-    try:
-        async with rcon_session(host, port, rcon_key, rcon_pwd) as client:
-            return await client.ban(nucleus_id, f"BAN_REASON_{reason}")
-    except Exception as e:
-        logger.error(f"Failed to ban player on {host}:{port}: {e}")
-        return False
+async def broadcast_bann_player(
+    nucleus_id: int,
+    reason: str,
+    servers: list[dict],
+    rcon_key: str,
+    rcon_pwd: str,
+    *,
+    per_server_timeout: float = 3.0,
+) -> tuple[int, list[dict]]:
+    """在所有给定服务器并行 bannid (= kickid + banid)。
+
+    返回 (success_count, hit_servers)。bann 在每台服务器上都会成功,
+    所以 hit_servers 一般等于 servers,success_count 用于反映真实落地情况。
+    """
+    if not servers:
+        return 0, []
+
+    async def _ban_one(s: dict) -> tuple[dict, bool]:
+        try:
+            async with rcon_session(s["server_host"], s["server_port"], rcon_key, rcon_pwd, timeout=per_server_timeout) as client:
+                ok = await client.bann(nucleus_id, f"#BAN_REASON_{reason}")
+                return s, ok
+        except Exception as e:
+            logger.warning(f"Broadcast ban failed on {s.get('server_key')}: {e}")
+            return s, False
+
+    results = await asyncio.gather(*[_ban_one(s) for s in servers])
+    return sum(1 for _, ok in results if ok), [s for s, ok in results if ok]
 
 
 async def unban_player_on_server(nucleus_id: int, host: str, port: int, rcon_key: str, rcon_pwd: str, *, timeout: float = 10.0) -> bool:
@@ -50,55 +93,16 @@ async def record_kick_offline(player: Player) -> None:
     await Player.filter(id=player.id).update(kick_count=F("kick_count") + 1)
 
 
+async def mark_status_kicked(player: Player) -> None:
+    await Player.filter(id=player.id).update(status="kicked")
+
+
 async def record_unban(nucleus_id: int) -> None:
     await Player.filter(nucleus_id=nucleus_id).update(status="offline")
     server_cache.clear_ban_location(nucleus_id)
 
 
 # ── Background tasks ──
-
-
-async def run_ban_on_servers_background(
-    *,
-    player_id: int,
-    nucleus_id: int,
-    reason: str,
-    operator_name: str,
-    servers: list[dict],
-    update_record_on_success: bool,
-    cache_server_on_first_success: bool,
-) -> None:
-    rcon_key = settings.r5_rcon_key
-    rcon_pwd = settings.r5_rcon_password
-    if not rcon_key or not rcon_pwd:
-        logger.error("Background ban aborted: RCON configuration missing")
-        return
-
-    success_count = 0
-    cached_server = False
-
-    for server in servers:
-        host = server["server_host"]
-        port = server["server_port"]
-        server_key = server["server_key"]
-        server_name = server.get("server_name") or server_key
-        try:
-            async with rcon_session(host, port, rcon_key, rcon_pwd) as client:
-                if await client.bann(nucleus_id, f"#BAN_REASON_{reason}"):
-                    success_count += 1
-                    if cache_server_on_first_success and not cached_server:
-                        server_cache.cache_ban_location(nucleus_id, server_name=server_name, server_host=host, server_port=port)
-                        cached_server = True
-        except Exception as e:
-            logger.error(f"Failed to ban player on {server_key}: {e}")
-
-    if update_record_on_success and success_count > 0:
-        player_obj = await Player.filter(id=player_id).first()
-        if player_obj:
-            await BanRecord.create(player=player_obj, reason=reason, operator=operator_name)
-            await Player.filter(id=player_id).update(ban_count=F("ban_count") + 1, status="banned")
-
-    logger.info(f"Background ban task finished for {nucleus_id}. success={success_count}/{len(servers)}")
 
 
 async def run_unban_on_servers_background(
@@ -131,29 +135,6 @@ async def run_unban_on_servers_background(
         server_cache.clear_ban_location(nucleus_id)
 
     logger.info(f"Background unban task finished for {nucleus_id}. success={success_count}/{len(servers)}")
-
-
-def schedule_ban_background(
-    *,
-    player_id: int,
-    nucleus_id: int,
-    reason: str,
-    operator_name: str,
-    servers: list[dict],
-    update_record_on_success: bool,
-    cache_server_on_first_success: bool,
-) -> None:
-    asyncio.create_task(
-        run_ban_on_servers_background(
-            player_id=player_id,
-            nucleus_id=nucleus_id,
-            reason=reason,
-            operator_name=operator_name,
-            servers=servers,
-            update_record_on_success=update_record_on_success,
-            cache_server_on_first_success=cache_server_on_first_success,
-        )
-    )
 
 
 def schedule_unban_background(*, player_id: int, nucleus_id: int, servers: list[dict]) -> None:
