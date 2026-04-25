@@ -251,8 +251,14 @@ class R5NetConsole:
         if reason:
             cmd += f' "{reason}"'
         resp = await self.exec_command(cmd)
-        # and added '1009201166937' to banned list
-        return f"added '{nucleus_id}' to banned list" in resp.lower()
+        resp_lower = resp.lower()
+        # 新增封禁成功
+        if f"added '{nucleus_id}' to banned list" in resp_lower:
+            return True
+        # 已经在封禁列表中,视为成功
+        if f"could not add '{nucleus_id}' to banned list" in resp_lower:
+            return True
+        return False
 
     async def unban(self, nucleus_id: str | int) -> bool:
         resp = await self.exec_command(f"unban {nucleus_id}")

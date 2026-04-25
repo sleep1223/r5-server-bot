@@ -61,7 +61,7 @@ async def broadcast_bann_player(
     async def _ban_one(s: dict) -> tuple[dict, bool]:
         try:
             async with rcon_session(s["server_host"], s["server_port"], rcon_key, rcon_pwd, timeout=per_server_timeout) as client:
-                ok = await client.ban(nucleus_id, f"#BAN_REASON_{reason}")
+                ok = await client.bann(nucleus_id, f"#BAN_REASON_{reason}")
                 return s, ok
         except Exception as e:
             logger.warning(f"Broadcast ban failed on {s.get('server_key')}: {e}")
