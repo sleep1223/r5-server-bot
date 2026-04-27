@@ -56,11 +56,16 @@ async def broadcast_bann_player(
     - 玩家所在服 (online_server_key) 使用 banid (= kickid + banid),要求玩家在线;
     - 其他服使用 bannid,仅加入封禁名单。
     若未指定 online_server_key,所有服一律走 bannid。
+    若指定了 online_server_key 但该服不在 servers 中(缓存过期或被过滤),
+    则所有服走 bannid,并额外对每台服调用一次 kickid 以确保玩家被踢出。
 
     返回 (success_count, hit_servers)。
     """
     if not servers:
         return 0, []
+
+    online_server_present = online_server_key is not None and any(s.get("server_key") == online_server_key for s in servers)
+    need_extra_kick = online_server_key is not None and not online_server_present
 
     async def _ban_one(s: dict) -> tuple[dict, bool]:
         is_online_server = online_server_key is not None and s.get("server_key") == online_server_key
@@ -70,6 +75,8 @@ async def broadcast_bann_player(
                     ok = await client.ban(nucleus_id, f"#BAN_REASON_{reason}")
                 else:
                     ok = await client.bann(nucleus_id, f"#BAN_REASON_{reason}")
+                    if need_extra_kick:
+                        await client.kick(nucleus_id, f"#KICK_REASON_{reason}")
                 return s, ok
         except Exception as e:
             logger.warning(f"Broadcast ban failed on {s.get('server_key')}: {e}")
