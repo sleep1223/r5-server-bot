@@ -140,8 +140,10 @@ async def ban_player(
 
     # 不依赖可能过期的位置缓存:并行 bann (= kickid + banid) 所有在线服务器,
     # 这样玩家在哪台服都会被踢出,封禁列表也同步落地。
+    online_server_key = f"{target_loc['server_host']}:{target_loc['server_port']}" if target_loc else None
     success_count, hits = await admin_service.broadcast_bann_player(
         player_obj.nucleus_id, reason, online_servers, rcon_key, rcon_pwd,
+        online_server_key=online_server_key,
     )
 
     if success_count == 0:

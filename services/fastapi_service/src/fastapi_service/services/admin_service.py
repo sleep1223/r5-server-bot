@@ -49,19 +49,27 @@ async def broadcast_bann_player(
     rcon_pwd: str,
     *,
     per_server_timeout: float = 3.0,
+    online_server_key: str | None = None,
 ) -> tuple[int, list[dict]]:
-    """在所有给定服务器并行 bannid (= kickid + banid)。
+    """在所有给定服务器并行封禁。
 
-    返回 (success_count, hit_servers)。bann 在每台服务器上都会成功,
-    所以 hit_servers 一般等于 servers,success_count 用于反映真实落地情况。
+    - 玩家所在服 (online_server_key) 使用 banid (= kickid + banid),要求玩家在线;
+    - 其他服使用 bannid,仅加入封禁名单。
+    若未指定 online_server_key,所有服一律走 bannid。
+
+    返回 (success_count, hit_servers)。
     """
     if not servers:
         return 0, []
 
     async def _ban_one(s: dict) -> tuple[dict, bool]:
+        is_online_server = online_server_key is not None and s.get("server_key") == online_server_key
         try:
             async with rcon_session(s["server_host"], s["server_port"], rcon_key, rcon_pwd, timeout=per_server_timeout) as client:
-                ok = await client.bann(nucleus_id, f"#BAN_REASON_{reason}")
+                if is_online_server:
+                    ok = await client.ban(nucleus_id, f"#BAN_REASON_{reason}")
+                else:
+                    ok = await client.bann(nucleus_id, f"#BAN_REASON_{reason}")
                 return s, ok
         except Exception as e:
             logger.warning(f"Broadcast ban failed on {s.get('server_key')}: {e}")
