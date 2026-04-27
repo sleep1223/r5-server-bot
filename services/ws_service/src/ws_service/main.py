@@ -34,13 +34,14 @@ def _sink_milestone(message) -> None:
 
 
 def _configure_logging() -> None:
+    log_level = (settings.log_level or "INFO").upper()
     logger.remove()
     if is_interactive():
         # TTY 下 stderr 会被 rich.Live 持续覆盖，把 loguru 路由进仪表盘 milestones
         logger.add(_sink_milestone, level="WARNING", format="{message}")
         logger.add(
             "logs/ws_service.log",
-            level="DEBUG",
+            level=log_level,
             rotation="50 MB",
             retention=5,
             enqueue=True,
@@ -51,10 +52,10 @@ def _configure_logging() -> None:
         logger.add(
             sys.stderr,
             format=("<green>{time:HH:mm:ss}</green> <level>{level: <7}</level> <level>{message}</level>"),
-            level="INFO",
+            level=log_level,
             colorize=True,
         )
-    logging.basicConfig(handlers=[_InterceptHandler()], level=logging.INFO, force=True)
+    logging.basicConfig(handlers=[_InterceptHandler()], level=getattr(logging, log_level, logging.INFO), force=True)
 
 
 async def _run() -> None:
