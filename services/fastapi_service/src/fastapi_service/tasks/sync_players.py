@@ -154,8 +154,10 @@ async def sync_players_task() -> None:
                             ip_info_map[i.ip] = i
                     active_keys: set[str] = set()
                     online_nucleus_ids: set[str] = set()
-                    any_server_failed = False
+                    failed_servers: list[str] = []
                     per_server_timeout = float(getattr(settings, "r5_rcon_per_server_timeout", 15))
+                    sync_start = datetime.now()
+                    logger.info(f"开始同步玩家: {len(filtered_servers)} 个服务器")
                     for s in filtered_servers:
                         s_ip = s.get("ip")
                         try:
@@ -171,17 +173,23 @@ async def sync_players_task() -> None:
                                 timeout=per_server_timeout,
                             )
                         except TimeoutError:
-                            logger.error(f"Syncing {server_key} exceeded {per_server_timeout}s, skipping")
-                            any_server_failed = True
+                            failed_servers.append(f"{server_key}(timeout)")
                             continue
                         except Exception as e:
-                            logger.error(f"Error syncing players from {server_key}: {e}")
-                            any_server_failed = True
+                            failed_servers.append(f"{server_key}({e})")
                             continue
                         active_keys.add(server_key)
                         # 单服成功后立刻写入缓存，避免被后续慢服务器拖住
                         server_cache.set_server(server_key, status_data)
                     server_cache.retain_servers(active_keys)
+                    any_server_failed = bool(failed_servers)
+                    elapsed_ms = int((datetime.now() - sync_start).total_seconds() * 1000)
+                    if failed_servers:
+                        logger.warning(
+                            f"同步玩家: 成功 {len(active_keys)}/{len(filtered_servers)}, 耗时 {elapsed_ms}ms, 失败: {', '.join(failed_servers)}"
+                        )
+                    else:
+                        logger.info(f"同步玩家: 成功 {len(active_keys)}/{len(filtered_servers)}, 耗时 {elapsed_ms}ms")
                     if not any_server_failed:
                         for p in all_players:
                             if p.nucleus_id and str(p.nucleus_id) not in online_nucleus_ids:
