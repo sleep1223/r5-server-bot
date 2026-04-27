@@ -28,7 +28,7 @@ class R5NetConsole:
         self._read_task: asyncio.Task[None] | None = None
 
     async def connect(self, timeout: float = 10.0) -> bool:
-        logger.info(f"正在连接到 {self.host}:{self.port}...")
+        logger.debug(f"正在连接到 {self.host}:{self.port}...")
         try:
             self.reader, self.writer = await asyncio.wait_for(asyncio.open_connection(self.host, self.port), timeout=timeout)
         except TimeoutError:
@@ -36,7 +36,7 @@ class R5NetConsole:
             raise
         # 不要在此时启动后台读取器，以避免与 authenticate() 发生竞争条件
         self.connected = True
-        logger.success("已连接。")
+        logger.debug(f"{self.host}:{self.port} 已连接。")
         return True
 
     async def close(self) -> None:
@@ -49,7 +49,7 @@ class R5NetConsole:
         if self.writer:
             self.writer.close()
             await self.writer.wait_closed()
-        logger.info("连接已关闭。")
+        logger.debug(f"{self.host}:{self.port} 连接已关闭。")
 
     def _encrypt(self, data: bytes) -> tuple[bytes, bytes]:
         """返回 (encrypted_data, iv)"""
@@ -157,7 +157,7 @@ class R5NetConsole:
 
     async def authenticate_and_start(self, password: str, timeout: float = 5.0) -> bool:
         # 我们需要在启动后台读取器之前手动处理认证
-        logger.info("正在认证...")
+        logger.debug(f"{self.host}:{self.port} 正在认证...")
         await self.send_request(netcon_pb2.SERVERDATA_REQUEST_AUTH, password)
 
         try:
@@ -172,10 +172,9 @@ class R5NetConsole:
                 val = 0
 
             if val == 0:
-                logger.info("正在启用控制台日志...")
                 await self.send_request(netcon_pb2.SERVERDATA_REQUEST_SEND_CONSOLE_LOG, "", "1")
 
-            logger.success(f"认证成功: {resp.responseMsg}")
+            logger.debug(f"{self.host}:{self.port} 认证成功: {resp.responseMsg}")
 
             # 现在启动后台读取器
             self._read_task = asyncio.create_task(self._background_reader())
