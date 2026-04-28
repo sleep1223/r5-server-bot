@@ -79,8 +79,9 @@ def parse_short_name(full_name: str) -> str:
 
 
 def check_is_admin(credentials: HTTPAuthorizationCredentials | None, access_tokens: list[str] | None) -> bool:
+    """未配置 access_tokens 时 fail-closed 返回 False，避免在未配置环境暴露 admin 字段。"""
     if not access_tokens:
-        return True
+        return False
     if credentials and credentials.credentials in access_tokens:
         return True
     return False
