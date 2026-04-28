@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     qqwry_path: str = "services/fastapi_service/data/qqwry.dat"
     launcher_config_path: str = "services/fastapi_service/data/launcher_config.toml"
     launcher_update_path: str = "services/fastapi_service/data/launcher_update.toml"
+    # 启动器最新版本号优先来源：GitHub Releases。失败或未配置时回退到 launcher_update.toml 的 latest
+    launcher_github_repo: str = "sleep1223/r5r-cn-launcher"
+    launcher_github_fetch_interval: int = 600
 
     # Match tracking settings
     # 活跃 match 超过此秒数未关闭即标记为 abandoned（safety net，典型 BR 一场 ~25min）

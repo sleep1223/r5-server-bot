@@ -8,6 +8,7 @@ from loguru import logger
 from shared_lib.config import settings
 
 from fastapi_service.core.response import success
+from fastapi_service.tasks.fetch_launcher_version import launcher_version_cache
 
 router = APIRouter()
 
@@ -31,8 +32,12 @@ def _parse_version(v: str) -> tuple[int, ...]:
 
 
 def _resolve_latest(data: dict) -> tuple[str, dict | None]:
-    """解析最新版本号和对应的版本信息，如果 latest 在 versions 中找不到则 fallback 到第一个条目并替换版本号"""
-    latest_version = data.get("latest", "")
+    """解析最新版本号和对应的版本信息，如果 latest 在 versions 中找不到则 fallback 到第一个条目并替换版本号。
+
+    版本号优先来源：GitHub Releases 缓存（由 fetch_launcher_version_task 维护），
+    缺失时回退到 TOML 里的 `latest` 字段。
+    """
+    latest_version = launcher_version_cache.get() or data.get("latest", "")
     versions: list[dict] = data.get("versions", [])
     if not latest_version and not versions:
         return "", None
