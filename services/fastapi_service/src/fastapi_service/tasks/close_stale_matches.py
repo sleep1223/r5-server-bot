@@ -5,17 +5,19 @@ from loguru import logger
 from shared_lib.config import settings
 from shared_lib.models import Match, PlayerKilled
 
-from fastapi_service.services.ingest_service import _ACTIVE_MATCH_BY_SERVER
-
 
 async def _close_one(match: Match, ended_at: datetime, *, status: str, reason: str) -> bool:
-    """CAS 关闭指定 match；返回是否更新成功。"""
+    """CAS 关闭指定 match；返回是否更新成功。
+
+    注意：本任务跑在主 app 进程，而 `_ACTIVE_MATCH_BY_SERVER` 缓存在 ingest 进程，
+    跨进程不共享。这里只依赖 DB CAS；ingest 进程的缓存会在下一次事件到达时
+    通过 `_load_active_match` 回源 DB 自我修正。
+    """
     rows = await Match.filter(id=match.id, status="active").update(
         status=status,
         ended_at=ended_at,
         end_reason=reason,
     )
-    _ACTIVE_MATCH_BY_SERVER.pop(match.server_id, None)
     if rows:
         logger.info(
             f"Match {status}: id={match.id}, full_match_id={match.full_match_id}, "

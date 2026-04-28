@@ -6,7 +6,6 @@ from shared_lib.config import settings
 from shared_lib.models import GameStateChanged, Match, PlayerKilled
 
 from fastapi_service.services.ingest_service import (
-    _ACTIVE_MATCH_BY_SERVER,
     _synthesize_match,
     _ts_to_dt,
 )
@@ -79,7 +78,9 @@ async def _run_once(grace_cutoff: datetime) -> None:
                 continue
             match = await _synthesize_match(server, row["timestamp"])
             if match:
-                _ACTIVE_MATCH_BY_SERVER[sid] = match.id
+                # 注：本任务在主 app 进程，无法直接更新 ingest 进程的
+                # _ACTIVE_MATCH_BY_SERVER 缓存。ingest 进程下次事件触发
+                # `_load_active_match` 时会从 DB 回源修正。
                 logger.info(
                     f"reconcile: synth match id={match.id} server_id={sid} "
                     f"(last game_state=Playing @ {row['created_at']})"
