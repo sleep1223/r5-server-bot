@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 from loguru import logger
@@ -23,44 +23,48 @@ async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
         return
 
     seen_hosts: set[str] = set()
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
 
     for raw in raw_list:
-        ip = str(raw.get("ip") or "").strip()
-        if not ip:
+        try:
+            ip = str(raw.get("ip") or "").strip()
+            if not ip:
+                continue
+            seen_hosts.add(ip)
+
+            port = _safe_int(raw.get("port"), settings.ws_public_port or 37015)
+            full_name = raw.get("name") or f"server-{ip}"
+            short_name = parse_short_name(full_name) or None
+
+            defaults = {
+                "port": port,
+                "name": full_name,
+                "region": raw.get("region"),
+                "netkey": raw.get("key"),
+                "playlist": raw.get("playlist"),
+                "map": raw.get("map"),
+                "player_count": _safe_int(raw.get("playerCount") or raw.get("numPlayers")),
+                "max_players": _safe_int(raw.get("maxPlayers")),
+                "ping": _safe_int(raw.get("ping")),
+                "has_status": True,
+                "last_seen_at": now,
+            }
+
+            server, created = await Server.get_or_create(host=ip, defaults=defaults)
+            if created:
+                # 新行顺手补一个默认 short_name，避免用户必须手工设置后才能搜中文
+                if short_name and not server.short_name:
+                    server.short_name = short_name
+                    await server.save(update_fields=["short_name", "updated_at"])
+                continue
+
+            # 已存在：更新 fetcher 拥有的字段，保留 short_name / is_self_hosted
+            for field, value in defaults.items():
+                setattr(server, field, value)
+            await server.save(update_fields=[*defaults.keys(), "updated_at"])
+        except Exception as e:
+            logger.warning(f"upsert server row failed (ip={raw.get('ip')!r}): {e}")
             continue
-        seen_hosts.add(ip)
-
-        port = _safe_int(raw.get("port"), settings.ws_public_port or 37015)
-        full_name = raw.get("name") or f"server-{ip}"
-        short_name = parse_short_name(full_name) or None
-
-        defaults = {
-            "port": port,
-            "name": full_name,
-            "region": raw.get("region"),
-            "netkey": raw.get("key"),
-            "playlist": raw.get("playlist"),
-            "map": raw.get("map"),
-            "player_count": _safe_int(raw.get("playerCount") or raw.get("numPlayers")),
-            "max_players": _safe_int(raw.get("maxPlayers")),
-            "ping": _safe_int(raw.get("ping")),
-            "has_status": True,
-            "last_seen_at": now,
-        }
-
-        server, created = await Server.get_or_create(host=ip, defaults=defaults)
-        if created:
-            # 新行顺手补一个默认 short_name，避免用户必须手工设置后才能搜中文
-            if short_name and not server.short_name:
-                server.short_name = short_name
-                await server.save(update_fields=["short_name", "updated_at"])
-            continue
-
-        # 已存在：更新 fetcher 拥有的字段，保留 short_name / is_self_hosted
-        for field, value in defaults.items():
-            setattr(server, field, value)
-        await server.save(update_fields=[*defaults.keys(), "updated_at"])
 
     if seen_hosts:
         # 未在本次列表出现的活跃行翻 False
