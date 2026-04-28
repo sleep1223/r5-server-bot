@@ -131,7 +131,7 @@ async def handle_check_kd(event: Event, args: Message = CommandArg()) -> None:
         sort = "deaths"
 
     try:
-        resp = await api_client.get_player_vs_all(target, sort=sort, server=server_arg, timeout=3.0)
+        resp = await api_client.get_player_vs_all(target, sort=sort, server=server_arg, range_type="month", timeout=3.0)
 
         if resp.status_code != 200:
             await check_kd.finish(f"❌ 查询失败: HTTP {resp.status_code}")
