@@ -3,6 +3,7 @@ import asyncio
 from loguru import logger
 
 from .close_stale_matches import close_stale_matches_task
+from .fetch_launcher_version import fetch_launcher_version_task
 from .fetch_servers import fetch_server_list_raw_task
 from .reconcile_matches import reconcile_matches_task
 from .resolve_ips import ip_resolution_task
@@ -22,6 +23,7 @@ class TaskScheduler:
             asyncio.create_task(ip_resolution_task()),
             asyncio.create_task(close_stale_matches_task()),
             asyncio.create_task(reconcile_matches_task()),
+            asyncio.create_task(fetch_launcher_version_task()),
         ]
         logger.info(f"Started {len(self._tasks)} background tasks")
 
