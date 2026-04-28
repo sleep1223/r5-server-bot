@@ -1,4 +1,5 @@
 import asyncio
+import time
 from collections import OrderedDict
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -245,8 +246,12 @@ async def _insert_match(
     started_at = _ts_to_dt(ts)
     local = started_at.astimezone(_CN_TZ)
     base_id = f"{server.host}-{local:%Y%m%d-%H%M%S}"
+    # 重试后缀使用 ms 级时间戳，避免与同秒内"上一局"的递增后缀撞车
     for attempt in range(5):
-        candidate = base_id if attempt == 0 else f"{base_id}-{attempt}"
+        if attempt == 0:
+            candidate = base_id
+        else:
+            candidate = f"{base_id}-{int(time.time() * 1000) % 1000000}"
         try:
             match = await Match.create(
                 full_match_id=candidate,
@@ -371,36 +376,42 @@ async def process_batch(batch: IngestBatch) -> IngestResult:
         logger.warning(f"重复批次忽略: batch_id={batch.batch_id}, events={len(batch.events)}")
         return IngestResult(batch_id=batch.batch_id, accepted=0, duplicated=True)
 
-    async with _BATCH_LOCK:
-        server = await _resolve_server(batch.server)
-        player_infos = _collect_players(batch)
-        player_map = await _bulk_upsert_players(player_infos)
+    try:
+        async with _BATCH_LOCK:
+            server = await _resolve_server(batch.server)
+            player_infos = _collect_players(batch)
+            player_map = await _bulk_upsert_players(player_infos)
 
-        active_match = await _load_active_match(server.id)
+            active_match = await _load_active_match(server.id)
 
-        pending: dict[type, list] = {}
+            pending: dict[type, list] = {}
 
-        def queue(instance) -> None:
-            pending.setdefault(type(instance), []).append(instance)
+            def queue(instance) -> None:
+                pending.setdefault(type(instance), []).append(instance)
 
-        # 按 timestamp 排序，确保 Match 状态机按时间推进（ws_service 批次内通常已序，兜底）
-        sorted_events = sorted(batch.events, key=lambda e: e.timestamp)
+            # 按 timestamp 排序，确保 Match 状态机按时间推进（ws_service 批次内通常已序，兜底）
+            sorted_events = sorted(batch.events, key=lambda e: e.timestamp)
 
-        for event in sorted_events:
-            active_match = await _dispatch_event(event, server, player_map, queue, active_match)
+            for event in sorted_events:
+                active_match = await _dispatch_event(event, server, player_map, queue, active_match)
 
-        total = 0
-        for model_cls, instances in pending.items():
-            if not instances:
-                continue
-            try:
-                await model_cls.bulk_create(instances)
-                total += len(instances)
-            except Exception as exc:
-                logger.error(f"bulk_create {model_cls.__name__} 失败: {exc}")
-                raise
-        logger.info(f"ingest batch {batch.batch_id} 接收 {total}/{len(batch.events)} 条记录")
-        return IngestResult(batch_id=batch.batch_id, accepted=total)
+            total = 0
+            for model_cls, instances in pending.items():
+                if not instances:
+                    continue
+                try:
+                    await model_cls.bulk_create(instances)
+                    total += len(instances)
+                except Exception as exc:
+                    logger.error(f"bulk_create {model_cls.__name__} 失败: {exc}")
+                    raise
+            logger.info(f"ingest batch {batch.batch_id} 接收 {total}/{len(batch.events)} 条记录")
+            return IngestResult(batch_id=batch.batch_id, accepted=total)
+    except Exception:
+        # 处理失败 → 撤销去重标记，让上游重试时不被静默丢弃。
+        # 注意 Match 状态机的 CAS 副作用已落库，重试时 _load_active_match 会取到最新状态。
+        _SEEN_BATCH_IDS.pop(batch.batch_id, None)
+        raise
 
 
 def _lookup(player_map: dict[str, Player], info: PlayerInfo | None) -> Player | None:
