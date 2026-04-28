@@ -93,7 +93,10 @@ def list_servers(
 
         if status:
             players_data = status.get("players") or []
-            entry["player_count"] = len(players_data)
+            # 只有当 RCON 真的解析到玩家表（即使表里 0 人）时才用 RCON 的数；
+            # 解析失败/超时（players_parsed=False）回退到 raw playerCount，避免误报 0
+            players_parsed = bool(status.get("players_parsed"))
+            entry["player_count"] = len(players_data) if players_parsed else raw_player_count
             entry["max_players"] = status.get("max_players") or raw_max_players
             entry["ping"] = status.get("server_ping", 0)
             entry["country"] = status.get("country")
