@@ -2,163 +2,135 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Overview
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
-R5-Server-Bot is a Python monorepo for managing R5 Reloaded (Apex Legends) game servers. It ingests LiveAPI events via WebSocket, exposes an HTTP API for server/player data, and provides a chat bot interface (QQ/Kaiheila) for player queries and admin commands.
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
-## Common Commands
+## 1. Think Before Coding
 
-```bash
-# Install all workspace dependencies
-uv sync --all-packages
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
 
-# Run services (each in a separate terminal)
-uv run python -m ws_service.main        # WebSocket ingest service
-uv run python -m fastapi_service.main   # FastAPI HTTP API service
-cd services/nonebot_service && uv sync && nb run  # NoneBot chat bot
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
 
-# Code quality
-uv run ruff check .       # Lint
-uv run ruff format .      # Format
-cd services/nonebot_service && uv run basedpyright  # Type-check NoneBot code
+## 2. Simplicity First
 
-# Tests (no test suite committed yet; if added)
-uv run pytest
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
 ```
 
-## Architecture
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
-Three services share a common library through a `uv` workspace:
+---
 
-```
-shared_lib (packages/shared_lib)
-  ├── Config (pydantic-settings, loads from env/.env)
-  ├── Database (Tortoise ORM async, SQLite dev / PostgreSQL prod)
-  ├── Models: Player, events (PlayerKilled, PlayerConnected, etc.), IpInfo, Donation, BanRecord
-  └── Utilities: IP geolocation (qqwry), KD leaderboard calculations, RCON netcon client, protobuf defs
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
 
-ws_service → WebSocket server receiving LiveAPI protobuf events, persisting to DB
-fastapi_service → HTTP API + background tasks (server list polling, IP resolution, player sync)
-nonebot_service → NoneBot 2 chat bot plugins calling fastapi_service over HTTP
-```
+---
 
-**Key data flow:** LiveAPI events → ws_service → DB ← fastapi_service (API + background tasks) ← nonebot_service (chat commands)
+## 项目概览
 
-## Workspace Layout
+R5 Reloaded 游戏服务器的运维 / 战绩 bot，是一个 uv 管理的 Python 3.12 monorepo（NoneBot 插件子项目使用 3.10+），由三个独立运行的服务 + 一个共享库组成：
 
-- **`packages/shared_lib/`** — shared config, DB models, migrations (Aerich), utilities. Cross-service logic goes here.
-- **`services/ws_service/`** — WebSocket LiveAPI listener. Entry: `ws_service.main`.
-- **`services/fastapi_service/`** — FastAPI app with bearer-token auth, caches, background tasks. Entry: `fastapi_service.main`.
-- **`services/nonebot_service/`** — **Separate from the uv workspace** (has its own `pyproject.toml` and `uv.lock`). Uses NoneBot 2 with OneBot and Kaiheila adapters.
+- `services/ws_service` — 监听游戏服务端 LiveAPI WebSocket（`liveapi.cfg`），解析 protobuf 事件，批量上报到 FastAPI 的 ingest 子进程；TTY 下用 rich.Live 渲染 dashboard。
+- `services/fastapi_service` — 主 HTTP API（Granian, `workers=1`），路由前缀 `/r5`，包含查询、管理、leaderboard、对局、捐赠、launcher、Steam/Pylon 鉴权等。后台任务：拉取远程服务器列表、RCON 同步玩家、IP 解析、stale match 关闭、match 对账。
+- `services/fastapi_service` 的 `ingest_main:app` — **独立 Granian 进程**（端口默认 8010），只挂 `/v1/r5/ingest/*`，靠 `workers=1` 保证去重 LRU 与 batch 锁全局唯一；schema 由主 app 生成，ingest 进程 `init_db(generate_schemas=False)`。
+- `services/nonebot_service` — OneBot V11 适配的 QQ 机器人（`uv` workspace 中**已排除**，需独立 `uv sync`）；通过 HTTP 调主 FastAPI；插件目录 `src/plugins/r5/services/{kd,match,query,status,team,weapons,binding,donation,admin,friend,help}.py`。
+- `packages/shared_lib` — 跨服务的 `config.Settings`（pydantic-settings，从 `env/.env` 读取）、Tortoise ORM `models.py`、`schemas/ingest.py`（ingest payload 协议）、`utils/netcon_client.py`（RCON）、protobuf 生成的 `utils/protos`。
 
-## Important Conventions
+数据流：游戏服 →(WS/LiveAPI)→ `ws_service` →(HTTP batch + Bearer token)→ `fastapi_service ingest 进程` →(Tortoise ORM)→ DB ←(查询)— `fastapi_service 主进程` ←(httpx)— `nonebot_service` ←(OneBot)— QQ。
 
-- **Line length:** 200 (root workspace via `ruff.toml`), 88 (`nonebot_service` local config).
-- **Naming:** `snake_case` for modules/functions/variables, `PascalCase` for classes, `UPPER_SNAKE_CASE` for constants.
-- **Type hints** required for new/changed code.
-- **Imports** must be sorted (ruff rule `I`).
-- **Protobuf files** (`*_pb2.py`, `*_pb2.pyi`) are generated — excluded from linting.
-- **Commits:** `type(scope): summary` — types: `feat`, `fix`, `refactor`, `docs`.
-- **Secrets:** Never commit `.env` files; only `*.env.example` templates.
+## 关键架构约束
 
-## Database & Migrations
+- **Granian `workers=1` 不可改**：进程内 `server_cache`、`_ACTIVE_MATCH_BY_SERVER`、ingest 去重 LRU、后台 scheduler 都依赖单进程共享状态，多 worker 会裂脑或重复执行。
+- **Ingest 拆独立进程**：主 API 与 ingest 必须分别启动，DDL 只在主 app `init_db()` 中执行，ingest 仅连库。
+- **配置中心化**：所有可调参数都在 `shared_lib/config.py` 的 `Settings`，通过 `env/.env` 覆盖；新增配置先加这里，不要在服务里散落硬编码。
+- **数据库迁移**：使用 aerich，配置在根 `pyproject.toml` 的 `[tool.aerich]`，迁移文件在 `packages/shared_lib/migrations/models/`；新建迁移：`uv run aerich migrate --name <name>`，应用：`uv run aerich upgrade`。
+- **NoneBot 子项目独立依赖图**：根 `pyproject.toml` 的 `[tool.uv.workspace]` 显式 `exclude` 了 `nonebot_service`，因为 NoneBot 生态需要 py3.10+ 与不同的依赖；改完根包后若 nonebot 端要更新还需 `cd services/nonebot_service && uv sync`。
+- **统计排除规则**：无规则 / 纯娱乐服通过 `no_cover_allowed_server_*` 与 `kd_excluded_server_hosts` 配置过滤，写战绩 / 风控逻辑时记得先查 settings。
+- **proto / qqwry / jwt key 等数据文件**：路径都来自 `Settings`（如 `qqwry_path`、`jwt_private_key_path`），不要写死。
 
-- ORM: Tortoise ORM (async) with asyncpg for PostgreSQL.
-- Migrations: Aerich, configured in root `pyproject.toml` (`tortoise_orm = "shared_lib.database.TORTOISE_ORM"`).
-- Migration files: `packages/shared_lib/migrations/`.
-- Settings class in `packages/shared_lib/src/shared_lib/config.py` — loads from `env/.env`.
+## 常用命令
 
-## FastAPI Service Details
-
-- Authentication: `HTTPBearer` with token list from `settings.fastapi_access_tokens`.
-- Background tasks started in lifespan: server list fetch (5s interval), IP resolution, player sync.
-- Caches in `api/v1/r5/cache.py`: `global_server_cache`, `raw_server_response_cache`, `banned_player_server_cache`.
-- Bot API routes under `/v1/r5/` — endpoints for server info, player queries, KD stats, weapon stats, bans/kicks, donations.
-- **Pylon master-server routes under `/v1/`** (no `/r5` prefix) — implement the
-  R5 SDK master-server protocol so this service can act as the auth backend
-  for game clients/servers. See *Pylon / Steam Authentication* below.
-
-## Pylon / Steam Authentication
-
-The bot doubles as a minimal R5 master server that hands out RS256 JWTs after
-verifying a Steam `AuthSessionTicket`. Game servers verify the JWT locally
-against the public key served by `/server/auth/keyinfo`. Two layers:
-
-- `services/fastapi_service/src/fastapi_service/services/`
-  - `steam_auth_service.py` — calls Steam Web API
-    `ISteamUserAuth/AuthenticateUserTicket/v1` (with one auto-retry on
-    "Invalid ticket") and optionally fetches the persona name.
-  - `jwt_auth_service.py` — RS256 signing + public-key distribution; computes
-    `sessionId = sha256(f"{userId}-{playerName}-{serverEndpoint}")` so the
-    game server's `CClient::Authenticate` validation matches.
-  - `pylon_db_service.py` — `SteamAuthLog` audit writer + ban lookup against
-    the existing `Player` / `BanRecord` tables (currently keyed off
-    `Player.nucleus_id`; Steam-only users will simply miss until a future
-    `Player.steam_id` field is added).
-- `services/fastapi_service/src/fastapi_service/api/v1/pylon.py` — exposes:
-  - `POST /v1/client/auth`           — Steam ticket → JWT (canonical path)
-  - `POST /v1/client/authenticate`   — legacy r5r_sdk alias (accepts `id` as
-    a JSON number too)
-  - `POST /v1/server/auth/keyinfo`   — JWT public-key distribution; honours
-    `keyHash` for the no-change short-circuit at `pylon.cpp:504`
-  - `POST /v1/banlist/isBanned`      — single-player ban check used per
-    connect by r5r_sdk dedis
-  - `POST /v1/banlist/bulkCheck`     — periodic bulk ban check
-  - `POST /v1/eula`                  — EULA shim; clients gate every other
-    pylon call on this passing
-  - `POST /v1/servers/add`           — dedicated-server keep-alive shim
-    (echoes `ip`/`port`; optional `token` for hidden servers)
-
-After the reverse proxy strips `/api`, these endpoints live at
-`https://r5.sleep0.de/api/v1/...`.
-
-### Required configuration
-
-In `env/.env`:
-
-```ini
-steam_web_api_key="<get one at https://steamcommunity.com/dev/apikey>"
-steam_app_id="480"  # use the real app id in production
-jwt_private_key_path="services/fastapi_service/data/jwt_private.pem"
-jwt_public_key_path="services/fastapi_service/data/jwt_public.pem"
-jwt_token_ttl_seconds=30
-pylon_default_server_port=37015
+依赖管理（所有命令在仓库根执行，除 nonebot 外）：
+```shell
+uv sync --all-packages          # 安装 workspace 全部包
+cd services/nonebot_service && uv sync   # nonebot 子项目独立同步
 ```
 
-Generate the JWT keypair once on the deploy host:
-
-```bash
-openssl genpkey -algorithm RSA -out services/fastapi_service/data/jwt_private.pem -pkeyopt rsa_keygen_bits:2048
-openssl rsa -in services/fastapi_service/data/jwt_private.pem -pubout -out services/fastapi_service/data/jwt_public.pem
-chmod 600 services/fastapi_service/data/jwt_private.pem
+启动三个服务（分别在三个终端）：
+```shell
+uv run python -m ws_service.main                  # WS 监听
+uv run python -m fastapi_service.main             # 主 API（同时也启动 ingest 由用户另起，或用 ingest_main）
+uv run python -m fastapi_service.ingest_main      # ingest 子进程（按需）
+cd services/nonebot_service && nb run             # NoneBot
 ```
 
-The keypair powers both `/server/auth/keyinfo` (returns the public key,
-base64-encoded, with `keyHash = sha256(pem)`) and `/client/auth` (signs
-short-lived JWTs with the private key). Rotate by replacing both files; the
-service hot-reloads on file mtime change.
+数据库迁移（aerich）：
+```shell
+uv run aerich migrate --name <desc>
+uv run aerich upgrade
+uv run aerich history
+```
 
-### Database
+代码质量：
+```shell
+uv run ruff check .             # lint（根 ruff.toml: E/F/I, line-length=200, F401 unfixable）
+uv run ruff format .            # 格式化
+uv run basedpyright             # 类型检查（standard 模式，nonebot 子项目排除）
+```
+nonebot 子项目自带更严格的 ruff 配置（pyproject `[tool.ruff]`），改 `services/nonebot_service` 时在该目录下跑 `uv run ruff check .`。
 
-`SteamAuthLog` (table `steam_auth_log`) is added by migration
-`packages/shared_lib/migrations/models/10_20260411150000_steam_auth_log.py`.
-On first boot `Tortoise.generate_schemas()` will create the table for fresh
-DBs; existing prod DBs need `aerich upgrade` (or running the migration's
-SQL manually).
+打包发布：
+```shell
+./pack.sh         # 全量打包到 r5-server-bot.zip
+./pack.sh ws      # 仅打包 ws_service + shared_lib
+```
 
-### Compatibility matrix
+## 编辑提示
 
-- **r5v_sdk** (Steam-native, hardcoded JWT public key in
-  `engine/client/client.cpp:81`) — use `/v1/client/auth`. The SDK's hardcoded
-  public key must match the one served at `/v1/server/auth/keyinfo`, so
-  either align keys with r5v upstream or recompile r5v_sdk with your own.
-- **r5r_sdk** (Origin legacy, fetches public key at runtime) — call
-  `/v1/client/authenticate` and `/v1/server/auth/keyinfo`. Requires the
-  per-client Steam plugin DLL described in the project's docs to actually
-  send a Steam ticket; otherwise this endpoint is unused.
-
-## NoneBot Service Details
-
-- Runs independently from the main workspace — `cd services/nonebot_service` before any uv/nb commands.
-- Communicates with FastAPI service via `R5ApiClient` (HTTP client in `api_client.py`).
-- Plugin services in `src/plugins/r5/services/`: admin, donation, help, kd, query, status, weapons.
+- 改 ingest 协议 → 同步 `packages/shared_lib/src/shared_lib/schemas/ingest.py` 与 `services/fastapi_service/.../api/v1/ingest.py` 两端。
+- 新增 FastAPI 路由 → 在 `api/v1/` 下加文件，并在 `api/v1/router.py` 用 `include_router` 注册（注意 ingest 路由不在主 router 里，挂在 `ingest_main`）。
+- 新增 NoneBot 指令 → 在 `services/nonebot_service/src/plugins/r5/services/` 下加模块，并在 `plugins/r5/__init__.py` 末尾的 `from .services import ...` 与 `__all__` 中加上；通过 `api_client.py` 调主 API。
+- 新增后台任务 → 在 `fastapi_service/tasks/` 下加，并在 `tasks/scheduler.py` 中注册；周期参数走 `Settings`。
+- 修改模型 → 编辑 `shared_lib/models.py` 后必须 `aerich migrate`。
