@@ -73,6 +73,10 @@ async def broadcast_bann_player(
             async with rcon_session(s["server_host"], s["server_port"], rcon_key, rcon_pwd, timeout=per_server_timeout) as client:
                 if is_online_server:
                     ok = await client.ban(nucleus_id, f"#BAN_REASON_{reason}")
+                    if not ok:
+                        logger.warning(f"ban failed on online server {s.get('server_key')}, falling back to bann+kick")
+                        ok = await client.bann(nucleus_id, f"#BAN_REASON_{reason}")
+                        await client.kick(nucleus_id, f"#KICK_REASON_{reason}")
                 else:
                     ok = await client.bann(nucleus_id, f"#BAN_REASON_{reason}")
                     if need_extra_kick:
@@ -119,6 +123,9 @@ async def record_unban(nucleus_id: int) -> None:
 
 # ── Background tasks ──
 
+# 持有 fire-and-forget Task 的强引用，避免被 GC。done 后自动 discard。
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
 
 async def run_unban_on_servers_background(
     *,
@@ -153,10 +160,12 @@ async def run_unban_on_servers_background(
 
 
 def schedule_unban_background(*, player_id: int, nucleus_id: int, servers: list[dict]) -> None:
-    asyncio.create_task(
+    task = asyncio.create_task(
         run_unban_on_servers_background(
             player_id=player_id,
             nucleus_id=nucleus_id,
             servers=servers,
         )
     )
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
