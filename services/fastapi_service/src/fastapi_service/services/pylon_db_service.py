@@ -47,6 +47,56 @@ async def write_steam_auth_log(
         logger.warning(f"Failed to write SteamAuthLog: {exc}")
 
 
+async def lookup_bans_by_persona_ids(persona_ids: list[int]) -> dict[int, BanLookupResult]:
+    """批量版本：单查询取出所有 banned 玩家及其最新 BanRecord。
+
+    返回的 dict 只包含 banned 玩家；调用方对未命中的 id 视作未封禁。
+    用于替代 ``lookup_player_ban_by_persona_id`` 的 N+1 调用。
+    """
+    if not persona_ids:
+        return {}
+    try:
+        banned_players = await Player.filter(
+            nucleus_id__in=persona_ids, status="banned"
+        )
+    except Exception as exc:
+        logger.warning(f"Bulk ban lookup failed: {exc}")
+        return {}
+
+    if not banned_players:
+        return {}
+
+    by_id = {p.id: p for p in banned_players}
+    # 一次性取所有相关玩家的 BanRecord，按 created_at 倒序，取首条作为最新
+    record_rows = (
+        await BanRecord.filter(player_id__in=list(by_id.keys()))
+        .order_by("-created_at")
+        .values("player_id", "reason", "operator")
+    )
+    latest_record_by_player: dict[int, dict] = {}
+    for r in record_rows:
+        pid = r["player_id"]
+        if pid not in latest_record_by_player:
+            latest_record_by_player[pid] = r
+
+    out: dict[int, BanLookupResult] = {}
+    for p in banned_players:
+        if not p.nucleus_id:
+            continue
+        try:
+            persona_int = int(p.nucleus_id)
+        except (TypeError, ValueError):
+            continue
+        rec = latest_record_by_player.get(p.id)
+        if rec is None:
+            out[persona_int] = BanLookupResult(is_banned=True, reason="banned", operator=None, ban_type=0)
+        else:
+            out[persona_int] = BanLookupResult(
+                is_banned=True, reason=rec["reason"], operator=rec["operator"], ban_type=0
+            )
+    return out
+
+
 async def lookup_player_ban_by_persona_id(persona_id: int) -> BanLookupResult:
     """Check if `persona_id` (NucleusID or SteamID64) maps to a banned Player.
 
