@@ -50,9 +50,10 @@ class R5ApiClient:
         page_size: int = 20,
         sort: str = "kd",
         server: str | None = None,
+        range_type: str = "all",
         timeout: float = 3.0,
     ) -> httpx.Response:
-        params: dict[str, Any] = {"page_no": page_no, "page_size": page_size, "sort": sort}
+        params: dict[str, Any] = {"page_no": page_no, "page_size": page_size, "sort": sort, "range": range_type}
         if server:
             params["server"] = server
         return await self._request("GET", f"/players/{target}/vs_all", params=params, timeout=timeout)
@@ -64,9 +65,10 @@ class R5ApiClient:
         page_size: int = 20,
         sort: str = "kd",
         server: str | None = None,
+        range_type: str = "all",
         timeout: float = 3.0,
     ) -> httpx.Response:
-        params: dict[str, Any] = {"page_no": page_no, "page_size": page_size, "sort": sort}
+        params: dict[str, Any] = {"page_no": page_no, "page_size": page_size, "sort": sort, "range": range_type}
         if server:
             params["server"] = server
         return await self._request("GET", f"/players/{target}/weapons", params=params, timeout=timeout)
