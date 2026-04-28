@@ -38,6 +38,7 @@ from fastapi_service.services.jwt_auth_service import (
 )
 from fastapi_service.services.pylon_db_service import (
     BanLookupResult,
+    lookup_bans_by_persona_ids,
     lookup_player_ban_by_persona_id,
     write_steam_auth_log,
 )
@@ -304,23 +305,32 @@ class BulkCheckRequest(BaseModel):
 
 @router.post("/banlist/bulkCheck")
 async def banlist_bulk_check(body: BulkCheckRequest) -> JSONResponse:
-    banned_players: list[dict[str, Any]] = []
+    # 把所有可解析的 persona_id 一次性查出来，避免 N 次单查的 RTT 累积
+    persona_to_player: list[tuple[int, BulkCheckPlayer]] = []
     for player in body.players:
         try:
-            persona_id = int(player.id)
+            persona_to_player.append((int(player.id), player))
         except ValueError:
             continue
 
-        ban = await lookup_player_ban_by_persona_id(persona_id)
-        if ban.is_banned:
-            banned_players.append(
-                {
-                    "id": player.id,
-                    "ip": player.ip or "",
-                    "reason": ban.reason or "#DISCONNECT_BANNED",
-                    "banType": ban.ban_type,
-                }
-            )
+    if not persona_to_player:
+        return JSONResponse(status_code=200, content={"bannedPlayers": []})
+
+    bans = await lookup_bans_by_persona_ids([pid for pid, _ in persona_to_player])
+
+    banned_players: list[dict[str, Any]] = []
+    for persona_id, player in persona_to_player:
+        ban = bans.get(persona_id)
+        if ban is None or not ban.is_banned:
+            continue
+        banned_players.append(
+            {
+                "id": player.id,
+                "ip": player.ip or "",
+                "reason": ban.reason or "#DISCONNECT_BANNED",
+                "banType": ban.ban_type,
+            }
+        )
 
     return JSONResponse(
         status_code=200,
