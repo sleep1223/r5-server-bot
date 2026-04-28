@@ -265,6 +265,7 @@ async def get_player_vs_all(
     offset: int,
     page_size: int,
     server_id: int | None = None,
+    range_type: str = "all",
 ) -> tuple[list[dict], int, dict]:
     server_filter: dict = {}
     if server_id is not None:
@@ -273,6 +274,11 @@ async def get_player_vs_all(
         excluded_ids = await _get_excluded_server_ids()
         if excluded_ids:
             server_filter["server_id__not_in"] = excluded_ids
+    start_time, end_time = get_date_range(range_type)
+    if start_time:
+        server_filter["created_at__gte"] = start_time
+    if end_time:
+        server_filter["created_at__lte"] = end_time
     kills_list = (
         await PlayerKilled.filter(attacker_id=player_id, victim_id__not_isnull=True, **server_filter)
         .exclude(victim_id=player_id)
@@ -373,6 +379,7 @@ async def get_player_weapon_stats(
     offset: int,
     page_size: int,
     server_id: int | None = None,
+    range_type: str = "all",
 ) -> tuple[list[dict], int, dict]:
     server_filter: dict = {}
     if server_id is not None:
@@ -381,6 +388,11 @@ async def get_player_weapon_stats(
         excluded_ids = await _get_excluded_server_ids()
         if excluded_ids:
             server_filter["server_id__not_in"] = excluded_ids
+    start_time, end_time = get_date_range(range_type)
+    if start_time:
+        server_filter["created_at__gte"] = start_time
+    if end_time:
+        server_filter["created_at__lte"] = end_time
     kills_list = (
         await PlayerKilled.filter(attacker_id=player_id, victim_id__not_isnull=True, **server_filter)
         .exclude(victim_id=player_id)
