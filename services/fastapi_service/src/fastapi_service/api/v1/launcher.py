@@ -1,3 +1,4 @@
+import copy
 import tomllib
 from pathlib import Path
 
@@ -39,11 +40,13 @@ def _resolve_latest(data: dict) -> tuple[str, dict | None]:
     if not version_info and versions:
         fallback = versions[0]
         fallback_version = fallback.get("version", "")
-        logger.warning(f"Configured latest version '{latest_version}' not found in versions list, falling back from '{fallback_version}'")
-        # 深拷贝 fallback 条目，将其中的版本号替换为 latest
-        import json
-
-        version_info = json.loads(json.dumps(fallback).replace(fallback_version, latest_version))
+        logger.warning(
+            f"Configured latest version '{latest_version}' not found in versions list, "
+            f"falling back from '{fallback_version}'"
+        )
+        # 只替换顶层 version 字段；URL/签名等可能含版本号的字段保持原样，
+        # 避免破坏 fallback 条目里的下载地址或哈希。
+        version_info = copy.deepcopy(fallback)
         version_info["version"] = latest_version
     return latest_version, version_info
 

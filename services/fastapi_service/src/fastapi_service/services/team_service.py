@@ -125,28 +125,30 @@ async def join_team(team_id: int, binding_id: int, include_private_fields: bool 
 
 async def cancel_team(team_id: int, binding_id: int) -> tuple[bool, str | None]:
     """取消组队（仅队长）。"""
-    team = await TeamPost.filter(id=team_id, status="open").first()
-    if not team:
-        return False, "队伍不存在或已关闭"
-    if team.creator_id != binding_id:
-        return False, "只有队长可以取消组队"
+    async with in_transaction():
+        team = await TeamPost.filter(id=team_id, status="open").select_for_update().first()
+        if not team:
+            return False, "队伍不存在或已关闭"
+        if team.creator_id != binding_id:
+            return False, "只有队长可以取消组队"
 
-    team.status = "cancelled"
-    await team.save()
+        team.status = "cancelled"
+        await team.save()
     return True, None
 
 
 async def leave_team(team_id: int, binding_id: int) -> tuple[bool, str | None]:
     """退出队伍（非队长）。"""
-    team = await TeamPost.filter(id=team_id, status="open").first()
-    if not team:
-        return False, "队伍不存在或已关闭"
-    if team.creator_id == binding_id:
-        return False, "队长不能退出队伍，请使用取消组队"
+    async with in_transaction():
+        team = await TeamPost.filter(id=team_id, status="open").select_for_update().first()
+        if not team:
+            return False, "队伍不存在或已关闭"
+        if team.creator_id == binding_id:
+            return False, "队长不能退出队伍，请使用取消组队"
 
-    deleted = await TeamMember.filter(team=team, user_binding_id=binding_id).delete()
-    if not deleted:
-        return False, "你不在该队伍中"
+        deleted = await TeamMember.filter(team=team, user_binding_id=binding_id).delete()
+        if not deleted:
+            return False, "你不在该队伍中"
     return True, None
 
 

@@ -30,6 +30,7 @@ def list_servers(
     """
 
     synced_by_key: dict[str, dict] = {}
+    synced_by_ip: dict[str, dict] = {}
     for s_status in server_cache.servers.values():
         host = str(s_status.get("ip") or "")
         port = s_status.get("port")
@@ -42,6 +43,7 @@ def list_servers(
                     port = port or _safe_int(port_part)
         if host and port:
             synced_by_key[f"{host}:{port}"] = s_status
+            synced_by_ip.setdefault(host, s_status)
 
     raw = server_cache.raw_response
     raw_list: list[dict] = []
@@ -65,6 +67,12 @@ def list_servers(
         port = _safe_int(s.get("port"))
         key = f"{ip}:{port}" if ip and port else ""
         status = synced_by_key.get(key) if key else None
+        # raw 缺 port 时按 ip 兜底匹配，避免同一服务器在结果里出现两次
+        if status is None and ip and not port:
+            status = synced_by_ip.get(ip)
+            if status:
+                port = _safe_int(status.get("port")) or port
+                key = f"{ip}:{port}" if port else ip
         has_status = status is not None
         if cn_only and not has_status:
             continue
