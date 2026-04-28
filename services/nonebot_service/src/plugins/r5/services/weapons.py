@@ -73,7 +73,7 @@ async def handle_check_weapons(event: Event, args: Message = CommandArg()) -> No
         sort = "deaths"
 
     try:
-        resp = await api_client.get_player_weapons(target=target, sort=sort, server=server_arg, timeout=3.0)
+        resp = await api_client.get_player_weapons(target=target, sort=sort, server=server_arg, range_type="month", timeout=3.0)
         if resp.status_code != 200:
             await check_weapons.finish(f"❌ 查询失败: HTTP {resp.status_code}")
         req = resp.json()
