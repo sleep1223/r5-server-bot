@@ -26,9 +26,13 @@ async def verify_token(credentials: HTTPAuthorizationCredentials | None = Depend
 
 
 async def has_valid_token(credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme)) -> bool:
-    """公共接口可选鉴权：仅在携带有效 Bearer Token 时返回 True。"""
+    """公共接口可选鉴权：仅在携带有效 Bearer Token 时返回 True。
+
+    未配置 ``fastapi_access_tokens`` 时一律返回 False（fail-closed），
+    避免任意 Bearer 在未配置环境中被当作"管理员"放行。
+    """
     if not settings.fastapi_access_tokens:
-        return credentials is not None
+        return False
     if not credentials:
         return False
     return credentials.credentials in settings.fastapi_access_tokens
