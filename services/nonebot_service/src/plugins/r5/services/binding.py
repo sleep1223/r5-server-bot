@@ -1,7 +1,7 @@
 import traceback
 
 import httpx
-from nonebot import on_command
+from .common import on_command
 from nonebot.adapters.onebot.v11 import Event, Message, PrivateMessageEvent
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg

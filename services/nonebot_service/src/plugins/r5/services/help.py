@@ -1,4 +1,4 @@
-from nonebot import on_command
+from .common import on_command
 from nonebot.adapters.onebot.v11 import Message
 from nonebot.params import CommandArg
 
