@@ -228,7 +228,7 @@ class R5NetConsole:
         return "".join(captured)
 
     async def get_status(self) -> dict[str, Any]:
-        raw_output = await self.exec_command("status", timeout=1.0)
+        raw_output = await self.exec_command("status", timeout=3.0)
         return self._parse_status(raw_output)
 
     async def kick(self, nucleus_id: str | int, reason: str = "") -> bool:
@@ -282,7 +282,7 @@ class R5NetConsole:
         return ip_str
 
     def _parse_status(self, raw_output: str) -> dict[str, Any]:
-        result = {"raw": raw_output, "details": {}, "players": [], "max_players": 0}
+        result = {"raw": raw_output, "details": {}, "players": [], "max_players": 0, "players_parsed": False}
 
         lines = raw_output.splitlines()
         player_section = False
@@ -309,6 +309,7 @@ class R5NetConsole:
             # 检查玩家部分头部
             if line.startswith("#") and "userid" in line and "name" in line:
                 player_section = True
+                result["players_parsed"] = True
                 continue
 
             if player_section:
