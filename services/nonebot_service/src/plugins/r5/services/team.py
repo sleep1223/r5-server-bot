@@ -4,7 +4,7 @@ import traceback
 from pathlib import Path
 
 import httpx
-from .common import on_command
+from .common import BINDING_GUIDE, on_command
 from nonebot.adapters.onebot.v11 import Event, Message, MessageSegment
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
@@ -14,13 +14,10 @@ from .common import r5_service
 
 team_svc = r5_service.create_subservice("team")
 
-BINDIND_GUIDE = "❌ 请先绑定游戏账号\n👉 先添加机器人为好友，然后私信发送: /绑定 <游戏昵称>\n例如: /绑定 MyName"
-
-
 def _maybe_binding_hint(msg: str) -> str:
     """如果后端返回的是绑定相关错误，替换为带引导的提示。"""
     if "绑定" in msg:
-        return BINDIND_GUIDE
+        return BINDING_GUIDE
     return f"❌ {msg}"
 
 TEAM_LOG_PATH = Path(__file__).resolve().parents[4] / "logs" / "team.log"
