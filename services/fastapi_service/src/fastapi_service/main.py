@@ -42,8 +42,3 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
-
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host=settings.fastapi_host, port=settings.fastapi_port)

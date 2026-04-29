@@ -81,19 +81,24 @@ uv sync --all-packages
 ```
 
 ### 2. Start Services
-Please start the following services in **three different terminal windows**.
+Please start the following services in **four different terminal windows**. The FastAPI main service and ingest service are now split into two independent Granian processes and must be started separately.
 
 #### Window 1: Start WebSocket Service
 ```shell
 uv run python -m ws_service.main
 ```
 
-#### Window 2: Start FastAPI Service
+#### Window 2: Start FastAPI Main Service
 ```shell
-uv run python -m fastapi_service.main
+uv run python -m fastapi_service.server
 ```
 
-#### Window 3: Start NoneBot Service
+#### Window 3: Start FastAPI Ingest Service
+```shell
+uv run python -m fastapi_service.ingest_server
+```
+
+#### Window 4: Start NoneBot Service
 **Note**: The NoneBot service depends on the FastAPI service, please ensure the FastAPI service has started successfully.
 
 Enter the NoneBot service directory, sync dependencies, and start:
