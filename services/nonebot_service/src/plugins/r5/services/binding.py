@@ -1,7 +1,7 @@
 import traceback
 
 import httpx
-from .common import on_command
+from .common import BINDING_GUIDE, FRIEND_HINT, on_command
 from nonebot.adapters.onebot.v11 import Event, Message, PrivateMessageEvent
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
@@ -47,7 +47,7 @@ async def handle_bind(event: Event, args: Message = CommandArg()) -> None:
         await bind_cmd.finish("⚠️ 请提供游戏昵称或ID，如: /绑定 MyName 或 /绑定 10086")
 
     if not isinstance(event, PrivateMessageEvent):
-        await bind_cmd.finish("⚠️ 绑定涉及敏感信息（AppKey），请先添加机器人为好友，然后私信发送：\n/绑定 " + player_query)
+        await bind_cmd.finish(f"🔒 绑定涉及敏感信息（AppKey），不能在群里发送\n{FRIEND_HINT}\n例如: /绑定 {player_query}")
 
     user_id = event.get_user_id()
 
@@ -178,16 +178,21 @@ async def handle_my_info(event: Event) -> None:
         req = resp.json()
 
         if req.get("code") != "0000":
-            await my_info_cmd.finish("❌ 你还未绑定游戏账号，请发送: /绑定 <游戏昵称>")
+            await my_info_cmd.finish(BINDING_GUIDE)
 
         data = req.get("data", {})
         name = data.get("player_name", "未知")
         player_id = data.get("player_id", "未知")
+        app_key = data.get("app_key", "")
 
         msg = "📋 个人信息\n"
         msg += f"游戏昵称: {name}\n"
         msg += f"玩家ID: {player_id}\n"
-        msg += f"平台: QQ ({user_id})"
+        msg += f"平台: QQ ({user_id})\n"
+        if app_key:
+            msg += f"AppKey: {app_key}\n\n"
+            msg += f"🔗 一键登录: https://r5.sleep0.de/teams?appkey={app_key}\n"
+            msg += "⚠️ 请勿将此链接发送给他人！"
         await my_info_cmd.finish(msg)
 
     except FinishedException:
