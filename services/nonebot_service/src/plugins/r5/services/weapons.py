@@ -1,7 +1,7 @@
 import traceback
 
 import httpx
-from .common import BINDING_GUIDE, on_command
+from .common import BINDING_GUIDE, on_command, range_label
 from nonebot.adapters.onebot.v11 import Event, Message
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
@@ -107,7 +107,7 @@ async def handle_check_weapons(event: Event, args: Message = CommandArg()) -> No
         server_info = req.get("server") or {}
         scope = server_info.get("short_name") or server_info.get("name") or server_info.get("host")
         title_suffix = f" @{scope}" if scope else ""
-        msg = f"🔫 {player_name} 武器统计{title_suffix}\n"
+        msg = f"🔫 {player_name} 武器统计 ({range_label(range_type)}){title_suffix}\n"
 
         if player_info:
             country = player_info.get("country") or "未知"
@@ -204,7 +204,7 @@ async def handle_weapon_leaderboard(args: Message = CommandArg()) -> None:
         server_info = req.get("server") or {}
         scope = server_info.get("short_name") or server_info.get("name") or server_info.get("host")
         title_suffix = f" @{scope}" if scope else ""
-        msg = f"🏆 R5 武器排行榜 ({range_type}){title_suffix}\n"
+        msg = f"🏆 R5 武器排行榜 ({range_label(range_type)}){title_suffix}\n"
         msg += f"筛选: 至少 {params['min_kills']} 击杀\t排序: {params['sort']}\n"
         msg += "武器 | 最佳玩家 | K/D | 击杀数\n"
         msg += "-" * 30 + "\n"
