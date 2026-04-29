@@ -4,7 +4,7 @@ import traceback
 from datetime import datetime
 
 import httpx
-from .common import on_command
+from .common import FRIEND_HINT, on_command
 from nonebot.adapters.onebot.v11 import Event, Message
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
@@ -121,7 +121,7 @@ async def handle_personal_matches(event: Event, args: Message = CommandArg()) ->
         except Exception:
             pass
         if not target:
-            await personal_matches.finish("⚠️ 请提供玩家名称或ID，或先 /绑定 账号")
+            await personal_matches.finish(f"⚠️ 请提供玩家名称或ID，或先绑定账号\n{FRIEND_HINT}")
 
     try:
         resp = await api_client.get_player_matches(target, limit=3, sort=sort, server=server_arg, timeout=5.0)

@@ -1,7 +1,7 @@
 import traceback
 
 import httpx
-from .common import on_command
+from .common import BINDING_GUIDE, on_command
 from nonebot.adapters.onebot.v11 import Event, Message
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
@@ -52,19 +52,33 @@ weapon_map = {
 async def handle_check_weapons(event: Event, args: Message = CommandArg()) -> None:
     raw = args.extract_plain_text().strip()
     content, server_arg = pop_server_arg(raw)
-    target = content
+
+    # 必须通过绑定获取玩家
+    target = ""
+    user_id = event.get_user_id()
+    try:
+        bind_resp = await api_client.get_binding(platform="qq", platform_uid=user_id, timeout=3.0)
+        bind_data = bind_resp.json()
+        if bind_data.get("code") == "0000" and bind_data.get("data"):
+            target = bind_data["data"].get("player_name", "")
+    except Exception:
+        pass
     if not target:
-        # 尝试通过绑定信息获取玩家名
-        user_id = event.get_user_id()
-        try:
-            bind_resp = await api_client.get_binding(platform="qq", platform_uid=user_id, timeout=3.0)
-            bind_data = bind_resp.json()
-            if bind_data.get("code") == "0000" and bind_data.get("data"):
-                target = bind_data["data"].get("player_name", "")
-        except Exception:
-            pass
-        if not target:
-            await check_weapons.finish("⚠️ 请提供玩家名称或ID，或先 /绑定 账号")
+        await check_weapons.finish(BINDING_GUIDE)
+
+    range_map = {
+        "今日": "today", "今天": "today", "today": "today",
+        "昨日": "yesterday", "昨天": "yesterday", "yesterday": "yesterday",
+        "本周": "week", "week": "week",
+        "上周": "last_week", "last_week": "last_week",
+        "本月": "month", "month": "month",
+        "全部": "all", "all": "all",
+    }
+    range_type = "month"
+    for k, v in range_map.items():
+        if k in content:
+            range_type = v
+            break
 
     sort = "kd"
     if "击杀" in content:
@@ -73,7 +87,7 @@ async def handle_check_weapons(event: Event, args: Message = CommandArg()) -> No
         sort = "deaths"
 
     try:
-        resp = await api_client.get_player_weapons(target=target, sort=sort, server=server_arg, range_type="month", timeout=3.0)
+        resp = await api_client.get_player_weapons(target=target, sort=sort, server=server_arg, range_type=range_type, timeout=3.0)
         if resp.status_code != 200:
             await check_weapons.finish(f"❌ 查询失败: HTTP {resp.status_code}")
         req = resp.json()
