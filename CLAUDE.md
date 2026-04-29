@@ -101,8 +101,8 @@ cd services/nonebot_service && uv sync   # nonebot 子项目独立同步
 启动三个服务（分别在三个终端）：
 ```shell
 uv run python -m ws_service.main                  # WS 监听
-uv run python -m fastapi_service.main             # 主 API（同时也启动 ingest 由用户另起，或用 ingest_main）
-uv run python -m fastapi_service.ingest_main      # ingest 子进程（按需）
+uv run python -m fastapi_service.server           # 主 API（Granian 启动 fastapi_service.main:app，仅主路由）
+uv run python -m fastapi_service.ingest_server    # ingest 独立进程（Granian 启动 fastapi_service.ingest_main:app，必须单独启动）
 cd services/nonebot_service && nb run             # NoneBot
 ```
 

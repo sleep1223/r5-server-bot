@@ -81,19 +81,24 @@ uv sync --all-packages
 ```
 
 ### 2. 启动服务
-请在 **三个不同的终端窗口** 中分别启动以下服务。
+请在 **四个不同的终端窗口** 中分别启动以下服务。FastAPI 主服务与 ingest 服务现已拆分为两个独立 Granian 进程，必须分别启动。
 
 #### 窗口 1: 启动 WebSocket 服务
 ```shell
 uv run python -m ws_service.main
 ```
 
-#### 窗口 2: 启动 FastAPI 服务
+#### 窗口 2: 启动 FastAPI 主服务
 ```shell
-uv run python -m fastapi_service.main
+uv run python -m fastapi_service.server
 ```
 
-#### 窗口 3: 启动 NoneBot 服务
+#### 窗口 3: 启动 FastAPI Ingest 服务
+```shell
+uv run python -m fastapi_service.ingest_server
+```
+
+#### 窗口 4: 启动 NoneBot 服务
 **注意**：NoneBot 服务依赖于 FastAPI 服务，请确保 FastAPI 服务已成功启动。
 
 进入 NoneBot 服务目录，同步依赖并启动：
