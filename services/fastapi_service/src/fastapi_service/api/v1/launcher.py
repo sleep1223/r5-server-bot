@@ -49,10 +49,20 @@ def _resolve_latest(data: dict) -> tuple[str, dict | None]:
             f"Configured latest version '{latest_version}' not found in versions list, "
             f"falling back from '{fallback_version}'"
         )
-        # 只替换顶层 version 字段；URL/签名等可能含版本号的字段保持原样，
-        # 避免破坏 fallback 条目里的下载地址或哈希。
         version_info = copy.deepcopy(fallback)
         version_info["version"] = latest_version
+        # 把 platforms.*.url 中出现的旧版本号替换为新版本号，使下载链接指向 GitHub Releases 上的新版本资产
+        if fallback_version:
+            platforms = version_info.get("platforms", {})
+            if isinstance(platforms, dict):
+                for plat in platforms.values():
+                    if isinstance(plat, dict):
+                        url = plat.get("url")
+                        if isinstance(url, str) and url:
+                            plat["url"] = url.replace(fallback_version, latest_version)
+                        # 旧签名对新资产无效，置空避免误导客户端校验
+                        if "signature" in plat:
+                            plat["signature"] = ""
     return latest_version, version_info
 
 
