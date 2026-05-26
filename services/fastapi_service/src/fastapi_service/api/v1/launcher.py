@@ -1,6 +1,7 @@
 import copy
 import tomllib
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, Response
@@ -29,6 +30,28 @@ def _load_toml(path: Path) -> dict:
 def _parse_version(v: str) -> tuple[int, ...]:
     """将版本号字符串解析为整数元组，用于比较。如 '0.4.0' -> (0, 4, 0)"""
     return tuple(int(x) for x in v.strip().lstrip("v").split("."))
+
+
+def _normalize_patches(config: dict[str, Any]) -> list[dict[str, Any]]:
+    patches = config.get("patches")
+    if not isinstance(patches, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for patch in patches:
+        if not isinstance(patch, dict):
+            continue
+        normalized.append(
+            {
+                "from_version": str(patch.get("from_version") or ""),
+                "to_version": str(patch.get("to_version") or ""),
+                "url": str(patch.get("url") or ""),
+                "checksum": str(patch.get("checksum") or ""),
+                "size": int(patch.get("size") or 0),
+            }
+        )
+
+    return normalized
 
 
 def _resolve_latest(data: dict) -> tuple[str, dict | None]:
@@ -69,16 +92,27 @@ def _resolve_latest(data: dict) -> tuple[str, dict | None]:
 @router.get("/launcher/config")
 async def get_launcher_config():
     """获取 R5RCN Launcher 配置信息（读取 TOML 文件并返回）"""
-    data = _load_toml(Path(settings.launcher_config_path))
+    config = _load_toml(Path(settings.launcher_config_path))
     update_data = _load_toml(Path(settings.launcher_update_path))
     # 从最新版本的平台信息中提取下载地址，默认取 windows-x86_64
     latest_version, version_info = _resolve_latest(update_data)
-    data["launcher_version"] = latest_version
+
+    data = {
+        "offline_package_url": str(config.get("offline_package_url") or ""),
+        "download_domain": str(config.get("download_domain") or ""),
+        "docs_url": str(config.get("docs_url") or ""),
+        "launcher_version": latest_version,
+        "launcher_update_url": str(config.get("launcher_update_url") or ""),
+        "force_update": bool(config.get("force_update", False)),
+        "game_version": str(config.get("game_version") or ""),
+        "patches": _normalize_patches(config),
+        "announcement": config.get("announcement") or {},
+        "rules": config.get("rules") or [],
+    }
+
     if version_info:
         platform_info = version_info.get("platforms", {}).get("windows-x86_64", {})
         data["launcher_update_url"] = platform_info.get("url", "")
-    else:
-        data["launcher_update_url"] = ""
 
     return success(data=data, msg="Launcher config retrieved")
 
