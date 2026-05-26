@@ -21,35 +21,13 @@ do **not** wrap them in the project's `success()` envelope.
 
 from __future__ import annotations
 
-import re
-from typing import Any
-
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
-from fastapi_service.services.jwt_auth_service import (
-    JwtKeyError,
-    create_auth_token,
-    get_public_key_base64,
-    get_public_key_hash,
-    normalize_server_endpoint,
-)
-from fastapi_service.services.pylon_db_service import (
-    BanLookupResult,
-    lookup_bans_by_persona_ids,
-    lookup_player_ban_by_persona_id,
-    write_steam_auth_log,
-)
-from fastapi_service.services.steam_auth_service import (
-    SteamAuthError,
-    authenticate_steam_ticket,
-)
+from fastapi_service.services import pylon_service
 
 router = APIRouter(tags=["pylon"])
-
-_STEAM_ID_RE = re.compile(r"^\d{17}$")
 
 
 # ---------------------------------------------------------------------------
@@ -82,11 +60,8 @@ class ClientAuthRequest(BaseModel):
     reqIp: str | None = None  # optional, set by the deployer's reverse proxy
 
 
-def _auth_error(http_status: int, message: str) -> JSONResponse:
-    return JSONResponse(
-        status_code=http_status,
-        content={"success": False, "error": message},
-    )
+def _json(response: pylon_service.PylonResponse) -> JSONResponse:
+    return JSONResponse(status_code=response.status_code, content=response.content)
 
 
 def _client_ip(request: Request, body: ClientAuthRequest) -> str | None:
@@ -101,97 +76,14 @@ def _client_ip(request: Request, body: ClientAuthRequest) -> str | None:
 
 
 async def _handle_client_auth(request: Request, body: ClientAuthRequest) -> JSONResponse:
-    user_id = (body.id or "").strip()
-    if not _STEAM_ID_RE.match(user_id):
-        return _auth_error(400, "error: invalid Steam userId")
-
-    if not body.ip:
-        return _auth_error(400, "error: missing server ip")
-
-    client_ip = _client_ip(request, body)
-    server_endpoint = normalize_server_endpoint(body.ip)
-
-    # ---- Steam Web API validation -----------------------------------------
-    try:
-        steam = await authenticate_steam_ticket(body.steamTicket)
-    except SteamAuthError as exc:
-        logger.warning(f"Steam ticket validation failed for {user_id}: {exc.code}")
-        await write_steam_auth_log(
-            steam_id=int(user_id),
-            persona_name=body.steamUsername,
-            server_endpoint=server_endpoint,
-            client_ip=client_ip,
-            success=False,
-            error_code=exc.code,
-        )
-        return _auth_error(401, f"error: steam authentication failed ({exc.code})")
-    except Exception:  # pragma: no cover - defensive
-        logger.exception("Unexpected error during Steam ticket validation")
-        await write_steam_auth_log(
-            steam_id=int(user_id),
-            persona_name=body.steamUsername,
-            server_endpoint=server_endpoint,
-            client_ip=client_ip,
-            success=False,
-            error_code="internal_error",
-        )
-        return _auth_error(500, "error: internal server error")
-
-    if user_id != steam.steamid:
-        logger.info(
-            f"Steam ID mismatch — client claimed {user_id}, "
-            f"validated {steam.steamid}; using validated id"
-        )
-        user_id = steam.steamid
-
-    # ---- Ban gate ----------------------------------------------------------
-    ban: BanLookupResult = await lookup_player_ban_by_persona_id(int(user_id))
-    if ban.is_banned:
-        logger.info(
-            f"Steam-auth banned player {user_id} blocked: reason={ban.reason}"
-        )
-        await write_steam_auth_log(
-            steam_id=int(user_id),
-            persona_name=steam.persona or body.steamUsername,
-            server_endpoint=server_endpoint,
-            client_ip=client_ip,
-            success=False,
-            error_code=f"banned:{ban.reason or 'unknown'}",
-        )
-        return _auth_error(
-            403,
-            f"error: account banned ({ban.reason or 'unknown'})",
-        )
-
-    # ---- Sign + return ----------------------------------------------------
-    display_name = steam.persona or body.steamUsername or "steam_user"
-    try:
-        token = create_auth_token(user_id, display_name, server_endpoint)
-    except JwtKeyError as exc:
-        logger.error(f"JWT signing failed: {exc}")
-        await write_steam_auth_log(
-            steam_id=int(user_id),
-            persona_name=display_name,
-            server_endpoint=server_endpoint,
-            client_ip=client_ip,
-            success=False,
-            error_code="jwt_signing_unavailable",
-        )
-        return _auth_error(500, "error: token signing unavailable")
-
-    await write_steam_auth_log(
-        steam_id=int(user_id),
-        persona_name=display_name,
-        server_endpoint=server_endpoint,
-        client_ip=client_ip,
-        success=True,
-        error_code=None,
+    response = await pylon_service.authenticate_client(
+        user_id=body.id or "",
+        server_ip=body.ip,
+        steam_ticket=body.steamTicket,
+        client_ip=_client_ip(request, body),
+        steam_username=body.steamUsername,
     )
-
-    return JSONResponse(
-        status_code=200,
-        content={"success": True, "token": token},
-    )
+    return _json(response)
 
 
 @router.post("/client/auth")
@@ -226,27 +118,8 @@ async def server_auth_keyinfo(body: KeyInfoRequest | None = None) -> JSONRespons
     public key hash we respond with `requireUpdate: false` and skip the body,
     matching r5r_sdk's `CPylon::GetAuthKey` short-circuit at pylon.cpp:504.
     """
-    try:
-        current_hash = get_public_key_hash()
-    except JwtKeyError as exc:
-        logger.error(f"Cannot serve JWT keyinfo: {exc}")
-        return JSONResponse(
-            status_code=500,
-            content={"requireUpdate": False, "error": "key unavailable"},
-        )
-
     requested_hash = (body.keyHash if body else None) or ""
-    if requested_hash and requested_hash == current_hash:
-        return JSONResponse(status_code=200, content={"requireUpdate": False})
-
-    return JSONResponse(
-        status_code=200,
-        content={
-            "requireUpdate": True,
-            "keyData": get_public_key_base64(),
-            "keyHash": current_hash,
-        },
-    )
+    return _json(pylon_service.get_keyinfo(requested_hash))
 
 
 # ---------------------------------------------------------------------------
@@ -262,29 +135,9 @@ class BanCheckRequest(BaseModel):
     ip: str | None = None
 
 
-def _ban_response(ban: BanLookupResult) -> dict[str, Any]:
-    if not ban.is_banned:
-        return {"banned": False}
-    return {
-        "banned": True,
-        "reason": ban.reason or "#DISCONNECT_BANNED",
-        "banType": ban.ban_type,
-    }
-
-
 @router.post("/banlist/isBanned")
 async def banlist_is_banned(body: BanCheckRequest) -> JSONResponse:
-    raw_id = (body.id or "").strip()
-    if not raw_id:
-        return JSONResponse(status_code=200, content={"banned": False})
-
-    try:
-        persona_id = int(raw_id)
-    except ValueError:
-        return JSONResponse(status_code=200, content={"banned": False})
-
-    ban = await lookup_player_ban_by_persona_id(persona_id)
-    return JSONResponse(status_code=200, content=_ban_response(ban))
+    return _json(await pylon_service.check_player_ban(body.id or ""))
 
 
 # ---------------------------------------------------------------------------
@@ -305,37 +158,8 @@ class BulkCheckRequest(BaseModel):
 
 @router.post("/banlist/bulkCheck")
 async def banlist_bulk_check(body: BulkCheckRequest) -> JSONResponse:
-    # 把所有可解析的 persona_id 一次性查出来，避免 N 次单查的 RTT 累积
-    persona_to_player: list[tuple[int, BulkCheckPlayer]] = []
-    for player in body.players:
-        try:
-            persona_to_player.append((int(player.id), player))
-        except ValueError:
-            continue
-
-    if not persona_to_player:
-        return JSONResponse(status_code=200, content={"bannedPlayers": []})
-
-    bans = await lookup_bans_by_persona_ids([pid for pid, _ in persona_to_player])
-
-    banned_players: list[dict[str, Any]] = []
-    for persona_id, player in persona_to_player:
-        ban = bans.get(persona_id)
-        if ban is None or not ban.is_banned:
-            continue
-        banned_players.append(
-            {
-                "id": player.id,
-                "ip": player.ip or "",
-                "reason": ban.reason or "#DISCONNECT_BANNED",
-                "banType": ban.ban_type,
-            }
-        )
-
-    return JSONResponse(
-        status_code=200,
-        content={"bannedPlayers": banned_players},
-    )
+    players = [(player.id, player.ip) for player in body.players]
+    return _json(await pylon_service.bulk_check_bans(players))
 
 
 # ---------------------------------------------------------------------------
@@ -343,27 +167,9 @@ async def banlist_bulk_check(body: BulkCheckRequest) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-_EULA_VERSION = 1
-_EULA_LANGUAGE = "english"
-_EULA_CONTENTS = (
-    "By connecting to this server cluster you agree to abide by the server "
-    "rules. This master server is operated by the r5-server-bot project and "
-    "is not affiliated with Electronic Arts or Respawn Entertainment."
-)
-
-
 @router.post("/eula")
 async def eula() -> JSONResponse:
-    return JSONResponse(
-        status_code=200,
-        content={
-            "data": {
-                "version": _EULA_VERSION,
-                "language": _EULA_LANGUAGE,
-                "contents": _EULA_CONTENTS,
-            }
-        },
-    )
+    return _json(pylon_service.get_eula())
 
 
 # ---------------------------------------------------------------------------
@@ -399,15 +205,14 @@ async def servers_add(body: ServersAddRequest) -> JSONResponse:
     receive a deterministic dummy token derived from their checksum so the
     `byToken` lookup roundtrip continues to work for the same dedi process.
     """
-    payload: dict[str, Any] = {
-        "ip": body.ip or "",
-        "port": body.port or 0,
-    }
-    if body.hidden:
-        # Stable dummy token: server can re-resolve itself via /server/byToken
-        # if needed, though we do not implement that endpoint here.
-        payload["token"] = f"selfhost:{body.checksum or 0}:{body.port or 0}"
-    return JSONResponse(status_code=200, content=payload)
+    return _json(
+        pylon_service.add_server(
+            ip=body.ip,
+            port=body.port,
+            hidden=body.hidden,
+            checksum=body.checksum,
+        )
+    )
 
 
 __all__ = ["router"]

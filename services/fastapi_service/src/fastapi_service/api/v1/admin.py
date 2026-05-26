@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials
 from shared_lib.config import settings
-from shared_lib.models import BanRecord
 
 from fastapi_service.core.auth import security_scheme, verify_token
 from fastapi_service.core.cache import server_cache
@@ -259,27 +258,6 @@ async def get_ban_list(
     """获取封禁记录列表。"""
     is_admin = check_is_admin(credentials, settings.fastapi_access_tokens)
 
-    total = await BanRecord.all().count()
-    bans = await BanRecord.all().order_by("-created_at").offset(pg.offset).limit(pg.page_size).prefetch_related("player")
-
-    results = []
-    for ban in bans:
-        player_info = {
-            "id": ban.id,
-            "player": {
-                "name": ban.player.name,
-                "nucleus_id": ban.player.nucleus_id,
-                "kick_count": ban.player.kick_count,
-                "ban_count": ban.player.ban_count,
-                "status": ban.player.status,
-                "country": ban.player.country,
-            },
-            "reason": ban.reason,
-            "operator": ban.operator,
-            "created_at": ban.created_at,
-        }
-        if is_admin:
-            player_info["player"].update({"region": ban.player.region})
-        results.append(player_info)
+    results, total = await admin_service.list_bans(page_size=pg.page_size, offset=pg.offset, is_admin=is_admin)
 
     return paginated(data=results, total=total, msg="Ban list retrieved")

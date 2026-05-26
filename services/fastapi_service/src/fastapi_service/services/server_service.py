@@ -1,3 +1,5 @@
+from shared_lib.models import Server
+
 from fastapi_service.core.cache import server_cache
 from fastapi_service.core.utils import parse_short_name
 
@@ -179,3 +181,19 @@ def list_servers(
         results.append(entry)
 
     return results
+
+
+async def set_server_alias(host: str, short_name: str | None) -> tuple[dict | None, str | None]:
+    server = await Server.get_or_none(host=host)
+    if not server:
+        return None, "not_found"
+
+    normalized = (short_name or "").strip() or None
+    if normalized:
+        conflict = await Server.filter(short_name=normalized).exclude(id=server.id).first()
+        if conflict:
+            return {"host": conflict.host}, "alias_conflict"
+
+    server.short_name = normalized  # type: ignore[assignment]
+    await server.save(update_fields=["short_name", "updated_at"])
+    return {"id": server.id, "host": server.host, "short_name": server.short_name}, None

@@ -169,3 +169,30 @@ def schedule_unban_background(*, player_id: int, nucleus_id: int, servers: list[
     )
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+
+async def list_bans(*, page_size: int, offset: int, is_admin: bool = False) -> tuple[list[dict], int]:
+    total = await BanRecord.all().count()
+    bans = await BanRecord.all().order_by("-created_at").offset(offset).limit(page_size).prefetch_related("player")
+
+    results = []
+    for ban in bans:
+        player_info = {
+            "id": ban.id,
+            "player": {
+                "name": ban.player.name,
+                "nucleus_id": ban.player.nucleus_id,
+                "kick_count": ban.player.kick_count,
+                "ban_count": ban.player.ban_count,
+                "status": ban.player.status,
+                "country": ban.player.country,
+            },
+            "reason": ban.reason,
+            "operator": ban.operator,
+            "created_at": ban.created_at,
+        }
+        if is_admin:
+            player_info["player"].update({"region": ban.player.region})
+        results.append(player_info)
+
+    return results, total

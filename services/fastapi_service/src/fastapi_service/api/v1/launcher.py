@@ -1,118 +1,19 @@
-import copy
-import tomllib
-from pathlib import Path
-from typing import Any
-
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, Response
-from loguru import logger
-from shared_lib.config import settings
 
 from fastapi_service.core.response import success
-from fastapi_service.tasks.fetch_launcher_version import launcher_version_cache
+from fastapi_service.services import launcher_service
 
 router = APIRouter()
-
-
-def _load_toml(path: Path) -> dict:
-    """读取并解析 TOML 文件"""
-    if not path.exists():
-        logger.error(f"Config file not found: {path}")
-        raise HTTPException(status_code=404, detail=f"Config file not found: {path.name}")
-    try:
-        with path.open("rb") as f:
-            return tomllib.load(f)
-    except tomllib.TOMLDecodeError as e:
-        logger.error(f"Failed to parse config: {e}")
-        raise HTTPException(status_code=500, detail="Invalid config file") from e
-
-
-def _parse_version(v: str) -> tuple[int, ...]:
-    """将版本号字符串解析为整数元组，用于比较。如 '0.4.0' -> (0, 4, 0)"""
-    return tuple(int(x) for x in v.strip().lstrip("v").split("."))
-
-
-def _normalize_patches(config: dict[str, Any]) -> list[dict[str, Any]]:
-    patches = config.get("patches")
-    if not isinstance(patches, list):
-        return []
-
-    normalized: list[dict[str, Any]] = []
-    for patch in patches:
-        if not isinstance(patch, dict):
-            continue
-        normalized.append(
-            {
-                "from_version": str(patch.get("from_version") or ""),
-                "to_version": str(patch.get("to_version") or ""),
-                "url": str(patch.get("url") or ""),
-                "checksum": str(patch.get("checksum") or ""),
-                "size": int(patch.get("size") or 0),
-            }
-        )
-
-    return normalized
-
-
-def _resolve_latest(data: dict) -> tuple[str, dict | None]:
-    """解析最新版本号和对应的版本信息，如果 latest 在 versions 中找不到则 fallback 到第一个条目并替换版本号。
-
-    版本号优先来源：GitHub Releases 缓存（由 fetch_launcher_version_task 维护），
-    缺失时回退到 TOML 里的 `latest` 字段。
-    """
-    latest_version = launcher_version_cache.get() or data.get("latest", "")
-    versions: list[dict] = data.get("versions", [])
-    if not latest_version and not versions:
-        return "", None
-    version_info = next((v for v in versions if v.get("version") == latest_version), None)
-    if not version_info and versions:
-        fallback = versions[0]
-        fallback_version = fallback.get("version", "")
-        logger.warning(
-            f"Configured latest version '{latest_version}' not found in versions list, "
-            f"falling back from '{fallback_version}'"
-        )
-        version_info = copy.deepcopy(fallback)
-        version_info["version"] = latest_version
-        # 把 platforms.*.url 中出现的旧版本号替换为新版本号，使下载链接指向 GitHub Releases 上的新版本资产
-        if fallback_version:
-            platforms = version_info.get("platforms", {})
-            if isinstance(platforms, dict):
-                for plat in platforms.values():
-                    if isinstance(plat, dict):
-                        url = plat.get("url")
-                        if isinstance(url, str) and url:
-                            plat["url"] = url.replace(fallback_version, latest_version)
-                        # 旧签名对新资产无效，置空避免误导客户端校验
-                        if "signature" in plat:
-                            plat["signature"] = ""
-    return latest_version, version_info
 
 
 @router.get("/launcher/config")
 async def get_launcher_config():
     """获取 R5RCN Launcher 配置信息（读取 TOML 文件并返回）"""
-    config = _load_toml(Path(settings.launcher_config_path))
-    update_data = _load_toml(Path(settings.launcher_update_path))
-    # 从最新版本的平台信息中提取下载地址，默认取 windows-x86_64
-    latest_version, version_info = _resolve_latest(update_data)
-
-    data = {
-        "offline_package_url": str(config.get("offline_package_url") or ""),
-        "download_domain": str(config.get("download_domain") or ""),
-        "docs_url": str(config.get("docs_url") or ""),
-        "launcher_version": latest_version,
-        "launcher_update_url": str(config.get("launcher_update_url") or ""),
-        "force_update": bool(config.get("force_update", False)),
-        "game_version": str(config.get("game_version") or ""),
-        "patches": _normalize_patches(config),
-        "announcement": config.get("announcement") or {},
-        "rules": config.get("rules") or [],
-    }
-
-    if version_info:
-        platform_info = version_info.get("platforms", {}).get("windows-x86_64", {})
-        data["launcher_update_url"] = platform_info.get("url", "")
+    try:
+        data = launcher_service.get_launcher_config()
+    except launcher_service.LauncherConfigError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return success(data=data, msg="Launcher config retrieved")
 
@@ -124,35 +25,13 @@ async def check_launcher_update(target: str, arch: str, current_version: str):
     - 有更新时返回 HTTP 200 + Tauri updater JSON
     - 无更新时返回 HTTP 204
     """
-    data = _load_toml(Path(settings.launcher_update_path))
-
-    latest_version, version_info = _resolve_latest(data)
-    if not latest_version or not version_info:
-        return Response(status_code=204)
-
-    # 比较版本号，当前版本 >= 最新版本时无需更新
     try:
-        if _parse_version(current_version) >= _parse_version(latest_version):
-            return Response(status_code=204)
-    except (ValueError, TypeError):
-        logger.warning(f"Invalid version format: current={current_version}, latest={latest_version}")
-        return Response(status_code=204)
+        payload = launcher_service.get_launcher_update(target, arch, current_version)
+    except launcher_service.LauncherConfigError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    # 查找匹配的平台
-    platform_key = f"{target}-{arch}"
-    platforms: dict = version_info.get("platforms", {})
-    platform_info = platforms.get(platform_key)
-
-    if not platform_info:
-        logger.info(f"No update available for platform: {platform_key}")
+    if payload is None:
         return Response(status_code=204)
 
     # 返回 Tauri updater 格式
-    return JSONResponse(
-        content={
-            "version": latest_version,
-            "notes": version_info.get("notes", ""),
-            "pub_date": version_info.get("pub_date", ""),
-            "platforms": {platform_key: platform_info},
-        }
-    )
+    return JSONResponse(content=payload)

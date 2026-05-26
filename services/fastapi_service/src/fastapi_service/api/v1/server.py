@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from shared_lib.config import settings
-from shared_lib.models import Server
 
 from fastapi_service.core.auth import security_scheme, verify_token
 from fastapi_service.core.errors import ErrorCode
@@ -50,19 +49,11 @@ async def get_server_info():
 @router.patch("/server/by-host/{host}/alias", dependencies=[Depends(verify_token)])
 async def set_server_alias(host: str, body: ServerAliasBody):
     """设置或清空指定 host 的短名/别名。空字符串或 null 视为清空。"""
-    server = await Server.get_or_none(host=host)
-    if not server:
+    result, err = await server_service.set_server_alias(host, body.short_name)
+    if err == "not_found":
         return error(ErrorCode.SERVER_NOT_FOUND, f"Server not found: {host}")
+    if err == "alias_conflict":
+        conflict_host = result["host"] if result else ""
+        return error(ErrorCode.SERVER_NOT_FOUND, f"Alias already used by host {conflict_host}")
 
-    short_name = (body.short_name or "").strip() or None
-    if short_name:
-        conflict = await Server.filter(short_name=short_name).exclude(id=server.id).first()
-        if conflict:
-            return error(ErrorCode.SERVER_NOT_FOUND, f"Alias already used by host {conflict.host}")
-
-    server.short_name = short_name  # type: ignore[assignment]
-    await server.save(update_fields=["short_name", "updated_at"])
-    return success(
-        data={"id": server.id, "host": server.host, "short_name": server.short_name},
-        msg="alias updated",
-    )
+    return success(data=result, msg="alias updated")
