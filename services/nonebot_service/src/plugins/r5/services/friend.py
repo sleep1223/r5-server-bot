@@ -3,13 +3,12 @@ from typing import Any
 
 import httpx
 from nonebot import get_plugin_config, logger, on_notice, on_request
-from nonebot.adapters.onebot.v11 import Bot, FriendAddNoticeEvent, FriendRequestEvent, GroupRequestEvent
+from nonebot.adapters.onebot.v11 import Bot, FriendAddNoticeEvent, FriendRequestEvent, GroupRequestEvent, RequestEvent
 
 from ..config import Config
 from .help import get_help_message
 
-auto_accept_friend = on_request(priority=5, block=False)
-auto_review_group = on_request(priority=5, block=False)
+auto_request = on_request(priority=5, block=False)
 friend_added = on_notice(priority=5, block=False)
 plugin_config = get_plugin_config(Config)
 
@@ -21,13 +20,24 @@ JOIN_REVIEW_SYSTEM_PROMPT = """你是 QQ 群入群审核助手。
 只输出 JSON，不要输出多余文字，格式为 {{"approved": true/false, "reason": "一句话说明原因"}}。"""
 
 
-@auto_accept_friend.handle()
-async def handle_friend_request(bot: Bot, event: FriendRequestEvent) -> None:
-    await bot.set_friend_add_request(flag=event.flag, approve=True)
-    logger.info(f"已自动接受好友申请: {event.user_id}")
+@auto_request.handle()
+async def handle_friend_request(bot: Bot, event: RequestEvent) -> None:
+    logger.info(
+        f"收到请求事件: name={event.get_event_name()}, request_type={event.request_type}, user={getattr(event, 'user_id', '<unknown>')}"
+    )
+
+    if isinstance(event, FriendRequestEvent):
+        await event.approve(bot)
+        logger.info(f"已自动接受好友申请: {event.user_id}")
+        return
+
+    if isinstance(event, GroupRequestEvent):
+        await handle_group_request(bot, event)
+        return
+
+    logger.warning(f"收到未处理的请求事件: {event.get_event_description()}")
 
 
-@auto_review_group.handle()
 async def handle_group_request(bot: Bot, event: GroupRequestEvent) -> None:
     if event.sub_type != "add":
         logger.info(f"跳过非加群申请: group={event.group_id}, user={event.user_id}, sub_type={event.sub_type}")
