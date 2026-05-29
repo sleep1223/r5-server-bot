@@ -116,11 +116,20 @@ async def handle_check_kd(event: Event, args: Message = CommandArg()) -> None:
     user_id = event.get_user_id()
     try:
         bind_resp = await api_client.get_binding(platform="qq", platform_uid=user_id, timeout=5.0)
+        if bind_resp.status_code != 200:
+            await check_kd.finish(f"❌ 查询绑定失败: HTTP {bind_resp.status_code}")
         bind_data = bind_resp.json()
-        if bind_data.get("code") == "0000" and bind_data.get("data"):
-            target = bind_data["data"].get("player_name", "")
-    except Exception:
-        pass
+    except httpx.TimeoutException:
+        await check_kd.finish("❌ 网络请求超时，请稍后再试")
+    except httpx.RequestError as e:
+        await check_kd.finish(f"❌ 网络请求错误: {e}")
+    except ValueError:
+        await check_kd.finish("❌ 查询绑定失败: 后端返回异常")
+
+    if bind_data.get("code") == "0000" and bind_data.get("data"):
+        target = bind_data["data"].get("player_name", "")
+    elif bind_data.get("code") != "6003":
+        await check_kd.finish(f"❌ 查询绑定失败: {bind_data.get('msg', '未知错误')}")
     if not target:
         await check_kd.finish(BINDING_GUIDE)
 
