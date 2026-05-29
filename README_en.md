@@ -7,20 +7,27 @@ This guide introduces how to configure the environment and start the various ser
 ## Environment Preparation
 
 ### 1. Configure pip Mirror (Optional)
+
 To accelerate the download of dependency packages, it is recommended to configure a domestic mirror source:
+
 ```shell
 pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
 ```
 
 ### 2. Install uv
+
 This project uses `uv` for dependency management and execution:
+
 ```shell
 pip install uv
 ```
+
 *Note: After installation, please restart the terminal to ensure the `uv` command takes effect.*
 
 ### 3. Install nb-cli
+
 It is recommended to install the `nb-cli` tool for managing NoneBot:
+
 ```shell
 uv tool install nb-cli
 ```
@@ -28,9 +35,11 @@ uv tool install nb-cli
 ## Configuration
 
 ### 1. Environment Variables
+
 Copy the `env/.env.example` file to `env/.env` and modify the configuration as needed.
 
 **Key settings in `env/.env`:**
+
 ```properties
 # Console output netkey (corresponds to liveapi.cfg)
 r5_target_keys='["server_key"]'
@@ -50,6 +59,7 @@ fastapi_access_tokens='["your_api_token"]'
 ```
 
 ### 2. Game Server Configuration
+
 Ensure the game server configuration files are set correctly to support LiveAPI and RCON connections.
 
 **LiveAPI Configuration**
@@ -75,33 +85,41 @@ rcon_key                 "rcon_key"  // RCON key (note this is the server-side g
 The following steps assume you have entered the project root directory in your terminal.
 
 ### 1. Install Dependencies
+
 Install all packages in the workspace:
+
 ```shell
 uv sync --all-packages
 ```
 
 ### 2. Start Services
+
 Please start the following services in **four different terminal windows**. The FastAPI main service and ingest service are now split into two independent Granian processes and must be started separately.
 
 #### Window 1: Start WebSocket Service
+
 ```shell
 uv run python -m ws_service.main
 ```
 
 #### Window 2: Start FastAPI Main Service
+
 ```shell
 uv run python -m fastapi_service.server
 ```
 
 #### Window 3: Start FastAPI Ingest Service
+
 ```shell
 uv run python -m fastapi_service.ingest_server
 ```
 
 #### Window 4: Start NoneBot Service
+
 **Note**: The NoneBot service depends on the FastAPI service, please ensure the FastAPI service has started successfully.
 
 Enter the NoneBot service directory, sync dependencies, and start:
+
 ```shell
 cd services\nonebot_service
 uv sync
