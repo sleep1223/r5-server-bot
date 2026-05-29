@@ -56,10 +56,11 @@ async def ip_resolution_task() -> None:
                             info.region = data.get("region") or ""
                             info.is_resolved = True
                             await info.save()
-
-                        await Player.filter(ip=ip).update(country=data.get("country"), region=data.get("region"))
                     except Exception as e:
                         logger.error(f"Error saving IP info for {ip}: {e}")
+            for ip, info in existing_ip_map.items():
+                if ip in players_by_ip and (info.country or info.region):
+                    await Player.filter(ip=ip).update(country=info.country, region=info.region)
             for ip in server_ips:
                 ping_val = await get_local_ping(ip)
                 info = await IpInfo.get_or_none(ip=ip)

@@ -131,6 +131,12 @@ async def query_players(q: str, *, page_size: int = 20, offset: int = 0) -> list
             if player.online_at:
                 duration = (datetime.now(CN_TZ) - player.online_at).total_seconds()
 
+        player_country = player.country
+        player_region = player.region
+        if target_loc:
+            player_country = target_loc.get("player_country") or player_country
+            player_region = target_loc.get("player_region") or player_region
+
         total_playtime = player.total_playtime_seconds
         if is_online and duration is not None:
             total_playtime += int(duration)
@@ -148,8 +154,8 @@ async def query_players(q: str, *, page_size: int = 20, offset: int = 0) -> list
                 "status": player.status,
                 "ban_count": player.ban_count,
                 "kick_count": player.kick_count,
-                "country": player.country,
-                "region": player.region,
+                "country": player_country,
+                "region": player_region,
             },
         })
 
