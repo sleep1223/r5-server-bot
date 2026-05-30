@@ -187,15 +187,6 @@ async def _run_one_cycle(
     max_concurrency: int,
 ) -> tuple[set[str], set[str], list[str]]:
     """并行抓取所有服务器状态，串行处理玩家更新。返回 (active_keys, online_nucleus_ids, failed)。"""
-    sem = asyncio.Semaphore(max_concurrency)
-
-    async def _bounded_fetch(s: dict, s_ip: str, s_port: int) -> dict[str, Any]:
-        async with sem:
-            return await asyncio.wait_for(
-                _fetch_status_for_server(s, s_ip, s_port, rcon_key, rcon_pwd, ip_info_map),
-                timeout=per_server_timeout,
-            )
-
     targets: list[tuple[dict, str, int]] = []
     for s in filtered_servers:
         s_ip = s.get("ip")
@@ -207,13 +198,31 @@ async def _run_one_cycle(
             continue
         targets.append((s, s_ip, s_port))
 
-    fetch_tasks = [_bounded_fetch(s, ip, port) for s, ip, port in targets]
-    results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+    results: list[dict[str, Any] | Exception | None] = [None] * len(targets)
+    worker_count = min(max(1, max_concurrency), len(targets)) if targets else 0
+    next_target_index = 0
+
+    async def _fetch_worker() -> None:
+        nonlocal next_target_index
+        while next_target_index < len(targets):
+            idx = next_target_index
+            next_target_index += 1
+            s, s_ip, s_port = targets[idx]
+            try:
+                results[idx] = await asyncio.wait_for(
+                    _fetch_status_for_server(s, s_ip, s_port, rcon_key, rcon_pwd, ip_info_map),
+                    timeout=per_server_timeout,
+                )
+            except Exception as exc:
+                results[idx] = exc
+
+    if worker_count:
+        await asyncio.gather(*(asyncio.create_task(_fetch_worker()) for _ in range(worker_count)))
 
     nucleus_ids: set[int] = set()
     nucleus_hashes: set[str] = set()
     for result in results:
-        if isinstance(result, BaseException):
+        if result is None or isinstance(result, BaseException):
             continue
         for p_data in result.get("players", []) or []:
             r_nucleus_id = p_data.get("uniqueid")
@@ -245,6 +254,9 @@ async def _run_one_cycle(
     # 串行处理玩家写库；RCON 慢但 DB 快，单进程串行写更安全
     for (s, s_ip, s_port), result in zip(targets, results):
         server_key = f"{s_ip}:{s_port}"
+        if result is None:
+            failed_servers.append(f"{server_key}(empty)")
+            continue
         if isinstance(result, BaseException):
             if isinstance(result, asyncio.TimeoutError):
                 failed_servers.append(f"{server_key}(timeout)")
