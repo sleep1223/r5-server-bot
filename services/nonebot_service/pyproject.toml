@@ -11,6 +11,7 @@ dependencies = [
     "nonebot-adapter-onebot>=2.4.6",
     "nonebot-plugin-orm[default]>=0.8.3",
     "nonebot-plugin-access-control>=1.2.4",
+    "nonebot-plugin-moellmchats>=0.22.0",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +34,7 @@ nonebot-adapter-onebot = [
 "@local" = []
 nonebot-plugin-access-control = ["nonebot_plugin_access_control"]
 nonebot-plugin-orm = ["nonebot_plugin_orm"]
+nonebot-plugin-moellmchats = ["nonebot_plugin_moellmchats"]
 
 [tool.ruff]
 line-length = 200
