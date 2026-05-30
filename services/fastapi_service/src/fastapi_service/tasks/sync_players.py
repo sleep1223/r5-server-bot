@@ -187,9 +187,6 @@ async def _run_one_cycle(
     max_concurrency: int,
 ) -> tuple[set[str], set[str], list[str]]:
     """并行抓取所有服务器状态，串行处理玩家更新。返回 (active_keys, online_nucleus_ids, failed)。"""
-    all_players = await Player.all()
-    all_players_index = _build_player_index(all_players)
-
     sem = asyncio.Semaphore(max_concurrency)
 
     async def _bounded_fetch(s: dict, s_ip: str, s_port: int) -> dict[str, Any]:
@@ -213,6 +210,34 @@ async def _run_one_cycle(
     fetch_tasks = [_bounded_fetch(s, ip, port) for s, ip, port in targets]
     results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
+    nucleus_ids: set[int] = set()
+    nucleus_hashes: set[str] = set()
+    for result in results:
+        if isinstance(result, BaseException):
+            continue
+        for p_data in result.get("players", []) or []:
+            r_nucleus_id = p_data.get("uniqueid")
+            if not r_nucleus_id:
+                continue
+            r_nucleus_text = str(r_nucleus_id)
+            if r_nucleus_text.isdigit():
+                nucleus_ids.add(int(r_nucleus_text))
+            nucleus_hashes.add(generate_hash(r_nucleus_text))
+
+    player_filters = []
+    if nucleus_ids:
+        player_filters.append(Q(nucleus_id__in=list(nucleus_ids)))
+    if nucleus_hashes:
+        player_filters.append(Q(nucleus_hash__in=list(nucleus_hashes)))
+    if player_filters:
+        player_filter = player_filters[0]
+        for extra_filter in player_filters[1:]:
+            player_filter |= extra_filter
+        all_players = await Player.filter(player_filter).all()
+    else:
+        all_players = []
+    all_players_index = _build_player_index(all_players)
+
     active_keys: set[str] = set()
     online_nucleus_ids: set[str] = set()
     failed_servers: list[str] = []
@@ -233,6 +258,7 @@ async def _run_one_cycle(
             continue
         active_keys.add(server_key)
         server_cache.set_server(server_key, result)
+        await asyncio.sleep(0)
 
     return active_keys, online_nucleus_ids, failed_servers
 

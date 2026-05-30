@@ -25,8 +25,8 @@ def main() -> None:
         respawn_interval=3.5,
         workers_kill_timeout=30,
         # ── 内存保护 ──
-        workers_lifetime=3600 * 4,
-        workers_max_rss=512,
+        # workers_lifetime=3600 * 4,
+        # workers_max_rss=512,
         # ── 背压控制 ──
         backpressure=settings.fastapi_backpressure,
         backlog=settings.fastapi_backlog,

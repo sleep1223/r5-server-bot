@@ -37,7 +37,7 @@ async def get_local_ping(ip: str) -> int:
 
 
 async def resolve_ips_batch(ips: list[str]) -> dict[str, dict]:
-    return _resolve_ips_batch(ips)
+    return await asyncio.to_thread(_resolve_ips_batch, ips)
 
 
 def get_date_range(range_type: str) -> tuple[datetime | None, datetime | None]:
