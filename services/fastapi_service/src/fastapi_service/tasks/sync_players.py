@@ -316,14 +316,15 @@ async def sync_players_task() -> None:
                 filtered_servers, rcon_key, rcon_pwd, ip_info_map, per_server_timeout, max_concurrency
             )
 
-            server_cache.retain_servers(active_keys)
             elapsed_ms = int((datetime.now() - sync_start).total_seconds() * 1000)
             if failed_servers:
                 logger.warning(
                     f"同步玩家: 成功 {len(active_keys)}/{len(filtered_servers)}, 耗时 {elapsed_ms}ms, "
                     f"失败: {', '.join(failed_servers)}"
                 )
+                logger.warning("Keeping previous server cache because this sync cycle had failures")
             else:
+                server_cache.retain_servers(active_keys)
                 logger.info(
                     f"同步玩家: 成功 {len(active_keys)}/{len(filtered_servers)}, 耗时 {elapsed_ms}ms"
                 )

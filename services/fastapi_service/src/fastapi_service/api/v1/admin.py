@@ -196,7 +196,6 @@ async def unban_player(nucleus_id_or_player_name: int | str):
         return err
     assert player_obj is not None
 
-    rcon_key, rcon_pwd = require_rcon_config()
     online_servers = server_cache.get_online_servers()
     target_loc, online_error = player_service.get_online_location(player_obj)
 
@@ -208,6 +207,7 @@ async def unban_player(nucleus_id_or_player_name: int | str):
 
     # 1) 玩家在线或命中封禁缓存服务器
     if not online_error and target_loc:
+        rcon_key, rcon_pwd = require_rcon_config()
         target_host = target_loc["server_host"]
         target_port = target_loc["server_port"]
         target_server_name = target_loc["server_name"]
@@ -241,13 +241,23 @@ async def unban_player(nucleus_id_or_player_name: int | str):
 
     # 2) 玩家不在线: 异步在所有在线服务器执行 unban
     if online_servers:
+        require_rcon_config()
         admin_service.schedule_unban_background(player_id=player_obj.id, nucleus_id=player_obj.nucleus_id, servers=online_servers)
         return success(
             data={"player_online": False, "async_server_count": len(online_servers)},
             msg=f"Player {player_obj.nucleus_id} is not online; background unban task started",
         )
 
-    return error(ErrorCode.NO_ONLINE_SERVERS, msg="No online servers found to execute unban")
+    await admin_service.record_unban(player_obj.nucleus_id)
+    return success(
+        data={
+            "player_online": False,
+            "async_server_count": 0,
+            "rcon_skipped": True,
+            "skip_reason": "no_online_servers",
+        },
+        msg=f"No online servers; local unban recorded for {player_obj.nucleus_id}",
+    )
 
 
 @router.get("/bans")

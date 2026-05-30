@@ -180,6 +180,9 @@ async def handle_unban(args: Message = CommandArg()) -> None:
         target_server = data.get("target_server")
         target_source = data.get("target_source")
 
+        if data.get("rcon_skipped") and data.get("skip_reason") == "no_online_servers":
+            await cmd_unban.finish(f"🔓 已解除本地封禁\n\n👤 玩家: {target}\n⚠️ 当前无在线服务器，RCON 未同步")
+
         if target_server:
             server_name = _get_server_name(target_server)
             source_cn = "封禁缓存" if target_source == "ban_cache" else "在线"
