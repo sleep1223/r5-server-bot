@@ -30,8 +30,15 @@ async def _fetch_status_for_server(
         await client.connect()
         proc_duration = (datetime.now() - proc_start).total_seconds() * 1000
 
-        await client.authenticate_and_start(rcon_pwd)
+        authenticated = await client.authenticate_and_start(rcon_pwd)
+        if not authenticated:
+            raise RuntimeError("RCON authentication failed")
+
         status_data: dict[str, Any] = await client.get_status()
+        if not status_data.get("players_parsed"):
+            raw_status = str(status_data.get("raw") or "")
+            raise RuntimeError(f"RCON status parse failed (raw_len={len(raw_status)})")
+
         status_data["server_ping"] = int(proc_duration)
         status_data["_server"] = f"{s_ip}:{s_port}"
         status_data["_api_name"] = s.get("name", "Unknown Server")
@@ -178,6 +185,20 @@ def _build_player_index(players: list[Player]) -> dict[str, Player]:
     return idx
 
 
+def _collect_cached_online_nucleus_ids(server_keys: set[str]) -> set[str]:
+    """从失败服务器的上一轮缓存中提取玩家 ID，避免误判为离线。"""
+    cached_online_ids: set[str] = set()
+    for server_key in server_keys:
+        cached_status = server_cache.servers.get(server_key)
+        if not cached_status:
+            continue
+        for p_data in cached_status.get("players", []) or []:
+            r_nucleus_id = p_data.get("uniqueid")
+            if r_nucleus_id:
+                cached_online_ids.add(str(r_nucleus_id))
+    return cached_online_ids
+
+
 async def _run_one_cycle(
     filtered_servers: list[dict],
     rcon_key: str,
@@ -185,8 +206,11 @@ async def _run_one_cycle(
     ip_info_map: dict[str, IpInfo],
     per_server_timeout: float,
     max_concurrency: int,
-) -> tuple[set[str], set[str], list[str]]:
-    """并行抓取所有服务器状态，串行处理玩家更新。返回 (active_keys, online_nucleus_ids, failed)。"""
+) -> tuple[set[str], set[str], list[str], set[str]]:
+    """并行抓取所有服务器状态，串行处理玩家更新。
+
+    返回 (active_keys, online_nucleus_ids, failed_messages, failed_keys)。
+    """
     targets: list[tuple[dict, str, int]] = []
     for s in filtered_servers:
         s_ip = s.get("ip")
@@ -199,15 +223,10 @@ async def _run_one_cycle(
         targets.append((s, s_ip, s_port))
 
     results: list[dict[str, Any] | Exception | None] = [None] * len(targets)
-    worker_count = min(max(1, max_concurrency), len(targets)) if targets else 0
-    next_target_index = 0
+    semaphore = asyncio.Semaphore(max(1, max_concurrency))
 
-    async def _fetch_worker() -> None:
-        nonlocal next_target_index
-        while next_target_index < len(targets):
-            idx = next_target_index
-            next_target_index += 1
-            s, s_ip, s_port = targets[idx]
+    async def _fetch_target(idx: int, s: dict, s_ip: str, s_port: int) -> None:
+        async with semaphore:
             try:
                 results[idx] = await asyncio.wait_for(
                     _fetch_status_for_server(s, s_ip, s_port, rcon_key, rcon_pwd, ip_info_map),
@@ -216,8 +235,12 @@ async def _run_one_cycle(
             except Exception as exc:
                 results[idx] = exc
 
-    if worker_count:
-        await asyncio.gather(*(asyncio.create_task(_fetch_worker()) for _ in range(worker_count)))
+    await asyncio.gather(
+        *(
+            asyncio.create_task(_fetch_target(idx, s, s_ip, s_port))
+            for idx, (s, s_ip, s_port) in enumerate(targets)
+        )
+    )
 
     nucleus_ids: set[int] = set()
     nucleus_hashes: set[str] = set()
@@ -250,14 +273,17 @@ async def _run_one_cycle(
     active_keys: set[str] = set()
     online_nucleus_ids: set[str] = set()
     failed_servers: list[str] = []
+    failed_keys: set[str] = set()
 
     # 串行处理玩家写库；RCON 慢但 DB 快，单进程串行写更安全
     for (s, s_ip, s_port), result in zip(targets, results):
         server_key = f"{s_ip}:{s_port}"
         if result is None:
+            failed_keys.add(server_key)
             failed_servers.append(f"{server_key}(empty)")
             continue
         if isinstance(result, BaseException):
+            failed_keys.add(server_key)
             if isinstance(result, asyncio.TimeoutError):
                 failed_servers.append(f"{server_key}(timeout)")
             else:
@@ -266,13 +292,14 @@ async def _run_one_cycle(
         try:
             await _process_status_players(result, all_players_index, online_nucleus_ids)
         except Exception as e:
+            failed_keys.add(server_key)
             failed_servers.append(f"{server_key}(write:{e})")
             continue
         active_keys.add(server_key)
         server_cache.set_server(server_key, result)
         await asyncio.sleep(0)
 
-    return active_keys, online_nucleus_ids, failed_servers
+    return active_keys, online_nucleus_ids, failed_servers, failed_keys
 
 
 async def sync_players_task() -> None:
@@ -312,7 +339,7 @@ async def sync_players_task() -> None:
             sync_start = datetime.now()
             logger.info(f"开始同步玩家: {len(filtered_servers)} 个服务器 (并发={max_concurrency})")
 
-            active_keys, online_nucleus_ids, failed_servers = await _run_one_cycle(
+            active_keys, online_nucleus_ids, failed_servers, failed_keys = await _run_one_cycle(
                 filtered_servers, rcon_key, rcon_pwd, ip_info_map, per_server_timeout, max_concurrency
             )
 
@@ -322,17 +349,23 @@ async def sync_players_task() -> None:
                     f"同步玩家: 成功 {len(active_keys)}/{len(filtered_servers)}, 耗时 {elapsed_ms}ms, "
                     f"失败: {', '.join(failed_servers)}"
                 )
-                logger.warning("Keeping previous server cache because this sync cycle had failures")
             else:
-                server_cache.retain_servers(active_keys)
                 logger.info(
                     f"同步玩家: 成功 {len(active_keys)}/{len(filtered_servers)}, 耗时 {elapsed_ms}ms"
                 )
 
-            if not failed_servers:
-                await _mark_offline_players(online_nucleus_ids)
-            else:
-                logger.warning("Skipping offline detection due to server sync failures")
+            cached_online_ids = _collect_cached_online_nucleus_ids(failed_keys)
+            if cached_online_ids:
+                online_nucleus_ids.update(cached_online_ids)
+                logger.warning(
+                    f"Using cached players for {len(failed_keys)} failed server(s) "
+                    f"to protect {len(cached_online_ids)} player(s) from offline detection"
+                )
+
+            server_cache.retain_servers(active_keys | failed_keys)
+            await _mark_offline_players(online_nucleus_ids)
+            if failed_servers:
+                logger.warning("Offline detection completed with cached data for failed servers")
         except asyncio.CancelledError:
             logger.info("Player sync task cancelled")
             break
