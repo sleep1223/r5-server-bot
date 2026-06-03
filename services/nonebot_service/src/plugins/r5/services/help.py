@@ -9,6 +9,9 @@ help_service = r5_service.create_subservice("help")
 
 # Matchers
 cmd_help = on_command("帮助", aliases={"help", "菜单", "menu"}, priority=5, block=True)
+cmd_docs = on_command("docs", aliases={"文档"}, priority=5, block=True)
+
+DOCS_MESSAGE = "社区服文档：https://af3mroq0w3.feishu.cn/wiki/WgIhwpiOwi6aYgkEJrQcGc4snHg"
 
 
 def get_help_message() -> str:
@@ -25,7 +28,7 @@ def get_help_message() -> str:
         "  /个人武器 [范围] [排序] 默认本月，需绑定\n"
         "\n"
         "🔍 查询\n"
-        "  /状态 · /查询玩家 <名字或NID>\n"
+        "  /状态 · /查询玩家 <名字或NID> · /docs · /文档\n"
         "\n"
         "👥 组队\n"
         "  /组队 <1或2> · /组队列表 · /加入 <ID>\n"
@@ -48,3 +51,9 @@ def get_help_message() -> str:
 @help_service.patch_handler()
 async def handle_help(args: Message = CommandArg()) -> None:
     await cmd_help.finish(get_help_message())
+
+
+@cmd_docs.handle()
+@help_service.patch_handler()
+async def handle_docs() -> None:
+    await cmd_docs.finish(DOCS_MESSAGE)

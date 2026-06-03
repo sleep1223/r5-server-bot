@@ -3,13 +3,15 @@ from typing import Any
 
 import httpx
 from nonebot import get_plugin_config, logger, on_notice, on_request
-from nonebot.adapters.onebot.v11 import Bot, FriendAddNoticeEvent, FriendRequestEvent, GroupRequestEvent, RequestEvent
+from nonebot.adapters.onebot.v11 import Bot, FriendAddNoticeEvent, FriendRequestEvent, GroupIncreaseNoticeEvent, GroupRequestEvent, Message, MessageSegment, RequestEvent
+from nonebot.rule import is_type
 
 from ..config import Config
 from .help import get_help_message
 
 auto_request = on_request(priority=5, block=False)
-friend_added = on_notice(priority=5, block=False)
+friend_added = on_notice(is_type(FriendAddNoticeEvent), priority=5, block=False)
+group_member_added = on_notice(is_type(GroupIncreaseNoticeEvent), priority=5, block=False)
 plugin_config = get_plugin_config(Config)
 
 JOIN_REVIEW_SYSTEM_PROMPT = """你是 QQ 群入群审核助手。
@@ -64,9 +66,54 @@ async def handle_group_request(bot: Bot, event: GroupRequestEvent) -> None:
 
 @friend_added.handle()
 async def handle_friend_added(bot: Bot, event: FriendAddNoticeEvent) -> None:
-    welcome = "👋 你好！我是 R5 Bot，感谢添加好友！\n\n" + get_help_message()
-    await bot.send_private_msg(user_id=event.user_id, message=welcome)
+    await bot.send_private_msg(user_id=event.user_id, message=_build_friend_welcome_message())
     logger.info(f"已向新好友发送欢迎消息: {event.user_id}")
+
+
+@group_member_added.handle()
+async def handle_group_member_added(bot: Bot, event: GroupIncreaseNoticeEvent) -> None:
+    if event.is_tome():
+        logger.info(f"跳过 Bot 自身入群欢迎: group={event.group_id}, user={event.user_id}")
+        return
+
+    if not _is_group_welcome_enabled(event.group_id):
+        logger.debug(f"跳过未启用欢迎的群成员增加事件: group={event.group_id}, user={event.user_id}")
+        return
+
+    await bot.send_group_msg(group_id=event.group_id, message=_build_group_welcome_message(event.user_id))
+    logger.info(f"已发送新人入群欢迎: group={event.group_id}, user={event.user_id}")
+
+
+def _build_friend_welcome_message() -> str:
+    return (
+        "👋 你好！我是 R5 Bot，感谢添加好友！\n"
+        "\n"
+        "可以先试试这些指令:\n"
+        "  /kd 今日 · 查看今日 KD 榜\n"
+        "  /个人kd · 查看自己的 KD，需先绑定\n"
+        "  /帮助 · 查看完整菜单\n"
+        "\n"
+        + get_help_message()
+    )
+
+
+def _build_group_welcome_message(user_id: int) -> Message:
+    intro = (
+        " 👋 欢迎加入 R5 社区服！\n"
+        "\n"
+        "我是 R5 Bot，可以查询服务器状态、KD/武器统计、玩家在线和组队信息。\n"
+        "建议先添加我为好友，然后私信发送: /绑定 <游戏昵称或NID>\n"
+        "\n"
+        "常用指令:\n"
+        "  /kd 今日 · 查看今日 KD 榜\n"
+        "  /个人kd · 查看自己的 KD，需先绑定\n"
+        "  /帮助 · 查看完整菜单"
+    )
+    return MessageSegment.at(user_id) + intro
+
+
+def _is_group_welcome_enabled(group_id: int) -> bool:
+    return group_id in plugin_config.r5_group_welcome_enabled_groups
 
 
 def _extract_join_answer(comment: str | None) -> str:
