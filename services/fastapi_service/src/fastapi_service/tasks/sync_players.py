@@ -310,6 +310,15 @@ async def sync_players_task() -> None:
     if not rcon_key or not rcon_pwd:
         logger.warning("RCON sync disabled because r5_rcon_key or r5_rcon_password is empty")
         return
+
+    configured_interval = float(getattr(settings, "r5_rcon_sync_interval", 180) or 180)
+    sync_interval = max(configured_interval, 60.0)
+    if sync_interval > configured_interval:
+        logger.warning(
+            f"r5_rcon_sync_interval={configured_interval:g}s 过低，RCON 轮询容易触发端口冷却；"
+            f"本次启动将使用 {sync_interval:g}s 以避免可用性抖动"
+        )
+
     while True:
         try:
             raw = server_cache.raw_response
@@ -371,4 +380,4 @@ async def sync_players_task() -> None:
             break
         except Exception as e:
             logger.error(f"Error in sync_players_task: {e}")
-        await asyncio.sleep(settings.r5_rcon_sync_interval)
+        await asyncio.sleep(sync_interval)
