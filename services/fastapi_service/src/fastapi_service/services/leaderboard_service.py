@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
+from loguru import logger
 from shared_lib.config import settings
 from shared_lib.models import Player, PlayerKilled, Server
+from tortoise import connections
 from tortoise.expressions import F
 from tortoise.functions import Count
 
 from fastapi_service.core.constants import WEAPON_NAME_MAP, to_display_weapon, to_internal_weapon
-from fastapi_service.core.utils import calc_kd, get_date_range
+from fastapi_service.core.utils import CN_TZ, calc_kd, get_date_range
 
 # ── Common helpers ──
 
@@ -46,6 +48,93 @@ async def _aggregate_kills_deaths(
     excluded_server_ids: list[int] | None = None,
 ) -> dict[int, dict[str, int]]:
     """统一的 kill/death 聚合，返回 {player_id: {"kills": N, "deaths": N}}"""
+    if _can_use_daily_stats(extra_filters, group_kills_by, group_deaths_by):
+        window = _stat_date_window(start_time, end_time)
+        if window is not None:
+            server_id = extra_filters.get("server_id") if extra_filters else None
+            try:
+                stats = await _aggregate_kills_deaths_from_daily_stats(
+                    window[0],
+                    window[1],
+                    server_id=server_id,
+                    excluded_server_ids=excluded_server_ids,
+                )
+            except Exception as e:
+                logger.warning(f"read player_kill_daily_stats failed, fallback to player_killed: {e}")
+            else:
+                if stats:
+                    return stats
+                logger.debug("player_kill_daily_stats empty, fallback to player_killed")
+
+    return await _aggregate_kills_deaths_from_events(
+        start_time,
+        end_time,
+        extra_filters=extra_filters,
+        group_kills_by=group_kills_by,
+        group_deaths_by=group_deaths_by,
+        excluded_server_ids=excluded_server_ids,
+    )
+
+
+def _can_use_daily_stats(extra_filters: dict | None, group_kills_by: str, group_deaths_by: str) -> bool:
+    if group_kills_by != "attacker_id" or group_deaths_by != "victim_id":
+        return False
+    return extra_filters is None or set(extra_filters) == {"server_id"}
+
+
+def _stat_date_window(start_time: datetime | None, end_time: datetime | None) -> tuple[date, date] | None:
+    if start_time is None or end_time is None:
+        return None
+    start_day = start_time.astimezone(CN_TZ).date()
+    end_day = end_time.astimezone(CN_TZ).date() + timedelta(days=1)
+    return start_day, end_day
+
+
+async def _aggregate_kills_deaths_from_daily_stats(
+    start_day: date,
+    end_day: date,
+    *,
+    server_id: int | None = None,
+    excluded_server_ids: list[int] | None = None,
+) -> dict[int, dict[str, int]]:
+    params: list[object] = [start_day, end_day]
+    server_clause = ""
+    if server_id is not None:
+        params.append(server_id)
+        server_clause = f"AND server_id = ${len(params)}"
+    elif excluded_server_ids:
+        params.append(excluded_server_ids)
+        server_clause = f"AND server_id <> ALL(${len(params)}::int[])"
+
+    sql = f"""
+    SELECT
+        player_id,
+        SUM(kills)::int AS kills,
+        SUM(deaths)::int AS deaths
+    FROM player_kill_daily_stats
+    WHERE stat_date >= $1::date
+      AND stat_date <  $2::date
+      {server_clause}
+    GROUP BY player_id
+    """
+
+    rows = await connections.get("default").execute_query_dict(sql, params)
+    return {
+        row["player_id"]: {"kills": row["kills"] or 0, "deaths": row["deaths"] or 0}
+        for row in rows
+        if row["player_id"] is not None
+    }
+
+
+async def _aggregate_kills_deaths_from_events(
+    start_time: datetime | None,
+    end_time: datetime | None,
+    *,
+    extra_filters: dict | None = None,
+    group_kills_by: str = "attacker_id",
+    group_deaths_by: str = "victim_id",
+    excluded_server_ids: list[int] | None = None,
+) -> dict[int, dict[str, int]]:
     filters: dict = {}
     if start_time:
         filters["created_at__gte"] = start_time

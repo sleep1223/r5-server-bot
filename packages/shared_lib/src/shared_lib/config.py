@@ -58,6 +58,12 @@ class Settings(BaseSettings):
 
     # KD/武器等战绩统计排除的服务器 IP（如无规则/纯娱乐服），命中则该服务器的击杀记录不计入统计
     kd_excluded_server_hosts: list[str] = []
+    # 玩家每日击杀统计缓存刷新间隔（秒）
+    player_kill_daily_stats_refresh_interval_seconds: int = 300
+    # 每轮刷新回看最近 N 天，覆盖迟到写入和短时间修正
+    player_kill_daily_stats_refresh_lookback_days: int = 2
+    # 单次历史回填的天数上限，避免一次任务扫太久
+    player_kill_daily_stats_backfill_batch_days: int = 7
 
     # Data settings
     qqwry_path: str = "services/fastapi_service/data/qqwry.dat"

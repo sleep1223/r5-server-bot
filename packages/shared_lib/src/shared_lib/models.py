@@ -142,6 +142,26 @@ class PlayerKilled(BaseEvent):
         # created_at 索引和复合 PK 由 PG 分区建表 SQL 创建，不再由 Tortoise generate_schemas 管理
 
 
+class PlayerKillDailyStat(models.Model):
+    id = fields.BigIntField(pk=True)
+    stat_date = fields.DateField(db_index=True)
+    player = fields.ForeignKeyField("models.Player", related_name="daily_kill_stats")
+    server = fields.ForeignKeyField("models.Server", related_name="daily_kill_stats")
+    kills = fields.IntField(default=0)
+    deaths = fields.IntField(default=0)
+    awarded_kills = fields.IntField(default=0)
+    refreshed_at = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "player_kill_daily_stats"
+        unique_together = (("stat_date", "server", "player"),)
+        indexes = (
+            ("stat_date", "server_id", "player_id"),
+            ("player_id", "stat_date"),
+            ("stat_date", "kills"),
+        )
+
+
 class Server(models.Model):
     id = fields.IntField(pk=True)
     host = fields.CharField(max_length=64, unique=True)  # 公网 IP，唯一
