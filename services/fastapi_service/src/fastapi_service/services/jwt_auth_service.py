@@ -22,6 +22,7 @@ from pathlib import Path
 
 import jwt
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from loguru import logger
 from shared_lib.config import settings
 
@@ -35,7 +36,7 @@ class _KeyMaterial:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._private_key_obj = None
+        self._private_key_obj: RSAPrivateKey | None = None
         self._private_path: Path | None = None
         self._private_mtime: float | None = None
 
@@ -45,7 +46,7 @@ class _KeyMaterial:
         self._public_path: Path | None = None
         self._public_mtime: float | None = None
 
-    def get_private_key(self):
+    def get_private_key(self) -> RSAPrivateKey:
         with self._lock:
             path = Path(settings.jwt_private_key_path)
             mtime = _safe_mtime(path)
@@ -104,7 +105,7 @@ def _safe_mtime(path: Path) -> float | None:
         return None
 
 
-def _load_private_key(path: Path):
+def _load_private_key(path: Path) -> RSAPrivateKey:
     if not path.exists():
         raise JwtKeyError(
             f"JWT private key not found at {path}. Generate one with:\n"
@@ -113,10 +114,13 @@ def _load_private_key(path: Path):
     pem = path.read_bytes()
     passphrase = settings.jwt_private_key_passphrase or None
     try:
-        return serialization.load_pem_private_key(
+        key = serialization.load_pem_private_key(
             pem,
             password=passphrase.encode("utf-8") if passphrase else None,
         )
+        if not isinstance(key, RSAPrivateKey):
+            raise JwtKeyError("JWT private key must be an RSA private key for RS256 signing")
+        return key
     except Exception as exc:
         raise JwtKeyError(f"Failed to load JWT private key: {exc}") from exc
 

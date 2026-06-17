@@ -16,16 +16,18 @@ async def _get_player_kd(player_id: int) -> float:
 async def _binding_to_dict(binding: UserBinding, include_kd: bool = True, include_private_fields: bool = True) -> dict:
     if not hasattr(binding, "player") or binding.player is None:
         await binding.fetch_related("player")
+    player = binding.player
+    assert player is not None
     result = {
         "binding_id": binding.id,
-        "player_id": binding.player.id,
-        "player_name": binding.player.name,
+        "player_id": player.id,
+        "player_name": player.name,
     }
     if include_private_fields:
         result["platform"] = binding.platform
         result["platform_uid"] = binding.platform_uid
     if include_kd:
-        result["kd"] = await _get_player_kd(binding.player.id)
+        result["kd"] = await _get_player_kd(player.id)
     return result
 
 
