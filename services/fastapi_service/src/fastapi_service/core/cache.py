@@ -13,6 +13,7 @@ class ServerCache:
         self._servers: dict[str, dict] = {}
         self._raw_response: dict[str, object] = {}
         self._ban_locations: dict[int, dict[str, object]] = {}
+        self._access_reports: dict[str, dict[str, object]] = {}
 
     # ── Server cache ──
 
@@ -63,6 +64,81 @@ class ServerCache:
     def clear_ban_location(self, nucleus_id: int) -> None:
         self._ban_locations.pop(nucleus_id, None)
 
+    # ── SDK access online report cache ──
+
+    def update_access_report(self, server_id: str, data: dict) -> None:
+        server_key = str(server_id or "").strip()
+        if not server_key:
+            return
+
+        players = []
+        for player in data.get("players") or []:
+            uid = player.get("uid") or player.get("nucleusId") or player.get("uniqueid")
+            if uid is None:
+                continue
+            players.append(
+                {
+                    "uniqueid": str(uid),
+                    "name": player.get("playerName") or player.get("name") or str(uid),
+                    "ip": player.get("ip"),
+                    "port": player.get("port"),
+                    "country": player.get("country"),
+                    "region": player.get("region"),
+                    "input_device": player.get("inputDevice")
+                    or player.get("input_device")
+                    or player.get("input")
+                    or player.get("device"),
+                    "user_id": player.get("userId"),
+                    "handle": player.get("handle"),
+                    "signon_state": player.get("signonState"),
+                }
+            )
+
+        self._access_reports[server_key] = {
+            "server_id": server_key,
+            "map": data.get("map"),
+            "tick": data.get("tick"),
+            "num_players": data.get("numPlayers"),
+            "max_players": data.get("maxPlayers"),
+            "players": players,
+            "updated_at": datetime.now(CN_TZ),
+        }
+
+    def get_access_report_location(self, nucleus_id: int, *, ttl_seconds: int = 120) -> dict | None:
+        p_id_str = str(nucleus_id)
+        now = datetime.now(CN_TZ)
+        for server_id, report in self._access_reports.items():
+            updated_at = report.get("updated_at")
+            if isinstance(updated_at, datetime) and (now - updated_at).total_seconds() > ttl_seconds:
+                continue
+
+            players = report.get("players") or []
+            if not isinstance(players, list):
+                continue
+            for p_data in players:
+                if not isinstance(p_data, dict):
+                    continue
+                if str(p_data.get("uniqueid")) != p_id_str:
+                    continue
+                return {
+                    "server_id": server_id,
+                    "server_name": server_id,
+                    "server_host": server_id,
+                    "server_port": 0,
+                    "online_at": updated_at,
+                    "ping": 0,
+                    "player_ip": p_data.get("ip"),
+                    "player_country": p_data.get("country"),
+                    "player_region": p_data.get("region"),
+                    "input_device": p_data.get("input_device"),
+                    "short_name": server_id,
+                    "country": None,
+                    "region": None,
+                    "server_ping": 0,
+                    "_from_access_report": True,
+                }
+        return None
+
     # ── Player location lookup ──
 
     def get_online_location(self, nucleus_id: int) -> dict | None:
@@ -87,7 +163,7 @@ class ServerCache:
                         "region": s_status.get("region"),
                         "server_ping": s_status.get("server_ping", 0),
                     }
-        return None
+        return self.get_access_report_location(nucleus_id)
 
     def get_cached_ban_location(self, nucleus_id: int) -> dict | None:
         cached = self._ban_locations.get(nucleus_id)

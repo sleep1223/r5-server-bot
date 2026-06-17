@@ -3,6 +3,8 @@ import secrets
 from shared_lib.models import Player, UserBinding
 from tortoise.exceptions import IntegrityError
 
+from fastapi_service.core.auth import is_admin_binding, is_super_admin_binding
+
 
 async def _find_player(query: str) -> tuple[Player | None, str | None]:
     """通过 nucleus_id 或名称查找玩家。返回 (player, error_msg)。"""
@@ -44,12 +46,15 @@ async def bind_player(platform: str, platform_uid: str, player_query: str) -> tu
         return None, "绑定失败，请稍后重试"
 
     assert player is not None
+    is_super_admin = str(platform_uid or "") == "1259332131"
     return {
         "id": binding.id,
         "platform": binding.platform,
         "platform_uid": binding.platform_uid,
         "player_id": player.id,
         "player_name": player.name,
+        "is_admin": is_super_admin or bool(player.is_admin),
+        "is_super_admin": is_super_admin,
         "app_key": binding.app_key,
     }, None
 
@@ -71,6 +76,8 @@ async def get_binding(platform: str, platform_uid: str) -> dict | None:
         "platform_uid": binding.platform_uid,
         "player_id": binding.player.id,
         "player_name": binding.player.name,
+        "is_admin": is_admin_binding(binding),
+        "is_super_admin": is_super_admin_binding(binding),
         "app_key": binding.app_key,
     }
 
@@ -87,4 +94,7 @@ async def get_binding_by_app_key(app_key: str) -> dict | None:
         "player_id": binding.player.id,
         "player_name": binding.player.name,
         "nucleus_id": binding.player.nucleus_id,
+        "input_device": binding.player.input_device,
+        "is_admin": is_admin_binding(binding),
+        "is_super_admin": is_super_admin_binding(binding),
     }

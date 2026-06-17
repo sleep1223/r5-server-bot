@@ -1,0 +1,431 @@
+from datetime import datetime
+from typing import Literal
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, ConfigDict, Field
+from shared_lib.models import Player
+
+from fastapi_service.core.auth import verify_admin_app_key, verify_super_admin_app_key
+from fastapi_service.core.errors import ErrorCode
+from fastapi_service.core.response import error, paginated, success
+from fastapi_service.services import admin_management_service, player_access_service, player_service
+
+from ..deps import Pagination, get_pagination
+
+router = APIRouter(prefix="/admin", tags=["r5-admin"], dependencies=[Depends(verify_admin_app_key)])
+
+
+class ScopedServerBody(BaseModel):
+    server_scope: Literal["global", "server"] = "global"
+    server_id: str | None = None
+    server_key: str | None = None
+    server_host: str | None = None
+    server_port: int | None = None
+
+
+class PlayerActionBody(ScopedServerBody):
+    reason: str = "RULES"
+    sync_player_ip: bool = False
+    remark: str | None = None
+    duration_seconds: int | None = Field(default=None, gt=0)
+
+
+class UnbanBody(ScopedServerBody):
+    remark: str | None = None
+
+
+class PlayerAdminBody(BaseModel):
+    is_admin: bool
+    remark: str | None = None
+
+
+class AccessActionBody(ScopedServerBody):
+    target_type: Literal["player", "uid", "ip", "cidr", "country", "region"]
+    target_value: int | str
+    reason: str = "RULES"
+    sync_player_ip: bool = False
+    remark: str | None = None
+    duration_seconds: int | None = Field(default=None, gt=0)
+
+
+class AccessPreviewBody(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    player_identifier: int | str | None = None
+    uid: int | str | None = None
+    ip: str | None = None
+    server_id: str | None = None
+    country: str | None = None
+    region: str | None = None
+
+
+class AccessRuleCreateBody(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    rule_type: Literal["uid", "ip", "cidr", "geo", "country", "region"]
+    action: Literal["allow", "deny"]
+    value: str
+    server_scope: Literal["global", "server"] = "global"
+    server_id: str | None = None
+    reason: str | None = None
+    remark: str | None = None
+    rule_id: str | None = None
+    source_action: str | None = None
+    expires_at: datetime | None = None
+    enabled: bool = True
+    priority: int = Field(default=100, ge=0)
+    player_identifier: int | str | None = None
+
+
+class AccessRuleUpdateBody(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    rule_type: Literal["uid", "ip", "cidr", "geo", "country", "region"] | None = None
+    action: Literal["allow", "deny"] | None = None
+    value: str | None = None
+    server_scope: Literal["global", "server"] | None = None
+    server_id: str | None = None
+    reason: str | None = None
+    remark: str | None = None
+    rule_id: str | None = None
+    operator: str | None = None
+    source_action: str | None = None
+    expires_at: datetime | None = None
+    enabled: bool | None = None
+    priority: int | None = Field(default=None, ge=0)
+
+
+@router.get("/players")
+async def admin_list_players(
+    q: str | None = None,
+    status: Literal["online", "offline", "ban", "kick", "banned", "kicked"] | None = None,
+    nucleus_id: int | None = None,
+    ip: str | None = None,
+    country: str | None = None,
+    region: str | None = None,
+    is_admin: bool | None = None,
+    access_server_id: str | None = None,
+    pg: Pagination = Depends(get_pagination),
+):
+    try:
+        items, total = await admin_management_service.list_players(
+            q=q,
+            status=status,
+            nucleus_id=nucleus_id,
+            ip=ip,
+            country=country,
+            region=region,
+            is_admin=is_admin,
+            access_server_id=access_server_id,
+            page_size=pg.page_size,
+            offset=pg.offset,
+        )
+    except ValueError as exc:
+        return error(ErrorCode.INVALID_REASON, str(exc))
+    return paginated(data=items, total=total, msg="Admin players retrieved")
+
+
+@router.get("/players/{identifier}")
+async def admin_get_player(identifier: int | str, access_server_id: str | None = None):
+    player, err = await player_service.get_player_by_identifier(identifier)
+    if err:
+        return err
+    assert player is not None
+    data = await admin_management_service.serialize_player_detail(
+        player,
+        access_server_id=access_server_id,
+        include_history=True,
+    )
+    return success(data=data, msg="Admin player retrieved")
+
+
+@router.get("/players/{identifier}/access-matches")
+async def admin_get_player_access_matches(identifier: int | str, access_server_id: str | None = None):
+    player, err = await player_service.get_player_by_identifier(identifier)
+    if err:
+        return err
+    assert player is not None
+    data = await player_access_service.trace_player_access(
+        uid=player.nucleus_id,
+        ip=player.ip,
+        server_id=access_server_id,
+        player=player,
+        country=player.country,
+        region=player.region,
+    )
+    return success(data=data, msg="Player access matches retrieved")
+
+
+@router.patch("/players/{identifier}/admin", dependencies=[Depends(verify_super_admin_app_key)])
+async def admin_set_player_admin(identifier: int | str, body: PlayerAdminBody):
+    data, err = await admin_management_service.set_player_admin(
+        identifier=identifier,
+        is_admin=body.is_admin,
+        operator_name="super_admin",
+        remark=body.remark,
+    )
+    if err:
+        return err
+    return success(data=data, msg="Player admin flag updated")
+
+
+@router.post("/players/{identifier}/ban")
+async def admin_ban_player(identifier: int | str, body: PlayerActionBody):
+    data, err = await admin_management_service.ban_player(
+        identifier=identifier,
+        reason=body.reason,
+        operator_name="admin",
+        server_scope=body.server_scope,
+        server_id=body.server_id,
+        server_key=body.server_key,
+        server_host=body.server_host,
+        server_port=body.server_port,
+        sync_player_ip=body.sync_player_ip,
+        remark=body.remark,
+        duration_seconds=body.duration_seconds,
+    )
+    if err:
+        return err
+    return success(data=data, msg="Admin ban submitted")
+
+
+@router.post("/players/{identifier}/unban")
+async def admin_unban_player(identifier: int | str, body: UnbanBody):
+    data, err = await admin_management_service.unban_player(
+        identifier=identifier,
+        operator_name="admin",
+        server_scope=body.server_scope,
+        server_id=body.server_id,
+        server_key=body.server_key,
+        server_host=body.server_host,
+        server_port=body.server_port,
+        remark=body.remark,
+    )
+    if err:
+        return err
+    return success(data=data, msg="Admin unban submitted")
+
+
+@router.post("/players/{identifier}/kick")
+async def admin_kick_player(identifier: int | str, body: PlayerActionBody):
+    data, err = await admin_management_service.kick_player(
+        identifier=identifier,
+        reason=body.reason,
+        operator_name="admin",
+        server_scope=body.server_scope,
+        server_id=body.server_id,
+        server_key=body.server_key,
+        server_host=body.server_host,
+        server_port=body.server_port,
+        sync_player_ip=body.sync_player_ip,
+        remark=body.remark,
+        duration_seconds=body.duration_seconds,
+    )
+    if err:
+        return err
+    return success(data=data, msg="Admin kick submitted")
+
+
+@router.post("/access-actions/{action}")
+async def admin_apply_access_action(action: Literal["ban", "kick"], body: AccessActionBody):
+    data, err = await admin_management_service.apply_access_action(
+        action=action,
+        target_type=body.target_type,
+        target_value=body.target_value,
+        reason=body.reason,
+        operator_name="admin",
+        server_scope=body.server_scope,
+        server_id=body.server_id,
+        server_key=body.server_key,
+        server_host=body.server_host,
+        server_port=body.server_port,
+        sync_player_ip=body.sync_player_ip,
+        remark=body.remark,
+        duration_seconds=body.duration_seconds,
+    )
+    if err:
+        return err
+    return success(data=data, msg=f"Admin {action} submitted")
+
+
+@router.get("/access-rules")
+async def admin_list_access_rules(
+    q: str | None = None,
+    rule_type: Literal["uid", "ip", "cidr", "geo", "country", "region"] | None = None,
+    action: Literal["allow", "deny"] | None = None,
+    server_scope: Literal["global", "server"] | None = None,
+    server_id: str | None = None,
+    enabled: bool | None = None,
+    pg: Pagination = Depends(get_pagination),
+):
+    items, total = await player_access_service.list_access_rules(
+        q=q,
+        rule_type=rule_type,
+        action=action,
+        server_scope=server_scope,
+        server_id=server_id,
+        enabled=enabled,
+        page_size=pg.page_size,
+        offset=pg.offset,
+    )
+    return paginated(data=items, total=total, msg="Access rules retrieved")
+
+
+@router.post("/access-rules/preview")
+async def admin_preview_access_rules(body: AccessPreviewBody):
+    player = None
+    if body.player_identifier is not None:
+        player, err = await player_service.get_player_by_identifier(body.player_identifier)
+        if err:
+            return err
+
+    data = await player_access_service.trace_player_access(
+        uid=body.uid if body.uid is not None else (player.nucleus_id if player else None),
+        ip=body.ip if body.ip is not None else (player.ip if player else None),
+        server_id=body.server_id,
+        player=player,
+        country=body.country if body.country is not None else (player.country if player else None),
+        region=body.region if body.region is not None else (player.region if player else None),
+    )
+    return success(data=data, msg="Access rules previewed")
+
+
+@router.post("/access-rules")
+async def admin_create_access_rule(body: AccessRuleCreateBody):
+    player = None
+    if body.player_identifier is not None:
+        player, err = await player_service.get_player_by_identifier(body.player_identifier)
+        if err:
+            return err
+
+    try:
+        rule = await player_access_service.create_access_rule(
+            rule_type=body.rule_type,
+            action=body.action,
+            value=body.value,
+            server_scope=body.server_scope,
+            server_id=body.server_id,
+            reason=body.reason,
+            remark=body.remark,
+            rule_id=body.rule_id,
+            operator="admin",
+            source_action=body.source_action,
+            expires_at=body.expires_at,
+            enabled=body.enabled,
+            priority=body.priority,
+            player=player,
+        )
+    except ValueError as exc:
+        return error(ErrorCode.INVALID_REASON, str(exc))
+
+    return success(data=player_access_service.serialize_access_rule(rule), msg="Access rule created")
+
+
+@router.get("/access-rules/{rule_db_id}")
+async def admin_get_access_rule(rule_db_id: int):
+    rule = await player_access_service.get_access_rule(rule_db_id)
+    if not rule:
+        return error(ErrorCode.SERVER_NOT_FOUND, f"Access rule not found: {rule_db_id}")
+    return success(data=player_access_service.serialize_access_rule(rule), msg="Access rule retrieved")
+
+
+@router.patch("/access-rules/{rule_db_id}")
+async def admin_update_access_rule(rule_db_id: int, body: AccessRuleUpdateBody):
+    rule = await player_access_service.get_access_rule(rule_db_id)
+    if not rule:
+        return error(ErrorCode.SERVER_NOT_FOUND, f"Access rule not found: {rule_db_id}")
+
+    updates = body.model_dump(exclude_unset=True)
+    try:
+        updated = await player_access_service.update_access_rule(rule, **updates)
+    except ValueError as exc:
+        return error(ErrorCode.INVALID_REASON, str(exc))
+
+    return success(data=player_access_service.serialize_access_rule(updated), msg="Access rule updated")
+
+
+@router.delete("/access-rules/{rule_db_id}")
+async def admin_disable_access_rule(rule_db_id: int):
+    rule = await player_access_service.get_access_rule(rule_db_id)
+    if not rule:
+        return error(ErrorCode.SERVER_NOT_FOUND, f"Access rule not found: {rule_db_id}")
+    disabled = await player_access_service.disable_access_rule(rule)
+    return success(data=player_access_service.serialize_access_rule(disabled), msg="Access rule disabled")
+
+
+@router.get("/access-operations")
+async def admin_list_access_operations(
+    action: str | None = None,
+    target_type: str | None = None,
+    q: str | None = None,
+    player_id: int | None = None,
+    server_scope: Literal["global", "server"] | None = None,
+    server_id: str | None = None,
+    pg: Pagination = Depends(get_pagination),
+):
+    items, total = await player_access_service.list_access_operations(
+        action=action,
+        target_type=target_type,
+        q=q,
+        player_id=player_id,
+        server_scope=server_scope,
+        server_id=server_id,
+        page_size=pg.page_size,
+        offset=pg.offset,
+    )
+    return paginated(data=items, total=total, msg="Access operations retrieved")
+
+
+@router.get("/access-notices")
+async def admin_list_access_notices(
+    uid: str | None = None,
+    requires_ack: bool | None = None,
+    acknowledged: bool | None = None,
+    server_scope: Literal["global", "server"] | None = None,
+    server_id: str | None = None,
+    pg: Pagination = Depends(get_pagination),
+):
+    items, total = await player_access_service.list_access_notices(
+        uid=uid,
+        requires_ack=requires_ack,
+        acknowledged=acknowledged,
+        server_scope=server_scope,
+        server_id=server_id,
+        page_size=pg.page_size,
+        offset=pg.offset,
+    )
+    return paginated(data=items, total=total, msg="Access notices retrieved")
+
+
+@router.post("/access-notices/{notice_id}/ack")
+async def admin_ack_access_notice(notice_id: int):
+    notice = await player_access_service.get_access_notice(notice_id)
+    if not notice:
+        return error(ErrorCode.SERVER_NOT_FOUND, f"Access notice not found: {notice_id}")
+
+    player = None
+    notice_player_id = getattr(notice, "player_id", None)
+    if notice_player_id:
+        player = await Player.get_or_none(id=notice_player_id)
+
+    operation = await player_access_service.create_access_operation(
+        action="ack",
+        target_type="uid",
+        target_value=notice.uid,
+        normalized_target=notice.uid,
+        server_scope=notice.server_scope,
+        server_id=notice.server_id,
+        reason=notice.reason,
+        operator="admin",
+        player=player,
+        result={"notice_id": notice.id},
+        linked_rule_ids=[f"kick_notice:{notice.id}"],
+    )
+    updated = await player_access_service.acknowledge_access_notice(notice)
+    return success(
+        data={
+            "notice": player_access_service.serialize_access_notice(updated),
+            "operation": player_access_service.serialize_access_operation(operation),
+        },
+        msg="Access notice acknowledged",
+    )

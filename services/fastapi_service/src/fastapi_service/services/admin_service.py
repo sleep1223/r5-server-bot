@@ -7,6 +7,7 @@ from tortoise.expressions import F
 
 from fastapi_service.core.cache import server_cache
 
+from . import player_access_service
 from .rcon import rcon_session
 
 
@@ -102,6 +103,7 @@ async def unban_player_on_server(nucleus_id: int, host: str, port: int, rcon_key
 async def record_ban(player: Player, reason: str, operator_name: str) -> None:
     await BanRecord.create(player=player, reason=reason, operator=operator_name)
     await Player.filter(id=player.id).update(ban_count=F("ban_count") + 1, status="banned")
+    await player_access_service.ensure_uid_blacklist_rule(player, reason, operator_name)
 
 
 async def record_kick(player: Player) -> None:
@@ -119,6 +121,7 @@ async def mark_status_kicked(player: Player) -> None:
 async def record_unban(nucleus_id: int) -> None:
     await Player.filter(nucleus_id=nucleus_id).update(status="offline")
     server_cache.clear_ban_location(nucleus_id)
+    await player_access_service.disable_uid_blacklist_rule(nucleus_id)
 
 
 # ── Background tasks ──
@@ -190,6 +193,7 @@ async def list_bans(*, page_size: int, offset: int, is_admin: bool = False) -> t
             "reason": ban.reason,
             "operator": ban.operator,
             "created_at": ban.created_at,
+            "access": await player_access_service.get_player_access_state(player=ban.player),
         }
         if is_admin:
             player_info["player"].update({"region": ban.player.region})

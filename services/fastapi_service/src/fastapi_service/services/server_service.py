@@ -2,6 +2,7 @@ from shared_lib.models import Server
 
 from fastapi_service.core.cache import server_cache
 from fastapi_service.core.utils import parse_short_name
+from fastapi_service.services import player_access_service
 
 
 def _safe_int(value, default: int = 0) -> int:
@@ -15,7 +16,7 @@ def get_server_info() -> list[dict]:
     return list(server_cache.servers.values())
 
 
-def list_servers(
+async def list_servers(
     *,
     server_name: str | None = None,
     simple: bool = False,
@@ -116,13 +117,13 @@ def list_servers(
 
             if not simple:
                 player_list = []
+                access_server_id = status.get("server_id") or status.get("_server") or key
                 for p in players_data:
-                    p_info: dict = {
-                        "name": p.get("name", "Unknown"),
-                        "country": p.get("country"),
-                    }
-                    if is_admin:
-                        p_info["region"] = p.get("region")
+                    p_info = await player_access_service.build_online_player_info(
+                        p,
+                        is_admin=is_admin,
+                        server_id=access_server_id,
+                    )
                     player_list.append(p_info)
                 entry["players"] = player_list
         elif not simple:
@@ -169,13 +170,13 @@ def list_servers(
             entry["admin_region"] = status.get("region")
         if not simple:
             player_list = []
+            access_server_id = status.get("server_id") or status.get("_server") or key
             for p in players_data:
-                p_info = {
-                    "name": p.get("name", "Unknown"),
-                    "country": p.get("country"),
-                }
-                if is_admin:
-                    p_info["region"] = p.get("region")
+                p_info = await player_access_service.build_online_player_info(
+                    p,
+                    is_admin=is_admin,
+                    server_id=access_server_id,
+                )
                 player_list.append(p_info)
             entry["players"] = player_list
         results.append(entry)

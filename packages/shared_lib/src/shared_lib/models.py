@@ -16,6 +16,8 @@ class Player(models.Model):
     kick_count = fields.IntField(default=0)
     ban_count = fields.IntField(default=0)
     hardware_name = fields.CharField(max_length=100, null=True)
+    input_device = fields.CharField(max_length=50, null=True, db_index=True)
+    is_admin = fields.BooleanField(default=False, db_index=True)
     total_playtime_seconds = fields.BigIntField(default=0)
     online_at = fields.DatetimeField(null=True)
     created_at = fields.DatetimeField(auto_now_add=True)
@@ -238,6 +240,99 @@ class BanRecord(models.Model):
 
     class Meta:
         table = "ban_records"
+
+
+class PlayerAccessOperation(models.Model):
+    id = fields.IntField(pk=True)
+    action = fields.CharField(max_length=20, db_index=True)  # ban, kick, unban, ack, rule_create, admin_set
+    target_type = fields.CharField(max_length=20, db_index=True)  # player, uid, ip, cidr, country, region
+    target_value = fields.CharField(max_length=255, db_index=True)
+    normalized_target = fields.CharField(max_length=255, null=True, db_index=True)
+    server_scope = fields.CharField(max_length=20, default="global", db_index=True)
+    server_id = fields.CharField(max_length=128, null=True, db_index=True)
+    reason = fields.CharField(max_length=50, null=True)
+    remark = fields.TextField(null=True)
+    operator = fields.CharField(max_length=255, null=True)
+    player = fields.ForeignKeyField(
+        "models.Player",
+        related_name="access_operations",
+        null=True,
+        on_delete=fields.SET_NULL,
+    )
+    result = fields.JSONField(null=True)
+    linked_rule_ids = fields.JSONField(null=True)
+    created_at = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "player_access_operations"
+        indexes = (("action", "target_type", "created_at"), ("server_scope", "server_id", "created_at"))
+
+
+class PlayerAccessRule(models.Model):
+    id = fields.IntField(pk=True)
+    rule_type = fields.CharField(max_length=20, db_index=True)  # uid, ip, cidr, geo, country, region
+    action = fields.CharField(max_length=10, db_index=True)  # allow, deny
+    value = fields.CharField(max_length=255, db_index=True)
+    server_scope = fields.CharField(max_length=20, default="global", db_index=True)  # global, server
+    server_id = fields.CharField(max_length=128, null=True, db_index=True)
+    reason = fields.CharField(max_length=255, null=True)
+    remark = fields.TextField(null=True)
+    rule_id = fields.CharField(max_length=100, null=True, unique=True)
+    operator = fields.CharField(max_length=255, null=True)
+    source_action = fields.CharField(max_length=20, null=True, db_index=True)
+    source_operation = fields.ForeignKeyField(
+        "models.PlayerAccessOperation",
+        related_name="rules",
+        null=True,
+        on_delete=fields.SET_NULL,
+    )
+    expires_at = fields.DatetimeField(null=True, db_index=True)
+    enabled = fields.BooleanField(default=True, db_index=True)
+    priority = fields.IntField(default=100)
+    player = fields.ForeignKeyField(
+        "models.Player",
+        related_name="access_rules",
+        null=True,
+        on_delete=fields.SET_NULL,
+    )
+    created_at = fields.DatetimeField(auto_now_add=True)
+    updated_at = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "player_access_rules"
+        indexes = (("rule_type", "action", "value", "enabled"), ("server_scope", "server_id", "enabled"))
+
+
+class PlayerAccessNotice(models.Model):
+    id = fields.IntField(pk=True)
+    player = fields.ForeignKeyField(
+        "models.Player",
+        related_name="access_notices",
+        null=True,
+        on_delete=fields.SET_NULL,
+    )
+    uid = fields.CharField(max_length=64, db_index=True)
+    action = fields.CharField(max_length=20, default="kick", db_index=True)
+    reason = fields.CharField(max_length=50, null=True)
+    message = fields.TextField(null=True)
+    message_context = fields.JSONField(null=True)
+    server_scope = fields.CharField(max_length=20, default="global", db_index=True)
+    server_id = fields.CharField(max_length=128, null=True, db_index=True)
+    requires_ack = fields.BooleanField(default=True, db_index=True)
+    acknowledged_at = fields.DatetimeField(null=True, db_index=True)
+    expires_at = fields.DatetimeField(null=True, db_index=True)
+    operation = fields.ForeignKeyField(
+        "models.PlayerAccessOperation",
+        related_name="notices",
+        null=True,
+        on_delete=fields.SET_NULL,
+    )
+    created_at = fields.DatetimeField(auto_now_add=True)
+    updated_at = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "player_access_notices"
+        indexes = (("uid", "requires_ack", "acknowledged_at"), ("server_scope", "server_id", "requires_ack"))
 
 
 class UserBinding(models.Model):

@@ -10,6 +10,7 @@ from fastapi_service.core.cache import server_cache
 from fastapi_service.core.errors import ErrorCode
 from fastapi_service.core.response import error
 from fastapi_service.core.utils import CN_TZ, parse_short_name
+from fastapi_service.services import player_access_service
 
 
 async def get_player_by_identifier(identifier: int | str, require_nucleus_id: bool = True) -> tuple[Player, None] | tuple[None, dict]:
@@ -141,6 +142,8 @@ async def query_players(q: str, *, page_size: int = 20, offset: int = 0) -> list
         if is_online and duration is not None:
             total_playtime += int(duration)
 
+        access = await player_access_service.get_player_access_state(player=player)
+
         results.append({
             "is_online": is_online,
             "server": server_info,
@@ -148,6 +151,7 @@ async def query_players(q: str, *, page_size: int = 20, offset: int = 0) -> list
             "duration_seconds": int(duration) if duration is not None else 0,
             "total_playtime_seconds": total_playtime,
             "ping": ping,
+            "access": access,
             "player": {
                 "name": player.name,
                 "nucleus_id": player.nucleus_id,

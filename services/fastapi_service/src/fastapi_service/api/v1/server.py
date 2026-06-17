@@ -31,7 +31,7 @@ async def get_server_list(
     - ``cn_only``: 只返回已通过 RCON 同步到本地的服务器（通常是中国服）。
     """
     is_admin = check_is_admin(credentials, settings.fastapi_access_tokens)
-    results = server_service.list_servers(
+    results = await server_service.list_servers(
         server_name=server_name,
         simple=simple,
         cn_only=cn_only,

@@ -4,6 +4,7 @@ from shared_lib.config import settings
 from shared_lib.models import UserBinding
 
 security_scheme = HTTPBearer(auto_error=False)
+SUPER_ADMIN_PLATFORM_UID = "1259332131"
 
 
 async def verify_token(credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme)):
@@ -43,4 +44,24 @@ async def verify_app_key(x_app_key: str = Header(..., description="用户 AppKey
     binding = await UserBinding.filter(app_key=x_app_key).prefetch_related("player").first()
     if not binding:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid AppKey")
+    return binding
+
+
+def is_super_admin_binding(binding: UserBinding) -> bool:
+    return str(binding.platform_uid or "") == SUPER_ADMIN_PLATFORM_UID
+
+
+def is_admin_binding(binding: UserBinding) -> bool:
+    return is_super_admin_binding(binding) or bool(getattr(binding.player, "is_admin", False))
+
+
+async def verify_admin_app_key(binding: UserBinding = Depends(verify_app_key)) -> UserBinding:
+    if not is_admin_binding(binding):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin permission required")
+    return binding
+
+
+async def verify_super_admin_app_key(binding: UserBinding = Depends(verify_app_key)) -> UserBinding:
+    if not is_super_admin_binding(binding):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super admin permission required")
     return binding
