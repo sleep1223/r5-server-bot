@@ -57,7 +57,7 @@ async def create_team(payload: CreateTeamRequest):
 async def list_teams(pg: Pagination = Depends(get_pagination), is_internal: bool = Depends(has_valid_token)):
     """列出所有开放的队伍。"""
     items, total = await team_service.list_open_teams(page_size=pg.page_size, offset=pg.offset, include_private_fields=is_internal)
-    return paginated(data=items, total=total, msg="Teams retrieved")
+    return paginated(data=items, total=total, msg="队伍列表已获取")
 
 
 @router.get("/teams/{team_id}")

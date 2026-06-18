@@ -26,10 +26,10 @@ async def resolve_public_ip(override: str = "", timeout: float = 3.0) -> str:
                 resp.raise_for_status()
                 ip = resp.text.strip()
                 if ip:
-                    logger.info(f"Resolved public IP via {url}: {ip}")
+                    logger.info(f"公网 IP 解析成功: 来源={url}, ip={ip}")
                     return ip
             except Exception as e:
                 last_error = e
-                logger.warning(f"Public IP probe failed via {url}: {e}")
+                logger.warning(f"公网 IP 探测失败: 来源={url}, error={e}")
 
-    raise RuntimeError(f"Failed to resolve public IP from any provider: {last_error}")
+    raise RuntimeError(f"无法从任何公共 IP 服务解析公网 IP: {last_error}")

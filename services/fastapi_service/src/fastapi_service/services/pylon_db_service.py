@@ -44,7 +44,7 @@ async def write_steam_auth_log(
             error_code=error_code,
         )
     except Exception as exc:  # pragma: no cover - audit log must not break auth
-        logger.warning(f"Failed to write SteamAuthLog: {exc}")
+        logger.warning(f"写入 SteamAuthLog 失败: {exc}")
 
 
 async def lookup_bans_by_persona_ids(persona_ids: list[int]) -> dict[int, BanLookupResult]:
@@ -56,11 +56,9 @@ async def lookup_bans_by_persona_ids(persona_ids: list[int]) -> dict[int, BanLoo
     if not persona_ids:
         return {}
     try:
-        banned_players = await Player.filter(
-            nucleus_id__in=persona_ids, status="banned"
-        )
+        banned_players = await Player.filter(nucleus_id__in=persona_ids, status="banned")
     except Exception as exc:
-        logger.warning(f"Bulk ban lookup failed: {exc}")
+        logger.warning(f"批量封禁查询失败: {exc}")
         return {}
 
     if not banned_players:
@@ -68,11 +66,7 @@ async def lookup_bans_by_persona_ids(persona_ids: list[int]) -> dict[int, BanLoo
 
     by_id = {p.id: p for p in banned_players}
     # 一次性取所有相关玩家的 BanRecord，按 created_at 倒序，取首条作为最新
-    record_rows = (
-        await BanRecord.filter(player_id__in=list(by_id.keys()))
-        .order_by("-created_at")
-        .values("player_id", "reason", "operator")
-    )
+    record_rows = await BanRecord.filter(player_id__in=list(by_id.keys())).order_by("-created_at").values("player_id", "reason", "operator")
     latest_record_by_player: dict[int, dict] = {}
     for r in record_rows:
         pid = r["player_id"]
@@ -89,11 +83,9 @@ async def lookup_bans_by_persona_ids(persona_ids: list[int]) -> dict[int, BanLoo
             continue
         rec = latest_record_by_player.get(p.id)
         if rec is None:
-            out[persona_int] = BanLookupResult(is_banned=True, reason="banned", operator=None, ban_type=0)
+            out[persona_int] = BanLookupResult(is_banned=True, reason="已封禁", operator=None, ban_type=0)
         else:
-            out[persona_int] = BanLookupResult(
-                is_banned=True, reason=rec["reason"], operator=rec["operator"], ban_type=0
-            )
+            out[persona_int] = BanLookupResult(is_banned=True, reason=rec["reason"], operator=rec["operator"], ban_type=0)
     return out
 
 
@@ -111,21 +103,19 @@ async def lookup_player_ban_by_persona_id(persona_id: int) -> BanLookupResult:
     except DoesNotExist:
         return BanLookupResult(is_banned=False)
     except Exception as exc:
-        logger.warning(f"Player ban lookup failed for id={persona_id}: {exc}")
+        logger.warning(f"玩家封禁查询失败: id={persona_id}, error={exc}")
         return BanLookupResult(is_banned=False)
 
     if player.status != "banned":
         return BanLookupResult(is_banned=False)
 
     # Take the most recent ban record (if any) for the reason / operator detail.
-    ban_record: BanRecord | None = (
-        await BanRecord.filter(player=player).order_by("-created_at").first()
-    )
+    ban_record: BanRecord | None = await BanRecord.filter(player=player).order_by("-created_at").first()
 
     if ban_record is None:
         return BanLookupResult(
             is_banned=True,
-            reason="banned",
+            reason="已封禁",
             operator=None,
             ban_type=0,
         )

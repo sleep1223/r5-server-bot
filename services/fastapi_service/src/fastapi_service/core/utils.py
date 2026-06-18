@@ -32,7 +32,7 @@ async def get_local_ping(ip: str) -> int:
             if "time<1ms" in output.lower().replace(" ", ""):
                 return 1
     except Exception as e:
-        logger.warning(f"Ping failed for {ip}: {e}")
+        logger.warning(f"Ping {ip} 失败: {e}")
     return 0
 
 

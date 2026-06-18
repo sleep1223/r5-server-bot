@@ -12,4 +12,4 @@ router = APIRouter(prefix="/ingest", tags=["ingest"])
 async def ingest_events(batch: IngestBatch):
     """接收来自 ws_service 的批量事件上报。"""
     result = await ingest_service.process_batch(batch)
-    return success(data=result.model_dump(), msg="ingested")
+    return success(data=result.model_dump(), msg="已接收")

@@ -19,14 +19,14 @@ class LauncherConfigError(RuntimeError):
 def _load_toml(path: Path) -> dict[str, Any]:
     """读取并解析 TOML 文件"""
     if not path.exists():
-        logger.error(f"Config file not found: {path}")
-        raise LauncherConfigError(404, f"Config file not found: {path.name}")
+        logger.error(f"配置文件不存在: {path}")
+        raise LauncherConfigError(404, f"配置文件不存在: {path.name}")
     try:
         with path.open("rb") as f:
             return tomllib.load(f)
     except tomllib.TOMLDecodeError as e:
-        logger.error(f"Failed to parse config: {e}")
-        raise LauncherConfigError(500, "Invalid config file") from e
+        logger.error(f"配置文件解析失败: {e}")
+        raise LauncherConfigError(500, "配置文件无效") from e
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
@@ -43,15 +43,13 @@ def _normalize_patches(config: dict[str, Any]) -> list[dict[str, Any]]:
     for patch in patches:
         if not isinstance(patch, dict):
             continue
-        normalized.append(
-            {
-                "from_version": str(patch.get("from_version") or ""),
-                "to_version": str(patch.get("to_version") or ""),
-                "url": str(patch.get("url") or ""),
-                "checksum": str(patch.get("checksum") or ""),
-                "size": int(patch.get("size") or 0),
-            }
-        )
+        normalized.append({
+            "from_version": str(patch.get("from_version") or ""),
+            "to_version": str(patch.get("to_version") or ""),
+            "url": str(patch.get("url") or ""),
+            "checksum": str(patch.get("checksum") or ""),
+            "size": int(patch.get("size") or 0),
+        })
 
     return normalized
 
@@ -70,10 +68,7 @@ def _resolve_latest(data: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
     if not version_info and versions:
         fallback = versions[0]
         fallback_version = fallback.get("version", "")
-        logger.warning(
-            f"Configured latest version '{latest_version}' not found in versions list, "
-            f"falling back from '{fallback_version}'"
-        )
+        logger.warning(f"配置的 latest 版本 '{latest_version}' 不在 versions 列表中，从 '{fallback_version}' 回退")
         version_info = copy.deepcopy(fallback)
         version_info["version"] = latest_version
         # 把 platforms.*.url 中出现的旧版本号替换为新版本号，使下载链接指向 GitHub Releases 上的新版本资产
@@ -128,7 +123,7 @@ def get_launcher_update(target: str, arch: str, current_version: str) -> dict[st
         if _parse_version(current_version) >= _parse_version(latest_version):
             return None
     except (ValueError, TypeError):
-        logger.warning(f"Invalid version format: current={current_version}, latest={latest_version}")
+        logger.warning(f"版本格式无效: current={current_version}, latest={latest_version}")
         return None
 
     platform_key = f"{target}-{arch}"
@@ -136,7 +131,7 @@ def get_launcher_update(target: str, arch: str, current_version: str) -> dict[st
     platform_info = platforms.get(platform_key) if isinstance(platforms, dict) else None
 
     if not platform_info:
-        logger.info(f"No update available for platform: {platform_key}")
+        logger.info(f"平台暂无可用更新: {platform_key}")
         return None
 
     return {

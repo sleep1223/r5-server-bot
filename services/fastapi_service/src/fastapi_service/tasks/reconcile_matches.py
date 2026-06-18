@@ -40,12 +40,7 @@ async def _run_once(grace_cutoff: datetime) -> None:
 
     # 每个 server 最近一条 GameStateChanged
     # Tortoise 没方便的 distinct on；用 Python 端按 server_id 取最新一条
-    recent_rows = (
-        await GameStateChanged.filter(server_id__isnull=False, created_at__lt=grace_cutoff)
-        .order_by("-id")
-        .limit(2000)
-        .values("server_id", "state", "timestamp", "created_at")
-    )
+    recent_rows = await GameStateChanged.filter(server_id__isnull=False, created_at__lt=grace_cutoff).order_by("-id").limit(2000).values("server_id", "state", "timestamp", "created_at")
     latest_by_server: dict[int, dict] = {}
     for row in recent_rows:
         sid = row["server_id"]
@@ -61,16 +56,12 @@ async def _run_once(grace_cutoff: datetime) -> None:
             if sid in active_by_server:
                 continue
             # 最近 30min 内该 server 有过击杀活动才值得补；避免给老的空 server 制造幻影 match
-            recent_kill = await PlayerKilled.filter(
-                server_id=sid, created_at__gte=grace_cutoff
-            ).exists()
+            recent_kill = await PlayerKilled.filter(server_id=sid, created_at__gte=grace_cutoff).exists()
             if not recent_kill:
                 continue
             # 已经为这条 Playing 合成过 match（可能已被 close_stale_matches 关掉）→ 跳过，
             # 否则会反复用同一个 ts 重复合成，撞 full_match_id 死循环直到 5 次耗尽抛错
-            already_synthed = await Match.filter(
-                server_id=sid, started_at=_ts_to_dt(row["timestamp"])
-            ).exists()
+            already_synthed = await Match.filter(server_id=sid, started_at=_ts_to_dt(row["timestamp"])).exists()
             if already_synthed:
                 continue
             server = await Server.get_or_none(id=sid)
@@ -81,9 +72,6 @@ async def _run_once(grace_cutoff: datetime) -> None:
                 # 注：本任务在主 app 进程，无法直接更新 ingest 进程的
                 # _ACTIVE_MATCH_BY_SERVER 缓存。ingest 进程下次事件触发
                 # `_load_active_match` 时会从 DB 回源修正。
-                logger.info(
-                    f"reconcile: synth match id={match.id} server_id={sid} "
-                    f"(last game_state=Playing @ {row['created_at']})"
-                )
+                logger.info(f"reconcile: synth match id={match.id} server_id={sid} (last game_state=Playing @ {row['created_at']})")
         except Exception as e:
             logger.error(f"reconcile: server_id={sid} 处理失败: {e}")

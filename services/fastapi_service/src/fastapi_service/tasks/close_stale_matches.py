@@ -19,10 +19,7 @@ async def _close_one(match: Match, ended_at: datetime, *, status: str, reason: s
         end_reason=reason,
     )
     if rows:
-        logger.info(
-            f"Match {status}: id={match.id}, full_match_id={match.full_match_id}, "
-            f"reason={reason}, started_at={match.started_at}"
-        )
+        logger.info(f"Match {status}: id={match.id}, full_match_id={match.full_match_id}, reason={reason}, started_at={match.started_at}")
     return bool(rows)
 
 
@@ -45,11 +42,7 @@ async def _close_no_activity_matches(now: datetime) -> None:
 
     candidate_ids = [m.id for m in candidates]
     # 一次 GROUP BY 判出谁还有近活动，避开 N+1
-    recent_kill_rows = (
-        await PlayerKilled.filter(match_id__in=candidate_ids, created_at__gte=cutoff)
-        .distinct()
-        .values_list("match_id", flat=True)
-    )
+    recent_kill_rows = await PlayerKilled.filter(match_id__in=candidate_ids, created_at__gte=cutoff).distinct().values_list("match_id", flat=True)
     has_recent = {mid for mid in recent_kill_rows if mid is not None}
 
     for m in candidates:

@@ -24,20 +24,20 @@ def _server_info(server) -> dict:
 
 @router.get("/matches/recent")
 async def get_recent_matches(
-    limit: int = Query(10, ge=1, le=50, description="Max matches to return"),
+    limit: int = Query(10, ge=1, le=50, description="最多返回的对局数量"),
     min_top_kills: int | None = Query(
         None,
         ge=0,
-        description="Only include matches where top1's kills >= this value. Defaults to settings.recent_match_top_kills_threshold.",
+        description="只包含 top1 击杀数大于等于该值的对局。默认使用 settings.recent_match_top_kills_threshold。",
     ),
-    server: str | None = Query(None, description="Server alias / IPv4 / Chinese name"),
+    server: str | None = Query(None, description="服务器别名 / IPv4 / 中文名"),
 ):
     """最近已完成的对局列表（附 top1 玩家）。默认 10 场。"""
     server_obj = None
     if server:
         server_obj = await resolve_server(server)
         if not server_obj:
-            return error(ErrorCode.SERVER_NOT_FOUND, f"Server not found: {server}")
+            return error(ErrorCode.SERVER_NOT_FOUND, f"未找到服务器: {server}")
 
     threshold = min_top_kills if min_top_kills is not None else settings.recent_match_top_kills_threshold
     results = await match_service.get_recent_matches(
@@ -48,22 +48,18 @@ async def get_recent_matches(
     extra: dict = {"min_top_kills": threshold, "limit": limit}
     if server_obj:
         extra["server"] = _server_info(server_obj)
-    return success(data=results, msg=f"Recent {len(results)} matches", **extra)
+    return success(data=results, msg=f"最近 {len(results)} 场对局", **extra)
 
 
 @router.get("/matches/player/{nucleus_id_or_player_name}")
 async def get_player_matches(
     nucleus_id_or_player_name: int | str,
-    limit: int | None = Query(
-        None, ge=1, le=20, description="Default: settings.personal_match_default_limit (3)"
-    ),
+    limit: int | None = Query(None, ge=1, le=20, description="默认使用 settings.personal_match_default_limit (3)"),
     sort: Literal["time", "kills", "kd"] = "time",
-    server: str | None = Query(None, description="Server alias / IPv4 / Chinese name"),
+    server: str | None = Query(None, description="服务器别名 / IPv4 / 中文名"),
 ):
     """玩家最近参与过的 N 场已完成对局（本场 kills/deaths/kd）。"""
-    player, err = await player_service.get_player_by_identifier(
-        nucleus_id_or_player_name, require_nucleus_id=False
-    )
+    player, err = await player_service.get_player_by_identifier(nucleus_id_or_player_name, require_nucleus_id=False)
     if err:
         return err
     assert player is not None
@@ -72,7 +68,7 @@ async def get_player_matches(
     if server:
         server_obj = await resolve_server(server)
         if not server_obj:
-            return error(ErrorCode.SERVER_NOT_FOUND, f"Server not found: {server}")
+            return error(ErrorCode.SERVER_NOT_FOUND, f"未找到服务器: {server}")
 
     effective_limit = limit if limit is not None else settings.personal_match_default_limit
     results = await match_service.get_player_matches(
@@ -90,7 +86,7 @@ async def get_player_matches(
     extra: dict = {"player": player_info, "limit": effective_limit, "sort": sort}
     if server_obj:
         extra["server"] = _server_info(server_obj)
-    return success(data=results, msg=f"Recent {len(results)} matches for {player.name}", **extra)
+    return success(data=results, msg=f"玩家 {player.name} 最近 {len(results)} 场对局", **extra)
 
 
 @router.get("/leaderboard/competitive")
@@ -101,8 +97,7 @@ async def get_competitive_leaderboard(
         None,
         ge=1,
         le=20,
-        description="Each player counts at most this many best-kill matches per day. "
-        "Defaults to settings.competitive_daily_match_limit.",
+        description="每名玩家每天最多计入这么多场最高击杀对局。默认使用 settings.competitive_daily_match_limit。",
     ),
     server: str | None = None,
 ):
@@ -111,7 +106,7 @@ async def get_competitive_leaderboard(
     if server:
         server_obj = await resolve_server(server)
         if not server_obj:
-            return error(ErrorCode.SERVER_NOT_FOUND, f"Server not found: {server}")
+            return error(ErrorCode.SERVER_NOT_FOUND, f"未找到服务器: {server}")
 
     effective_top = top_per_day if top_per_day is not None else settings.competitive_daily_match_limit
     results, total = await match_service.get_competitive_ranking(
@@ -127,6 +122,6 @@ async def get_competitive_leaderboard(
     return paginated(
         data=results,
         total=total,
-        msg=f"Competitive Leaderboard ({range})",
+        msg=f"竞技排行榜 ({range})",
         **extra,
     )

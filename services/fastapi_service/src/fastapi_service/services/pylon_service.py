@@ -27,11 +27,7 @@ from fastapi_service.services.steam_auth_service import (
 _STEAM_ID_RE = re.compile(r"^\d{17}$")
 _EULA_VERSION = 1
 _EULA_LANGUAGE = "english"
-_EULA_CONTENTS = (
-    "By connecting to this server cluster you agree to abide by the server "
-    "rules. This master server is operated by the r5-server-bot project and "
-    "is not affiliated with Electronic Arts or Respawn Entertainment."
-)
+_EULA_CONTENTS = "连接到此服务器集群即表示你同意遵守服务器规则。此主服务器由 r5-server-bot 项目运营，与 Electronic Arts 或 Respawn Entertainment 无关联。"
 
 
 @dataclass(frozen=True)
@@ -67,7 +63,7 @@ async def authenticate_client(
     try:
         steam = await authenticate_steam_ticket(steam_ticket)
     except SteamAuthError as exc:
-        logger.warning(f"Steam ticket validation failed for {user_id}: {exc.code}")
+        logger.warning(f"Steam ticket 校验失败: user_id={user_id}, code={exc.code}")
         await write_steam_auth_log(
             steam_id=int(user_id),
             persona_name=steam_username,
@@ -78,7 +74,7 @@ async def authenticate_client(
         )
         return _auth_error(401, f"error: steam authentication failed ({exc.code})")
     except Exception:  # pragma: no cover - defensive
-        logger.exception("Unexpected error during Steam ticket validation")
+        logger.exception("Steam ticket 校验时出现未预期异常")
         await write_steam_auth_log(
             steam_id=int(user_id),
             persona_name=steam_username,
@@ -90,15 +86,12 @@ async def authenticate_client(
         return _auth_error(500, "error: internal server error")
 
     if user_id != steam.steamid:
-        logger.info(
-            f"Steam ID mismatch - client claimed {user_id}, "
-            f"validated {steam.steamid}; using validated id"
-        )
+        logger.info(f"Steam ID 不匹配: 客户端声明 {user_id}, 校验结果 {steam.steamid}; 将使用校验后的 id")
         user_id = steam.steamid
 
     ban = await lookup_player_ban_by_persona_id(int(user_id))
     if ban.is_banned:
-        logger.info(f"Steam-auth banned player {user_id} blocked: reason={ban.reason}")
+        logger.info(f"Steam 鉴权拦截已封禁玩家: user_id={user_id}, reason={ban.reason}")
         await write_steam_auth_log(
             steam_id=int(user_id),
             persona_name=steam.persona or steam_username,
@@ -116,7 +109,7 @@ async def authenticate_client(
     try:
         token = create_auth_token(user_id, display_name, server_endpoint)
     except JwtKeyError as exc:
-        logger.error(f"JWT signing failed: {exc}")
+        logger.error(f"JWT 签名失败: {exc}")
         await write_steam_auth_log(
             steam_id=int(user_id),
             persona_name=display_name,
@@ -143,7 +136,7 @@ def get_keyinfo(requested_hash: str | None) -> PylonResponse:
     try:
         current_hash = get_public_key_hash()
     except JwtKeyError as exc:
-        logger.error(f"Cannot serve JWT keyinfo: {exc}")
+        logger.error(f"无法提供 JWT keyinfo: {exc}")
         return PylonResponse(
             status_code=500,
             content={"requireUpdate": False, "error": "key unavailable"},
@@ -204,14 +197,12 @@ async def bulk_check_bans(players: list[tuple[str, str | None]]) -> PylonRespons
         ban = bans.get(persona_id)
         if ban is None or not ban.is_banned:
             continue
-        banned_players.append(
-            {
-                "id": player_id,
-                "ip": player_ip or "",
-                "reason": ban.reason or "#DISCONNECT_BANNED",
-                "banType": ban.ban_type,
-            }
-        )
+        banned_players.append({
+            "id": player_id,
+            "ip": player_ip or "",
+            "reason": ban.reason or "#DISCONNECT_BANNED",
+            "banType": ban.ban_type,
+        })
 
     return PylonResponse(status_code=200, content={"bannedPlayers": banned_players})
 

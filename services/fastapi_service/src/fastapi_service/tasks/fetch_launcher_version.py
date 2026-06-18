@@ -24,10 +24,10 @@ async def fetch_launcher_version_task() -> None:
     repo = (settings.launcher_github_repo or "").strip()
     interval = max(int(settings.launcher_github_fetch_interval or 600), 60)
     if not repo:
-        logger.info("Launcher GitHub repo not configured, skip version fetch task")
+        logger.info("未配置 Launcher GitHub 仓库，跳过版本拉取任务")
         return
     url = f"https://api.github.com/repos/{repo}/releases/latest"
-    logger.info(f"Launcher version fetch task started: url={url}, interval={interval}s")
+    logger.info(f"Launcher 版本拉取任务已启动: url={url}, interval={interval}s")
     while True:
         try:
             async with httpx.AsyncClient() as client:
@@ -37,12 +37,12 @@ async def fetch_launcher_version_task() -> None:
                 tag = str(data.get("tag_name") or "").strip().lstrip("v")
                 if tag:
                     if tag != launcher_version_cache.get():
-                        logger.info(f"Launcher latest version updated: {tag}")
+                        logger.info(f"Launcher 最新版本已更新: {tag}")
                     launcher_version_cache.set(tag)
                 else:
-                    logger.warning("GitHub release returned empty tag_name")
+                    logger.warning("GitHub release 返回了空 tag_name")
             else:
-                logger.warning(f"Failed to fetch launcher version: {resp.status_code}")
+                logger.warning(f"拉取 Launcher 版本失败: {resp.status_code}")
         except Exception as e:
-            logger.error(f"Error fetching launcher version: {e}")
+            logger.error(f"拉取 Launcher 版本异常: {e}")
         await asyncio.sleep(interval)

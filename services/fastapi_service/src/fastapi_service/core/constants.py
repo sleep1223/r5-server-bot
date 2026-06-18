@@ -13,6 +13,7 @@ def is_no_cover_allowed_server(server_host: str | None, server_name: str | None)
                 return True
     return False
 
+
 WEAPON_MAP: dict[str, str] = {
     "alternator": "mp_weapon_alternator_smg",
     "charge rifle": "mp_weapon_defender",

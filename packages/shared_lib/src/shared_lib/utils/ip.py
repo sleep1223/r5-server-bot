@@ -28,12 +28,12 @@ class IPResolver:
             if path.exists():
                 self._q = QQwry()
                 self._q.load_file(str(path))
-                logger.info(f"Loaded QQwry database from {path}")
+                logger.info(f"已从 {path} 加载 QQwry 数据库")
             else:
-                logger.warning(f"QQwry database not found at {path}")
+                logger.warning(f"未在 {path} 找到 QQwry 数据库")
                 self._q = None
         except Exception as e:
-            logger.error(f"Failed to load QQwry database: {e}")
+            logger.error(f"加载 QQwry 数据库失败: {e}")
             self._q = None
 
     def lookup(self, ip: str) -> tuple[str, str] | None:
@@ -57,7 +57,7 @@ class IPResolver:
             region = parts[1] if len(parts) > 1 else ""
             return country, region
         except Exception as e:
-            logger.debug(f"QQwry resolution failed for {ip}: {e}")
+            logger.debug(f"QQwry 解析 {ip} 失败: {e}")
             return None
 
 

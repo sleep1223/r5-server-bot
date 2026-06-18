@@ -49,10 +49,10 @@ async def authenticate_steam_ticket(
     app = app_id or settings.steam_app_id
 
     if not key:
-        logger.error("steam_web_api_key is not configured")
-        raise SteamAuthError("steam_api_key_missing", "Steam Web API key is not configured")
+        logger.error("未配置 steam_web_api_key")
+        raise SteamAuthError("steam_api_key_missing", "未配置 Steam Web API key")
     if not app:
-        raise SteamAuthError("steam_app_id_missing", "Steam app id is not configured")
+        raise SteamAuthError("steam_app_id_missing", "未配置 Steam app id")
 
     formatted_ticket = ticket.upper()
 
@@ -79,7 +79,7 @@ async def _validate_ticket(
     try:
         resp = await client.get(STEAM_AUTH_URL, params=params)
     except httpx.HTTPError as exc:
-        logger.error(f"Steam auth HTTP error: {exc}")
+        logger.error(f"Steam 鉴权 HTTP 异常: {exc}")
         raise SteamAuthError("steam_auth_network_error", str(exc)) from exc
 
     payload: dict = {}
@@ -94,11 +94,11 @@ async def _validate_ticket(
 
     if resp.status_code == 200 and params_obj.get("steamid"):
         steamid = str(params_obj["steamid"])
-        logger.debug(f"Steam ticket validated for {steamid}")
+        logger.debug(f"Steam ticket 校验通过: steamid={steamid}")
         return steamid
 
     err_desc = err_obj.get("errordesc") or f"steam_auth_failed_{resp.status_code}"
-    logger.warning(f"Steam ticket rejected: {err_desc} (status={resp.status_code})")
+    logger.warning(f"Steam ticket 被拒绝: {err_desc} (status={resp.status_code})")
 
     # Steam frequently returns "Invalid ticket" the first time when there is a
     # tiny race between the client generating the ticket and Steam's backend
@@ -118,11 +118,11 @@ async def _fetch_persona(client: httpx.AsyncClient, key: str, steamid: str) -> s
             timeout=5.0,
         )
     except httpx.HTTPError as exc:
-        logger.debug(f"Steam persona lookup failed (network): {exc}")
+        logger.debug(f"Steam persona 查询失败(网络): {exc}")
         return None
 
     if resp.status_code != 200:
-        logger.debug(f"Steam persona lookup non-200: {resp.status_code}")
+        logger.debug(f"Steam persona 查询返回非 200: {resp.status_code}")
         return None
 
     try:

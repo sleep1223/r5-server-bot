@@ -150,7 +150,7 @@ class R5NetConsole:
                     # print(f"[Unknown] Type: {resp.responseType}, Msg: {resp.responseMsg}")
                     pass
             except Exception as e:
-                logger.error(f"Error in background reader: {e}")
+                logger.error(f"后台读取器异常: {e}")
                 if not self.connected:
                     break
                 await asyncio.sleep(1)
@@ -367,7 +367,7 @@ async def main() -> None:
     rcon_pwd = os.getenv("R5_RCON_PASSWORD", "").strip()
 
     if not host or not port or not rcon_key or not rcon_pwd:
-        raise RuntimeError("Missing RCON env vars: R5_RCON_HOST/R5_RCON_PORT/R5_RCON_KEY/R5_RCON_PASSWORD")
+        raise RuntimeError("缺少 RCON 环境变量: R5_RCON_HOST/R5_RCON_PORT/R5_RCON_KEY/R5_RCON_PASSWORD")
 
     client = R5NetConsole(host, port, rcon_key)
     try:
@@ -396,7 +396,7 @@ async def main() -> None:
             logger.error("认证失败。")
 
     except Exception as e:
-        logger.exception(f"Error: {e}")
+        logger.exception(f"异常: {e}")
     finally:
         await client.close()
 

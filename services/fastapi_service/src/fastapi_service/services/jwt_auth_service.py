@@ -50,15 +50,11 @@ class _KeyMaterial:
         with self._lock:
             path = Path(settings.jwt_private_key_path)
             mtime = _safe_mtime(path)
-            if (
-                self._private_key_obj is None
-                or self._private_path != path
-                or self._private_mtime != mtime
-            ):
+            if self._private_key_obj is None or self._private_path != path or self._private_mtime != mtime:
                 self._private_key_obj = _load_private_key(path)
                 self._private_path = path
                 self._private_mtime = mtime
-                logger.info(f"Loaded JWT private key from {path}")
+                logger.info(f"已从 {path} 加载 JWT 私钥")
             return self._private_key_obj
 
     def get_public_pem(self) -> bytes:
@@ -80,11 +76,7 @@ class _KeyMaterial:
         with self._lock:
             path = Path(settings.jwt_public_key_path)
             mtime = _safe_mtime(path)
-            if (
-                self._public_pem is not None
-                and self._public_path == path
-                and self._public_mtime == mtime
-            ):
+            if self._public_pem is not None and self._public_path == path and self._public_mtime == mtime:
                 return
 
             pem = _read_public_pem(path, fallback_private=Path(settings.jwt_private_key_path))
@@ -95,7 +87,7 @@ class _KeyMaterial:
             self._public_hash = hashlib.sha256(pem).hexdigest()
             self._public_path = path
             self._public_mtime = mtime
-            logger.info(f"Loaded JWT public key from {path}")
+            logger.info(f"已从 {path} 加载 JWT 公钥")
 
 
 def _safe_mtime(path: Path) -> float | None:
@@ -107,10 +99,7 @@ def _safe_mtime(path: Path) -> float | None:
 
 def _load_private_key(path: Path) -> RSAPrivateKey:
     if not path.exists():
-        raise JwtKeyError(
-            f"JWT private key not found at {path}. Generate one with:\n"
-            f"  openssl genpkey -algorithm RSA -out {path} -pkeyopt rsa_keygen_bits:2048"
-        )
+        raise JwtKeyError(f"未在 {path} 找到 JWT 私钥。可使用以下命令生成:\n  openssl genpkey -algorithm RSA -out {path} -pkeyopt rsa_keygen_bits:2048")
     pem = path.read_bytes()
     passphrase = settings.jwt_private_key_passphrase or None
     try:
@@ -119,10 +108,10 @@ def _load_private_key(path: Path) -> RSAPrivateKey:
             password=passphrase.encode("utf-8") if passphrase else None,
         )
         if not isinstance(key, RSAPrivateKey):
-            raise JwtKeyError("JWT private key must be an RSA private key for RS256 signing")
+            raise JwtKeyError("JWT 私钥必须是用于 RS256 签名的 RSA 私钥")
         return key
     except Exception as exc:
-        raise JwtKeyError(f"Failed to load JWT private key: {exc}") from exc
+        raise JwtKeyError(f"加载 JWT 私钥失败: {exc}") from exc
 
 
 def _read_public_pem(path: Path, *, fallback_private: Path) -> bytes:
@@ -135,9 +124,7 @@ def _read_public_pem(path: Path, *, fallback_private: Path) -> bytes:
         return path.read_bytes()
 
     if not fallback_private.exists():
-        raise JwtKeyError(
-            f"Neither public key {path} nor private key {fallback_private} exist"
-        )
+        raise JwtKeyError(f"JWT 公钥 {path} 和私钥 {fallback_private} 都不存在")
     private_key = _load_private_key(fallback_private)
     return private_key.public_key().public_bytes(  # type: ignore[union-attr]
         encoding=serialization.Encoding.PEM,

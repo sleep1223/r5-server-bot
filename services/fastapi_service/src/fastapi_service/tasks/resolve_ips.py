@@ -57,7 +57,7 @@ async def ip_resolution_task() -> None:
                             info.is_resolved = True
                             await info.save()
                     except Exception as e:
-                        logger.error(f"Error saving IP info for {ip}: {e}")
+                        logger.error(f"保存 IP 信息失败: ip={ip}, error={e}")
             for ip, info in existing_ip_map.items():
                 if ip in players_by_ip and (info.country or info.region):
                     await Player.filter(ip=ip).update(country=info.country, region=info.region)
@@ -71,5 +71,5 @@ async def ip_resolution_task() -> None:
                 else:
                     await IpInfo.create(ip=ip, ping=ping_val, is_resolved=True)
         except Exception as e:
-            logger.error(f"Error in ip_resolution_task: {e}")
+            logger.error(f"ip_resolution_task 异常: {e}")
         await asyncio.sleep(60)

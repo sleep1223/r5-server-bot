@@ -52,15 +52,20 @@ async def get_recent_matches(
     match_query = Match.filter(status="completed")
     if server_id is not None:
         match_query = match_query.filter(server_id=server_id)
-    matches = await match_query.order_by("-ended_at").limit(fetch_n).values(
-        "id",
-        "full_match_id",
-        "server_id",
-        "map_name",
-        "playlist_name",
-        "playlist_desc",
-        "started_at",
-        "ended_at",
+    matches = (
+        await match_query
+        .order_by("-ended_at")
+        .limit(fetch_n)
+        .values(
+            "id",
+            "full_match_id",
+            "server_id",
+            "map_name",
+            "playlist_name",
+            "playlist_desc",
+            "started_at",
+            "ended_at",
+        )
     )
     if not matches:
         return []
@@ -70,13 +75,15 @@ async def get_recent_matches(
 
     # 批量聚合击杀 / 死亡。单 SQL 搞定所有 match。
     kill_rows = (
-        await PlayerKilled.filter(match_id__in=match_ids, attacker_id__isnull=False, **pk_bounds)
+        await PlayerKilled
+        .filter(match_id__in=match_ids, attacker_id__isnull=False, **pk_bounds)
         .group_by("match_id", "attacker_id")
         .annotate(k_count=Count("id"))
         .values("match_id", "attacker_id", "k_count")
     )
     death_rows = (
-        await PlayerKilled.filter(match_id__in=match_ids, victim_id__isnull=False, **pk_bounds)
+        await PlayerKilled
+        .filter(match_id__in=match_ids, victim_id__isnull=False, **pk_bounds)
         .group_by("match_id", "victim_id")
         .annotate(d_count=Count("id"))
         .values("match_id", "victim_id", "d_count")
@@ -108,24 +115,22 @@ async def get_recent_matches(
         if top_kills < min_top_kills:
             continue
         top_deaths = deaths_map.get(top_pid, 0)
-        results.append(
-            {
-                "match_id": m["id"],
-                "full_match_id": m["full_match_id"],
-                "map_name": m["map_name"],
-                "playlist_name": m["playlist_name"],
-                "playlist_desc": m["playlist_desc"],
-                "started_at": m["started_at"].isoformat() if m["started_at"] else None,
-                "ended_at": m["ended_at"].isoformat() if m["ended_at"] else None,
-                "server_id": m["server_id"],
-                "top": {
-                    "player_id": top_pid,
-                    "kills": top_kills,
-                    "deaths": top_deaths,
-                    "kd": calc_kd(top_kills, top_deaths),
-                },
-            }
-        )
+        results.append({
+            "match_id": m["id"],
+            "full_match_id": m["full_match_id"],
+            "map_name": m["map_name"],
+            "playlist_name": m["playlist_name"],
+            "playlist_desc": m["playlist_desc"],
+            "started_at": m["started_at"].isoformat() if m["started_at"] else None,
+            "ended_at": m["ended_at"].isoformat() if m["ended_at"] else None,
+            "server_id": m["server_id"],
+            "top": {
+                "player_id": top_pid,
+                "kills": top_kills,
+                "deaths": top_deaths,
+                "kd": calc_kd(top_kills, top_deaths),
+            },
+        })
         top_player_ids.add(top_pid)
         involved_server_ids.add(m["server_id"])
         if len(results) >= limit:
@@ -142,9 +147,7 @@ async def get_recent_matches(
             r["top"]["nucleus_id"] = p_info["nucleus_id"] if p_info else None
 
     if involved_server_ids:
-        servers = await Server.filter(id__in=list(involved_server_ids)).values(
-            "id", "host", "name", "short_name"
-        )
+        servers = await Server.filter(id__in=list(involved_server_ids)).values("id", "host", "name", "short_name")
         s_map = {s["id"]: s for s in servers}
         for r in results:
             r["server"] = s_map.get(r["server_id"]) or {"id": r["server_id"]}
@@ -174,7 +177,8 @@ async def get_player_matches(
         participation_filters["server_id"] = server_id
 
     match_id_rows = (
-        await PlayerKilled.filter(
+        await PlayerKilled
+        .filter(
             Q(attacker_id=player_id) | Q(victim_id=player_id),
             **participation_filters,
         )
@@ -189,7 +193,8 @@ async def get_player_matches(
 
     # 2) 拿最近 N 场 completed match 元数据
     matches = (
-        await Match.filter(id__in=match_ids, status="completed")
+        await Match
+        .filter(id__in=match_ids, status="completed")
         .order_by("-ended_at")
         .limit(limit)
         .values(
@@ -210,18 +215,8 @@ async def get_player_matches(
     pk_bounds = _pk_created_at_bounds(matches)
 
     # 3) 批量聚合本人在这些场次的击杀 / 死亡
-    kill_rows = (
-        await PlayerKilled.filter(match_id__in=scoped_match_ids, attacker_id=player_id, **pk_bounds)
-        .group_by("match_id")
-        .annotate(k_count=Count("id"))
-        .values("match_id", "k_count")
-    )
-    death_rows = (
-        await PlayerKilled.filter(match_id__in=scoped_match_ids, victim_id=player_id, **pk_bounds)
-        .group_by("match_id")
-        .annotate(d_count=Count("id"))
-        .values("match_id", "d_count")
-    )
+    kill_rows = await PlayerKilled.filter(match_id__in=scoped_match_ids, attacker_id=player_id, **pk_bounds).group_by("match_id").annotate(k_count=Count("id")).values("match_id", "k_count")
+    death_rows = await PlayerKilled.filter(match_id__in=scoped_match_ids, victim_id=player_id, **pk_bounds).group_by("match_id").annotate(d_count=Count("id")).values("match_id", "d_count")
     kills_by_match = {r["match_id"]: r["k_count"] for r in kill_rows}
     deaths_by_match = {r["match_id"]: r["d_count"] for r in death_rows}
 
@@ -229,9 +224,7 @@ async def get_player_matches(
     involved_server_ids = {m["server_id"] for m in matches}
     s_map: dict[int, dict] = {}
     if involved_server_ids:
-        servers = await Server.filter(id__in=list(involved_server_ids)).values(
-            "id", "host", "name", "short_name"
-        )
+        servers = await Server.filter(id__in=list(involved_server_ids)).values("id", "host", "name", "short_name")
         s_map = {s["id"]: s for s in servers}
 
     # 5) 装配 + 排序
@@ -239,22 +232,20 @@ async def get_player_matches(
     for m in matches:
         k = kills_by_match.get(m["id"], 0)
         d = deaths_by_match.get(m["id"], 0)
-        results.append(
-            {
-                "match_id": m["id"],
-                "full_match_id": m["full_match_id"],
-                "map_name": m["map_name"],
-                "playlist_name": m["playlist_name"],
-                "playlist_desc": m["playlist_desc"],
-                "started_at": m["started_at"].isoformat() if m["started_at"] else None,
-                "ended_at": m["ended_at"].isoformat() if m["ended_at"] else None,
-                "server_id": m["server_id"],
-                "server": s_map.get(m["server_id"]) or {"id": m["server_id"]},
-                "kills": k,
-                "deaths": d,
-                "kd": calc_kd(k, d),
-            }
-        )
+        results.append({
+            "match_id": m["id"],
+            "full_match_id": m["full_match_id"],
+            "map_name": m["map_name"],
+            "playlist_name": m["playlist_name"],
+            "playlist_desc": m["playlist_desc"],
+            "started_at": m["started_at"].isoformat() if m["started_at"] else None,
+            "ended_at": m["ended_at"].isoformat() if m["ended_at"] else None,
+            "server_id": m["server_id"],
+            "server": s_map.get(m["server_id"]) or {"id": m["server_id"]},
+            "kills": k,
+            "deaths": d,
+            "kd": calc_kd(k, d),
+        })
 
     if sort == "kills":
         results.sort(key=lambda x: (x["kills"], x["kd"]), reverse=True)
@@ -348,9 +339,7 @@ async def get_competitive_ranking(
 
     # 富化 + 剔除 banned（跟 leaderboard_service 风格一致）
     player_ids = [r["attacker_id"] for r in rows]
-    players = await Player.filter(id__in=player_ids).values(
-        "id", "name", "nucleus_id", "status"
-    )
+    players = await Player.filter(id__in=player_ids).values("id", "name", "nucleus_id", "status")
     p_map = {p["id"]: p for p in players}
 
     results: list[dict] = []
@@ -359,13 +348,11 @@ async def get_competitive_ranking(
         p_info = p_map.get(pid)
         if p_info and p_info.get("status") == "banned":
             continue
-        results.append(
-            {
-                "name": p_info["name"] if p_info else f"Unknown ({pid})",
-                "nucleus_id": p_info["nucleus_id"] if p_info else None,
-                "total_kills": r["total_kills"],
-                "counted_matches": r["counted_matches"],
-            }
-        )
+        results.append({
+            "name": p_info["name"] if p_info else f"Unknown ({pid})",
+            "nucleus_id": p_info["nucleus_id"] if p_info else None,
+            "total_kills": r["total_kills"],
+            "counted_matches": r["counted_matches"],
+        })
 
     return results, total_players

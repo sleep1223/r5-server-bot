@@ -76,23 +76,18 @@ class ServerCache:
             uid = player.get("uid") or player.get("nucleusId") or player.get("uniqueid")
             if uid is None:
                 continue
-            players.append(
-                {
-                    "uniqueid": str(uid),
-                    "name": player.get("playerName") or player.get("name") or str(uid),
-                    "ip": player.get("ip"),
-                    "port": player.get("port"),
-                    "country": player.get("country"),
-                    "region": player.get("region"),
-                    "input_device": player.get("inputDevice")
-                    or player.get("input_device")
-                    or player.get("input")
-                    or player.get("device"),
-                    "user_id": player.get("userId"),
-                    "handle": player.get("handle"),
-                    "signon_state": player.get("signonState"),
-                }
-            )
+            players.append({
+                "uniqueid": str(uid),
+                "name": player.get("playerName") or player.get("name") or str(uid),
+                "ip": player.get("ip"),
+                "port": player.get("port"),
+                "country": player.get("country"),
+                "region": player.get("region"),
+                "input_device": player.get("inputDevice") or player.get("input_device") or player.get("input") or player.get("device"),
+                "user_id": player.get("userId"),
+                "handle": player.get("handle"),
+                "signon_state": player.get("signonState"),
+            })
 
         self._access_reports[server_key] = {
             "server_id": server_key,

@@ -92,9 +92,7 @@ async def client_auth(request: Request, body: ClientAuthRequest) -> JSONResponse
 
 
 @router.post("/client/authenticate")
-async def client_authenticate_legacy(
-    request: Request, body: ClientAuthRequest
-) -> JSONResponse:
+async def client_authenticate_legacy(request: Request, body: ClientAuthRequest) -> JSONResponse:
     """Legacy r5r_sdk path. Same handler — `id` may be a JSON number here."""
     return await _handle_client_auth(request, body)
 

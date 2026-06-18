@@ -15,7 +15,7 @@ async def get_launcher_config():
     except launcher_service.LauncherConfigError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    return success(data=data, msg="Launcher config retrieved")
+    return success(data=data, msg="启动器配置已获取")
 
 
 @router.get("/launcher/update/{target}/{arch}/{current_version}")

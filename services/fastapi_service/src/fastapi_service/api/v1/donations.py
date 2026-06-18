@@ -29,18 +29,18 @@ async def create_donation(payload: DonationCreate):
         currency=payload.currency,
         message=payload.message,
     )
-    return success(data=donation, msg="Donation created" if created else "Donation updated")
+    return success(data=donation, msg="捐赠记录已创建" if created else "捐赠记录已更新")
 
 
 @router.get("/donations")
 async def list_donations(pg: Pagination = Depends(get_large_pagination)):
     items, total = await donation_service.list_donations(page_size=pg.page_size, offset=pg.offset)
-    return paginated(data=items, total=total, msg="Donations retrieved")
+    return paginated(data=items, total=total, msg="捐赠列表已获取")
 
 
 @router.delete("/donations/{donation_id}", dependencies=[Depends(verify_token)])
 async def delete_donation(donation_id: int):
     deleted = await donation_service.delete_donation(donation_id)
     if not deleted:
-        return error(ErrorCode.DONATION_NOT_FOUND, msg="Donation not found")
-    return success(msg="Donation deleted")
+        return error(ErrorCode.DONATION_NOT_FOUND, msg="未找到捐赠记录")
+    return success(msg="捐赠记录已删除")
