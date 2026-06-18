@@ -24,9 +24,7 @@ JOIN_REVIEW_SYSTEM_PROMPT = """你是 QQ 群入群审核助手。
 
 @auto_request.handle()
 async def handle_friend_request(bot: Bot, event: RequestEvent) -> None:
-    logger.info(
-        f"收到请求事件: name={event.get_event_name()}, request_type={event.request_type}, user={getattr(event, 'user_id', '<unknown>')}"
-    )
+    logger.info(f"收到请求事件: name={event.get_event_name()}, request_type={event.request_type}, user={getattr(event, 'user_id', '<unknown>')}")
 
     if isinstance(event, FriendRequestEvent):
         await event.approve(bot)
@@ -85,16 +83,7 @@ async def handle_group_member_added(bot: Bot, event: GroupIncreaseNoticeEvent) -
 
 
 def _build_friend_welcome_message() -> str:
-    return (
-        "👋 你好！我是 R5 Bot，感谢添加好友！\n"
-        "\n"
-        "可以先试试这些指令:\n"
-        "  /kd 今日 · 查看今日 KD 榜\n"
-        "  /个人kd · 查看自己的 KD，需先绑定\n"
-        "  /帮助 · 查看完整菜单\n"
-        "\n"
-        + get_help_message()
-    )
+    return "👋 你好！我是 R5 Bot，感谢添加好友！\n\n可以先试试这些指令:\n  /kd 今日 · 查看今日 KD 榜\n  /个人kd · 查看自己的 KD，需先绑定\n  /帮助 · 查看完整菜单\n\n" + get_help_message()
 
 
 def _build_group_welcome_message(user_id: int) -> Message:

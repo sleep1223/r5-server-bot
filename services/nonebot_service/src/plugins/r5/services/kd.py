@@ -134,12 +134,20 @@ async def handle_check_kd(event: Event, args: Message = CommandArg()) -> None:
         await check_kd.finish(BINDING_GUIDE)
 
     range_map = {
-        "今日": "today", "今天": "today", "today": "today",
-        "昨日": "yesterday", "昨天": "yesterday", "yesterday": "yesterday",
-        "本周": "week", "week": "week",
-        "上周": "last_week", "last_week": "last_week",
-        "本月": "month", "month": "month",
-        "全部": "all", "all": "all",
+        "今日": "today",
+        "今天": "today",
+        "today": "today",
+        "昨日": "yesterday",
+        "昨天": "yesterday",
+        "yesterday": "yesterday",
+        "本周": "week",
+        "week": "week",
+        "上周": "last_week",
+        "last_week": "last_week",
+        "本月": "month",
+        "month": "month",
+        "全部": "all",
+        "all": "all",
     }
     range_type = "month"
     for k, v in range_map.items():

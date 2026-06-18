@@ -14,11 +14,13 @@ from .common import r5_service
 
 team_svc = r5_service.create_subservice("team")
 
+
 def _maybe_binding_hint(msg: str) -> str:
     """如果后端返回的是绑定相关错误，替换为带引导的提示。"""
     if "绑定" in msg:
         return BINDING_GUIDE
     return f"❌ {msg}"
+
 
 TEAM_LOG_PATH = Path(__file__).resolve().parents[4] / "logs" / "team.log"
 
@@ -184,7 +186,7 @@ async def handle_create_team(event: Event, args: Message = CommandArg()) -> None
         await create_team_cmd.finish(f"❌ 网络请求错误: {e}")
     except Exception as e:
         traceback.print_exc()
-        team_logger.exception("team_create_failed | user_id=%s | slots_needed=%s", user_id, slots_needed)
+        team_logger.exception("组队创建失败 | user_id=%s | slots_needed=%s", user_id, slots_needed)
         await create_team_cmd.finish(f"❌ 创建出错: {e}")
 
 
@@ -264,8 +266,7 @@ async def handle_join_team(event: Event, args: Message = CommandArg()) -> None:
         # @队长通知有新队员加入
         if creator and joined_member and str(creator.get("platform_uid")) != str(user_id) and creator.get("platform") == "qq":
             notify_msg = (
-                MessageSegment.at(int(creator["platform_uid"]))
-                + f" 🎮 你的队伍有新队员加入\n"
+                MessageSegment.at(int(creator["platform_uid"])) + f" 🎮 你的队伍有新队员加入\n"
                 f"加入玩家: {joined_member.get('player_name', '未知')}\n"
                 f"加入玩家KD: {joined_member.get('kd', '?')}\n\n"
                 f"{_format_team_overview(team_id, team_info, '当前队伍信息')}"
@@ -281,10 +282,14 @@ async def handle_join_team(event: Event, args: Message = CommandArg()) -> None:
         # 队伍满员，@所有成员
         if notify_members:
             _log_team_event("team_full", team_id=team_id, members=[_member_snapshot(m) for m in notify_members], member_count=len(notify_members))
-            full_msg = _build_at_members(notify_members) + "\n" + _format_team_overview(
-                team_id,
-                {"members": notify_members, "slots_needed": max(len(notify_members) - 1, 0), "slots_remaining": 0},
-                "🎮 队伍已满员，已为你匹配到完整队伍",
+            full_msg = (
+                _build_at_members(notify_members)
+                + "\n"
+                + _format_team_overview(
+                    team_id,
+                    {"members": notify_members, "slots_needed": max(len(notify_members) - 1, 0), "slots_remaining": 0},
+                    "🎮 队伍已满员，已为你匹配到完整队伍",
+                )
             )
             await join_team_cmd.send(full_msg)
             await join_team_cmd.finish(f"✅ 已加入队伍 #{team_id}，队伍已满员！")
@@ -298,7 +303,7 @@ async def handle_join_team(event: Event, args: Message = CommandArg()) -> None:
         await join_team_cmd.finish(f"❌ 网络请求错误: {e}")
     except Exception as e:
         traceback.print_exc()
-        team_logger.exception("team_join_failed | team_id=%s | user_id=%s", team_id, user_id)
+        team_logger.exception("加入队伍失败 | team_id=%s | user_id=%s", team_id, user_id)
         await join_team_cmd.finish(f"❌ 加入出错: {e}")
 
 
@@ -336,7 +341,7 @@ async def handle_cancel_team(event: Event, args: Message = CommandArg()) -> None
         await cancel_team_cmd.finish(f"❌ 网络请求错误: {e}")
     except Exception as e:
         traceback.print_exc()
-        team_logger.exception("team_cancel_failed | team_id=%s | user_id=%s", team_id, user_id)
+        team_logger.exception("取消队伍失败 | team_id=%s | user_id=%s", team_id, user_id)
         await cancel_team_cmd.finish(f"❌ 取消出错: {e}")
 
 
@@ -378,25 +383,15 @@ async def handle_leave_team(event: Event, args: Message = CommandArg()) -> None:
         _log_team_event("team_left", team_id=team_id, user_id=user_id)
 
         # @队长通知有队员离开
-        if (
-            creator_before_leave
-            and leaving_member_before_leave
-            and str(creator_before_leave.get("platform_uid")) != str(user_id)
-            and creator_before_leave.get("platform") == "qq"
-        ):
+        if creator_before_leave and leaving_member_before_leave and str(creator_before_leave.get("platform_uid")) != str(user_id) and creator_before_leave.get("platform") == "qq":
             updated_team_info = {
                 "id": team_id,
-                "members": [
-                    member
-                    for member in (team_data.get("members") or [])
-                    if str(member.get("platform_uid")) != str(user_id)
-                ],
+                "members": [member for member in (team_data.get("members") or []) if str(member.get("platform_uid")) != str(user_id)],
                 "slots_needed": team_data.get("slots_needed"),
                 "slots_remaining": (team_data.get("slots_remaining") or 0) + 1,
             }
             notify_msg = (
-                MessageSegment.at(int(creator_before_leave["platform_uid"]))
-                + f" 🎮 你的队伍有队员离开\n"
+                MessageSegment.at(int(creator_before_leave["platform_uid"])) + f" 🎮 你的队伍有队员离开\n"
                 f"离开玩家: {leaving_member_before_leave.get('player_name', '未知')}\n"
                 f"离开玩家KD: {leaving_member_before_leave.get('kd', '?')}\n\n"
                 f"{_format_team_overview(team_id, updated_team_info, '当前队伍信息')}"
@@ -418,7 +413,7 @@ async def handle_leave_team(event: Event, args: Message = CommandArg()) -> None:
         await leave_team_cmd.finish(f"❌ 网络请求错误: {e}")
     except Exception as e:
         traceback.print_exc()
-        team_logger.exception("team_leave_failed | team_id=%s | user_id=%s", team_id, user_id)
+        team_logger.exception("退出队伍失败 | team_id=%s | user_id=%s", team_id, user_id)
         await leave_team_cmd.finish(f"❌ 退出出错: {e}")
 
 
@@ -477,7 +472,7 @@ async def handle_invite(event: Event, args: Message = CommandArg()) -> None:
         await invite_cmd.finish(f"❌ 网络请求错误: {e}")
     except Exception as e:
         traceback.print_exc()
-        team_logger.exception("team_invite_failed | team_id=%s | user_id=%s | target_name=%s", team_id, user_id, target_name)
+        team_logger.exception("邀请入队失败 | team_id=%s | user_id=%s | target_name=%s", team_id, user_id, target_name)
         await invite_cmd.finish(f"❌ 邀请出错: {e}")
 
 
@@ -523,8 +518,7 @@ async def handle_accept(event: Event, args: Message = CommandArg()) -> None:
         # @队长通知有新队员加入
         if creator and joined_member and str(creator.get("platform_uid")) != str(user_id) and creator.get("platform") == "qq":
             notify_msg = (
-                MessageSegment.at(int(creator["platform_uid"]))
-                + f" 🎮 你的队伍有新队员加入\n"
+                MessageSegment.at(int(creator["platform_uid"])) + f" 🎮 你的队伍有新队员加入\n"
                 f"加入玩家: {joined_member.get('player_name', '未知')}\n"
                 f"加入玩家KD: {joined_member.get('kd', '?')}\n\n"
                 f"{_format_team_overview(team_id, team_info, '当前队伍信息')}"
@@ -540,10 +534,14 @@ async def handle_accept(event: Event, args: Message = CommandArg()) -> None:
         # 队伍满员，@所有成员
         if notify_members:
             _log_team_event("team_full", team_id=team_id, members=[_member_snapshot(m) for m in notify_members], member_count=len(notify_members))
-            full_msg = _build_at_members(notify_members) + "\n" + _format_team_overview(
-                team_id,
-                {"members": notify_members, "slots_needed": max(len(notify_members) - 1, 0), "slots_remaining": 0},
-                "🎮 队伍已满员，已为你匹配到完整队伍",
+            full_msg = (
+                _build_at_members(notify_members)
+                + "\n"
+                + _format_team_overview(
+                    team_id,
+                    {"members": notify_members, "slots_needed": max(len(notify_members) - 1, 0), "slots_remaining": 0},
+                    "🎮 队伍已满员，已为你匹配到完整队伍",
+                )
             )
             await accept_cmd.send(full_msg)
             await accept_cmd.finish(f"✅ 已加入队伍 #{team_id}，队伍已满员！")
@@ -557,5 +555,5 @@ async def handle_accept(event: Event, args: Message = CommandArg()) -> None:
         await accept_cmd.finish(f"❌ 网络请求错误: {e}")
     except Exception as e:
         traceback.print_exc()
-        team_logger.exception("team_accept_failed | team_id=%s | user_id=%s", team_id, user_id)
+        team_logger.exception("接受邀请失败 | team_id=%s | user_id=%s", team_id, user_id)
         await accept_cmd.finish(f"❌ 接受出错: {e}")

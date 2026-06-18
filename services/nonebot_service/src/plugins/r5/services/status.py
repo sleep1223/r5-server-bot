@@ -12,9 +12,7 @@ from .common import r5_service
 status_service = r5_service.create_subservice("status")
 
 # Matchers
-server_status = on_command(
-    "状态", aliases={"服务器", "status", "server"}, priority=5, block=True
-)
+server_status = on_command("状态", aliases={"服务器", "status", "server"}, priority=5, block=True)
 
 
 @server_status.handle()

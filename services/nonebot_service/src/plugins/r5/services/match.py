@@ -19,12 +19,8 @@ personal_service = match_service.create_subservice("personal")
 competitive_service = match_service.create_subservice("competitive")
 
 recent_matches = on_command("对局", aliases={"最近对局", "recent matches"}, priority=5, block=True)
-personal_matches = on_command(
-    "个人对局", aliases={"我的对局", "personal matches"}, priority=5, block=True
-)
-competitive_rank = on_command(
-    "竞技", aliases={"竞技榜", "competitive"}, priority=5, block=True
-)
+personal_matches = on_command("个人对局", aliases={"我的对局", "personal matches"}, priority=5, block=True)
+competitive_rank = on_command("竞技", aliases={"竞技榜", "competitive"}, priority=5, block=True)
 
 
 def _fmt_time(iso_str: str | None) -> str:
@@ -73,7 +69,7 @@ async def handle_recent_matches(args: Message = CommandArg()) -> None:
             top_kd = top.get("kd", 0)
             map_name = m.get("map_name") or "?"
             ended = _fmt_time(m.get("ended_at"))
-            srv = (m.get("server") or {})
+            srv = m.get("server") or {}
             srv_tag = srv.get("short_name") or srv.get("name") or srv.get("host") or ""
             srv_prefix = f"@{srv_tag} " if srv_tag and not scope else ""
             msg += f"#{i} [{ended}] {srv_prefix}{map_name}\n"

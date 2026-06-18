@@ -146,9 +146,7 @@ async def handle_kick(args: Message = CommandArg()) -> None:
                 detail = f"⚠️ 已广播 {broadcast_total} 台服务器但未命中玩家\n可能玩家已离线,或玩家列表尚未刷新到该玩家"
             else:
                 detail = "🔴 状态: 离线"
-            await cmd_kick.finish(
-                f"👢 踢出记录 +1\n\n👤 玩家: {target}\n📌 原因: {reason_cn}\n{detail}\n(已记录踢出次数)"
-            )
+            await cmd_kick.finish(f"👢 踢出记录 +1\n\n👤 玩家: {target}\n📌 原因: {reason_cn}\n{detail}\n(已记录踢出次数)")
         else:
             await cmd_kick.finish(f"👢 踢出已提交: {target}")
 

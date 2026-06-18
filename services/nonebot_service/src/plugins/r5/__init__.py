@@ -9,7 +9,7 @@ require("nonebot_plugin_access_control_api")
 # Plugin Metadata
 __plugin_meta__ = PluginMetadata(
     name="R5 Stats",
-    description="R5 Reloaded Server Manager & Stats",
+    description="R5 Reloaded 服务器管理与战绩",
     usage="""
     指令:
     1. kd榜 [范围]
