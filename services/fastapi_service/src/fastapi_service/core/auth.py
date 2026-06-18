@@ -13,14 +13,14 @@ async def verify_token(credentials: HTTPAuthorizationCredentials | None = Depend
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing authentication token",
+            detail="缺少认证令牌",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     if credentials.credentials not in settings.fastapi_access_tokens:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication token",
+            detail="认证令牌无效",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return credentials
@@ -43,7 +43,7 @@ async def verify_app_key(x_app_key: str = Header(..., description="用户 AppKey
     """前端通过 X-App-Key header 认证，返回对应的 UserBinding。"""
     binding = await UserBinding.filter(app_key=x_app_key).prefetch_related("player").first()
     if not binding:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid AppKey")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="AppKey 无效")
     return binding
 
 
@@ -57,11 +57,11 @@ def is_admin_binding(binding: UserBinding) -> bool:
 
 async def verify_admin_app_key(binding: UserBinding = Depends(verify_app_key)) -> UserBinding:
     if not is_admin_binding(binding):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin permission required")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要管理员权限")
     return binding
 
 
 async def verify_super_admin_app_key(binding: UserBinding = Depends(verify_app_key)) -> UserBinding:
     if not is_super_admin_binding(binding):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Super admin permission required")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要超级管理员权限")
     return binding

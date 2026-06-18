@@ -79,11 +79,11 @@ def _kick_reason(reason: str | None) -> str:
 def _normalize_server_scope(server_scope: object | None, server_id: object | None = None) -> tuple[str, str | None]:
     scope = str(server_scope or "global").strip().lower()
     if scope not in SERVER_SCOPES:
-        raise ValueError("server_scope must be global or server")
+        raise ValueError("server_scope 必须是 global 或 server")
 
     normalized_server_id = str(server_id or "").strip() or None
     if scope == "server" and not normalized_server_id:
-        raise ValueError("server_id is required when server_scope=server")
+        raise ValueError("server_scope=server 时必须提供 server_id")
     if scope == "global":
         normalized_server_id = None
     return scope, normalized_server_id
@@ -187,7 +187,7 @@ async def _find_player_for_uid(uid: str) -> Player | None:
     try:
         return await Player.filter(filter_q).first()
     except Exception as exc:
-        logger.warning(f"Player lookup for access uid={uid} failed: {exc}")
+        logger.warning(f"准入 uid={uid} 的玩家查询失败: {exc}")
         return None
 
 
@@ -199,21 +199,18 @@ async def _first_exact_rule(
     server_id: object | None = None,
 ) -> PlayerAccessRule | None:
     try:
-        rules = (
-            await PlayerAccessRule.filter(
-                _scope_filter(server_id),
-                _active_rule_filter(),
-                rule_type=rule_type,
-                action=action,
-                value=value,
-            )
-            .order_by("priority", "id")
-        )
+        rules = await PlayerAccessRule.filter(
+            _scope_filter(server_id),
+            _active_rule_filter(),
+            rule_type=rule_type,
+            action=action,
+            value=value,
+        ).order_by("priority", "id")
         if not rules:
             return None
         return sorted(rules, key=lambda r: _scope_sort_key(r, server_id))[0]
     except Exception as exc:
-        logger.warning(f"Player access exact-rule lookup failed: {exc}")
+        logger.warning(f"玩家准入精确规则查询失败: {exc}")
         return None
 
 
@@ -233,7 +230,7 @@ async def _matching_cidr_rule(action: str, ip: str, *, server_id: object | None 
             action=action,
         ).order_by("priority", "id")
     except Exception as exc:
-        logger.warning(f"Player access CIDR-rule lookup failed: {exc}")
+        logger.warning(f"玩家准入 CIDR 规则查询失败: {exc}")
         return None
 
     matches = []
@@ -242,7 +239,7 @@ async def _matching_cidr_rule(action: str, ip: str, *, server_id: object | None 
             if address in ipaddress.ip_network(rule.value, strict=False):
                 matches.append(rule)
         except ValueError:
-            logger.warning(f"Invalid player access CIDR rule value={rule.value!r}")
+            logger.warning(f"玩家准入 CIDR 规则值无效: value={rule.value!r}")
     if not matches:
         return None
     return sorted(matches, key=lambda r: _scope_sort_key(r, server_id))[0]
@@ -254,7 +251,7 @@ async def _resolve_geo(ip: str) -> tuple[str | None, str | None]:
     try:
         resolved = await resolve_ips_batch([ip])
     except Exception as exc:
-        logger.warning(f"Player access IP resolve failed for {ip}: {exc}")
+        logger.warning(f"玩家准入 IP 解析失败: ip={ip}, error={exc}")
         return None, None
 
     info = resolved.get(ip) or {}
@@ -278,7 +275,7 @@ async def _matching_geo_deny_rule(
             action="deny",
         ).order_by("priority", "id")
     except Exception as exc:
-        logger.warning(f"Player access geo-rule lookup failed: {exc}")
+        logger.warning(f"玩家准入地理规则查询失败: {exc}")
         return None
 
     if not rules:
@@ -329,15 +326,11 @@ async def _pending_notice_for_uid(uid: str, server_id: object | None = None) -> 
             acknowledged_at__isnull=True,
         ).order_by("-created_at", "-id")
     except Exception as exc:
-        logger.warning(f"Player access notice lookup failed for uid={uid}: {exc}")
+        logger.warning(f"玩家准入通知查询失败: uid={uid}, error={exc}")
         return None
 
     now = _now()
-    active_notices = [
-        notice
-        for notice in notices
-        if notice.expires_at is None or notice.expires_at > now
-    ]
+    active_notices = [notice for notice in notices if notice.expires_at is None or notice.expires_at > now]
     if not active_notices:
         return None
 
@@ -513,7 +506,7 @@ async def upsert_access_player_snapshot(
         try:
             await Player.filter(id=player.id).update(**updates)
         except Exception as exc:
-            logger.warning(f"Player access snapshot update failed for uid={uid_text}: {exc}")
+            logger.warning(f"玩家准入快照更新失败: uid={uid_text}, error={exc}")
 
         for key, value in updates.items():
             setattr(player, key, value)
@@ -655,7 +648,7 @@ async def ensure_uid_blacklist_rule(
             **values,
         )
     except Exception as exc:
-        logger.warning(f"Failed to sync player access ban rule for uid={uid}: {exc}")
+        logger.warning(f"同步玩家准入封禁规则失败: uid={uid}, error={exc}")
         return None
 
 
@@ -668,31 +661,31 @@ async def disable_uid_blacklist_rule(nucleus_id: int, *, server_id: object | Non
             enabled=True,
         ).update(enabled=False, updated_at=_now())
     except Exception as exc:
-        logger.warning(f"Failed to disable player access ban rule for uid={uid}: {exc}")
+        logger.warning(f"禁用玩家准入封禁规则失败: uid={uid}, error={exc}")
 
 
 def _normalize_rule_value(rule_type: str, value: object) -> str:
     text = str(value or "").strip()
     if not text:
-        raise ValueError("value is required")
+        raise ValueError("value 不能为空")
 
     if rule_type == "uid":
         normalized = normalize_uid(text)
         if not normalized:
-            raise ValueError("uid value is required")
+            raise ValueError("uid value 不能为空")
         return normalized
 
     if rule_type == "ip":
         try:
             return str(ipaddress.ip_address(text))
         except ValueError as exc:
-            raise ValueError("value must be a valid IP address") from exc
+            raise ValueError("value 必须是有效 IP 地址") from exc
 
     if rule_type == "cidr":
         try:
             return str(ipaddress.ip_network(text, strict=False))
         except ValueError as exc:
-            raise ValueError("value must be a valid CIDR") from exc
+            raise ValueError("value 必须是有效 CIDR") from exc
 
     return text
 
@@ -707,11 +700,11 @@ def normalize_access_rule_payload(
 ) -> dict[str, Any]:
     normalized_type = str(rule_type or "").strip().lower()
     if normalized_type not in RULE_TYPES:
-        raise ValueError(f"rule_type must be one of {sorted(RULE_TYPES)}")
+        raise ValueError(f"rule_type 必须是以下值之一: {sorted(RULE_TYPES)}")
 
     normalized_action = str(action or "").strip().lower()
     if normalized_action not in RULE_ACTIONS:
-        raise ValueError(f"action must be one of {sorted(RULE_ACTIONS)}")
+        raise ValueError(f"action 必须是以下值之一: {sorted(RULE_ACTIONS)}")
 
     normalized_scope, normalized_server_id = _normalize_server_scope(server_scope, server_id)
     return {
@@ -798,12 +791,7 @@ async def list_access_rules(
 ) -> tuple[list[dict[str, Any]], int]:
     query = PlayerAccessRule.all()
     if q:
-        query = query.filter(
-            Q(value__icontains=q)
-            | Q(reason__icontains=q)
-            | Q(remark__icontains=q)
-            | Q(rule_id__icontains=q)
-        )
+        query = query.filter(Q(value__icontains=q) | Q(reason__icontains=q) | Q(remark__icontains=q) | Q(rule_id__icontains=q))
     if rule_type:
         query = query.filter(rule_type=rule_type)
     if action:
@@ -880,7 +868,7 @@ async def update_access_rule(rule: PlayerAccessRule, **updates: Any) -> PlayerAc
         if key in updates:
             value = updates[key]
             if key in {"reason", "remark", "rule_id", "operator", "source_action"}:
-                patch[key] = (str(value or "").strip() or None)
+                patch[key] = str(value or "").strip() or None
             else:
                 patch[key] = value
 
@@ -1135,15 +1123,13 @@ async def build_online_player_info(player_data: dict, *, is_admin: bool = False,
     }
     if is_admin:
         uid_int = _uid_to_int(uid)
-        info.update(
-            {
-                "region": player_data.get("region"),
-                "nucleus_id": uid_int if uid_int is not None else (uid or None),
-                "ip": player_data.get("ip"),
-                "input_device": _input_device_from_payload(player_data) or (player.input_device if player else None),
-                "ping": player_data.get("ping", 0),
-                "loss": player_data.get("loss", 0),
-                "access": access,
-            }
-        )
+        info.update({
+            "region": player_data.get("region"),
+            "nucleus_id": uid_int if uid_int is not None else (uid or None),
+            "ip": player_data.get("ip"),
+            "input_device": _input_device_from_payload(player_data) or (player.input_device if player else None),
+            "ping": player_data.get("ping", 0),
+            "loss": player_data.get("loss", 0),
+            "access": access,
+        })
     return info

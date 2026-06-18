@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from shared_lib.models import BanRecord, Player, PlayerAccessOperation, PlayerAccessRule
+from shared_lib.models import BanRecord, Player, PlayerAccessOperation, PlayerAccessRule, UserBinding
 from tortoise.expressions import Q
 
 from fastapi_service.core.cache import server_cache
@@ -24,7 +24,7 @@ def _server_key(host: str | None, port: int | None) -> str | None:
 def _normalize_scope(scope: str | None) -> str:
     normalized = (scope or "global").strip().lower()
     if normalized not in {"global", "server"}:
-        raise ValueError("server_scope must be global or server")
+        raise ValueError("server_scope 必须是 global 或 server")
     return normalized
 
 
@@ -40,7 +40,7 @@ def _rule_server_id(
         return None
     resolved = (server_id or "").strip() or (server_key or "").strip() or _server_key(server_host, server_port)
     if not resolved:
-        raise ValueError("server_id, server_key, or server_host/server_port is required when server_scope=server")
+        raise ValueError("server_scope=server 时必须提供 server_id、server_key 或 server_host/server_port")
     return resolved
 
 
@@ -146,7 +146,7 @@ def _normalize_display_status(status: str | None) -> str | None:
     }
     normalized = aliases.get(normalized, normalized)
     if normalized not in {"online", "offline", "ban", "kick"}:
-        raise ValueError("status must be one of online, offline, ban, kick")
+        raise ValueError("status 必须是 online、offline、ban、kick 之一")
     return normalized
 
 
@@ -277,6 +277,16 @@ async def _uid_rules(player: Player) -> list[dict[str, Any]]:
     return [player_access_service.serialize_access_rule(rule) for rule in rules]
 
 
+async def _player_qq(player: Player) -> str | None:
+    binding = await UserBinding.filter(player_id=player.id, platform="qq").order_by("id").first()
+    return binding.platform_uid if binding else None
+
+
+async def _qq_player_ids(query: str) -> list[int]:
+    rows = await UserBinding.filter(platform="qq", platform_uid__icontains=query).values("player_id")
+    return [int(row["player_id"]) for row in rows if row.get("player_id") is not None]
+
+
 async def serialize_player_detail(
     player: Player,
     *,
@@ -305,6 +315,7 @@ async def serialize_player_detail(
         "ban_count": player.ban_count,
         "hardware_name": player.hardware_name,
         "input_device": player.input_device,
+        "qq": await _player_qq(player),
         "is_admin": player.is_admin,
         "total_playtime_seconds": player.total_playtime_seconds,
         "online_at": player.online_at,
@@ -345,9 +356,12 @@ async def list_players(
     desired_status = _normalize_display_status(status)
     query = Player.all()
     if q:
+        qq_player_ids = await _qq_player_ids(q)
         filter_q = Q(name__icontains=q) | Q(nucleus_hash__icontains=q) | Q(ip__icontains=q)
         if q.isdigit():
             filter_q |= Q(nucleus_id=int(q))
+        if qq_player_ids:
+            filter_q |= Q(id__in=qq_player_ids)
         query = query.filter(filter_q)
     if nucleus_id:
         query = query.filter(nucleus_id=nucleus_id)
@@ -397,6 +411,11 @@ async def set_player_admin(
     if err or not player:
         return None, err
 
+    if is_admin:
+        has_qq_binding = await UserBinding.filter(player_id=player.id, platform="qq").exists()
+        if not has_qq_binding:
+            return None, error(ErrorCode.BINDING_NOT_FOUND, "设置管理员前需要先绑定 QQ")
+
     await Player.filter(id=player.id).update(is_admin=is_admin)
     player.is_admin = is_admin  # type: ignore[assignment]
 
@@ -433,7 +452,7 @@ async def ban_player(
     duration_seconds: int | None = None,
 ) -> tuple[dict | None, dict | None]:
     if reason not in ALLOWED_REASONS:
-        return None, error(ErrorCode.INVALID_REASON, f"Invalid reason. Allowed: {ALLOWED_REASONS}")
+        return None, error(ErrorCode.INVALID_REASON, f"无效原因。允许值: {ALLOWED_REASONS}")
 
     player, err = await _player_or_error(identifier)
     if err or not player:
@@ -470,11 +489,7 @@ async def ban_player(
     )
 
     if reason == "NO_COVER":
-        targets = [
-            server
-            for server in targets
-            if not is_no_cover_allowed_server(server.get("server_host"), server.get("server_name"))
-        ]
+        targets = [server for server in targets if not is_no_cover_allowed_server(server.get("server_host"), server.get("server_name"))]
 
     success_count = 0
     hits: list[dict] = []
@@ -676,7 +691,7 @@ async def kick_player(
     duration_seconds: int | None = None,
 ) -> tuple[dict | None, dict | None]:
     if reason not in ALLOWED_REASONS:
-        return None, error(ErrorCode.INVALID_REASON, f"Invalid reason. Allowed: {ALLOWED_REASONS}")
+        return None, error(ErrorCode.INVALID_REASON, f"无效原因。允许值: {ALLOWED_REASONS}")
 
     player, err = await _player_or_error(identifier)
     if err or not player:
@@ -713,11 +728,7 @@ async def kick_player(
     )
 
     if reason == "NO_COVER":
-        targets = [
-            server
-            for server in targets
-            if not is_no_cover_allowed_server(server.get("server_host"), server.get("server_name"))
-        ]
+        targets = [server for server in targets if not is_no_cover_allowed_server(server.get("server_host"), server.get("server_name"))]
 
     await admin_service.record_kick_offline(player)
     success_count = 0
@@ -817,9 +828,9 @@ async def apply_access_action(
 ) -> tuple[dict | None, dict | None]:
     normalized_action = action.strip().lower()
     if normalized_action not in {"ban", "kick"}:
-        return None, error(ErrorCode.INVALID_REASON, "action must be ban or kick")
+        return None, error(ErrorCode.INVALID_REASON, "action 必须是 ban 或 kick")
     if reason not in ALLOWED_REASONS:
-        return None, error(ErrorCode.INVALID_REASON, f"Invalid reason. Allowed: {ALLOWED_REASONS}")
+        return None, error(ErrorCode.INVALID_REASON, f"无效原因。允许值: {ALLOWED_REASONS}")
 
     normalized_target_type = target_type.strip().lower()
     if normalized_target_type == "player":
@@ -860,7 +871,7 @@ async def apply_access_action(
     }
     rule_type = rule_type_by_target.get(normalized_target_type)
     if not rule_type:
-        return None, error(ErrorCode.INVALID_REASON, "target_type must be player, uid, ip, cidr, country, or region")
+        return None, error(ErrorCode.INVALID_REASON, "target_type 必须是 player、uid、ip、cidr、country 或 region")
 
     scope = _normalize_scope(server_scope)
     access_server_id = _rule_server_id(

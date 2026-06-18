@@ -21,22 +21,22 @@ async def get_player_by_identifier(identifier: int | str, require_nucleus_id: bo
 
     player = await Player.filter(filter_q).first()
     if not player:
-        return None, error(ErrorCode.PLAYER_NOT_FOUND, msg=f"Player {identifier} not found")
+        return None, error(ErrorCode.PLAYER_NOT_FOUND, msg=f"未找到玩家 {identifier}")
 
     if require_nucleus_id and not player.nucleus_id:
-        return None, error(ErrorCode.PLAYER_NO_NUCLEUS_ID, msg=f"Player {identifier} has no nucleus_id")
+        return None, error(ErrorCode.PLAYER_NO_NUCLEUS_ID, msg=f"玩家 {identifier} 没有 nucleus_id")
 
     return player, None
 
 
 def get_online_location(player: Player) -> tuple[dict | None, dict | None]:
     if not player.nucleus_id:
-        return None, error(ErrorCode.PLAYER_NOT_ONLINE, msg=f"Player {player.name} is not online")
+        return None, error(ErrorCode.PLAYER_NOT_ONLINE, msg=f"玩家 {player.name} 不在线")
 
     loc = server_cache.get_online_location(player.nucleus_id)
     if loc:
         return loc, None
-    return None, error(ErrorCode.PLAYER_NOT_ONLINE, msg=f"Player {player.name} is not online")
+    return None, error(ErrorCode.PLAYER_NOT_ONLINE, msg=f"玩家 {player.name} 不在线")
 
 
 def get_cached_ban_location(nucleus_id: int) -> dict | None:

@@ -34,7 +34,7 @@ async def broadcast_kick_player(
                 ok = await client.kick(nucleus_id, f"#KICK_REASON_{reason}")
                 return s, ok
         except Exception as e:
-            logger.warning(f"Broadcast kick failed on {s.get('server_key')}: {e}")
+            logger.warning(f"广播踢出失败: server={s.get('server_key')}, error={e}")
             return s, False
 
     results = await asyncio.gather(*[_kick_one(s) for s in servers])
@@ -75,7 +75,7 @@ async def broadcast_bann_player(
                 if is_online_server:
                     ok = await client.ban(nucleus_id, f"#BAN_REASON_{reason}")
                     if not ok:
-                        logger.warning(f"ban failed on online server {s.get('server_key')}, falling back to bann+kick")
+                        logger.warning(f"在线服务器封禁失败，回退到 bann+kick: server={s.get('server_key')}")
                         ok = await client.bann(nucleus_id, f"#BAN_REASON_{reason}")
                         await client.kick(nucleus_id, f"#KICK_REASON_{reason}")
                 else:
@@ -84,7 +84,7 @@ async def broadcast_bann_player(
                         await client.kick(nucleus_id, f"#KICK_REASON_{reason}")
                 return s, ok
         except Exception as e:
-            logger.warning(f"Broadcast ban failed on {s.get('server_key')}: {e}")
+            logger.warning(f"广播封禁失败: server={s.get('server_key')}, error={e}")
             return s, False
 
     results = await asyncio.gather(*[_ban_one(s) for s in servers])
@@ -96,7 +96,7 @@ async def unban_player_on_server(nucleus_id: int, host: str, port: int, rcon_key
         async with rcon_session(host, port, rcon_key, rcon_pwd, timeout=timeout) as client:
             return await client.unban(nucleus_id)
     except Exception as e:
-        logger.error(f"Failed to unban player on {host}:{port}: {e}")
+        logger.error(f"在 {host}:{port} 解封玩家失败: {e}")
         return False
 
 
@@ -139,7 +139,7 @@ async def run_unban_on_servers_background(
     rcon_key = settings.r5_rcon_key
     rcon_pwd = settings.r5_rcon_password
     if not rcon_key or not rcon_pwd:
-        logger.error("Background unban aborted: RCON configuration missing")
+        logger.error("后台解封已中止: 缺少 RCON 配置")
         return
 
     success_count = 0
@@ -153,13 +153,13 @@ async def run_unban_on_servers_background(
                 if await client.unban(nucleus_id):
                     success_count += 1
         except Exception as e:
-            logger.error(f"Failed to unban player on {server_key}: {e}")
+            logger.error(f"在 {server_key} 解封玩家失败: {e}")
 
     if success_count > 0:
         await Player.filter(id=player_id).update(status="offline")
         server_cache.clear_ban_location(nucleus_id)
 
-    logger.info(f"Background unban task finished for {nucleus_id}. success={success_count}/{len(servers)}")
+    logger.info(f"玩家 {nucleus_id} 的后台解封任务已完成: success={success_count}/{len(servers)}")
 
 
 def schedule_unban_background(*, player_id: int, nucleus_id: int, servers: list[dict]) -> None:

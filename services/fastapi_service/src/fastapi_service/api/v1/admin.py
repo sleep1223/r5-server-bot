@@ -19,10 +19,10 @@ router = APIRouter()
 @router.post("/players/{nucleus_id_or_player_name}/kick", dependencies=[Depends(verify_token)])
 async def kick_player(
     nucleus_id_or_player_name: int | str,
-    reason: str = Query(..., description=f"Reason for kick. Allowed: {ALLOWED_REASONS}"),
+    reason: str = Query(..., description=f"踢出原因。允许值: {ALLOWED_REASONS}"),
 ):
     if reason not in ALLOWED_REASONS:
-        raise HTTPException(status_code=400, detail=f"Invalid reason. Allowed: {ALLOWED_REASONS}")
+        raise HTTPException(status_code=400, detail=f"无效原因。允许值: {ALLOWED_REASONS}")
 
     player_obj, err = await player_service.get_player_by_identifier(nucleus_id_or_player_name)
     if err:
@@ -42,7 +42,7 @@ async def kick_player(
                 "skip_reason": "no_cover_allowed",
                 "server": {"name": target_loc["server_name"], "host": target_loc["server_host"], "port": target_loc["server_port"]},
             },
-            msg=f"Server {target_loc['server_name']} allows NO_COVER; kick skipped",
+            msg=f"服务器 {target_loc['server_name']} 允许 NO_COVER，已跳过踢出",
         )
 
     # NO_COVER: 过滤掉允许 NO_COVER 的服务器(如北京服)
@@ -75,7 +75,7 @@ async def kick_player(
                 "server": {"name": hit_server["server_name"], "host": hit_server["server_host"], "port": hit_server["server_port"]},
                 "broadcast_total": len(online_servers),
             },
-            msg=f"Player {player_obj.nucleus_id} kicked from {hit_server['server_name']} for {reason}",
+            msg=f"玩家 {player_obj.nucleus_id} 已从 {hit_server['server_name']} 踢出，原因 {reason}",
         )
 
     # 没有任何服务器命中该玩家 → 视作离线 / 玩家列表尚未刷新到该玩家
@@ -86,21 +86,18 @@ async def kick_player(
             "rcon_failed": True,
             "fail_reason": "no_server_hit",
         },
-        msg=(
-            f"已广播 {len(online_servers)} 台在线服务器,但均未命中玩家 {player_obj.nucleus_id}"
-            f"(可能已离线或玩家列表尚未刷新);踢出次数已记录(原因 {reason})"
-        ),
+        msg=(f"已广播 {len(online_servers)} 台在线服务器,但均未命中玩家 {player_obj.nucleus_id}(可能已离线或玩家列表尚未刷新);踢出次数已记录(原因 {reason})"),
     )
 
 
 @router.post("/players/{nucleus_id_or_player_name}/ban", dependencies=[Depends(verify_token)])
 async def ban_player(
     nucleus_id_or_player_name: int | str,
-    reason: str = Query(..., description=f"Reason for ban. Allowed: {ALLOWED_REASONS}"),
+    reason: str = Query(..., description=f"封禁原因。允许值: {ALLOWED_REASONS}"),
     credentials: HTTPAuthorizationCredentials | None = Depends(verify_token),
 ):
     if reason not in ALLOWED_REASONS:
-        raise HTTPException(status_code=400, detail=f"Invalid reason. Allowed: {ALLOWED_REASONS}")
+        raise HTTPException(status_code=400, detail=f"无效原因。允许值: {ALLOWED_REASONS}")
 
     player_obj, err = await player_service.get_player_by_identifier(nucleus_id_or_player_name)
     if err:
@@ -122,7 +119,7 @@ async def ban_player(
                 "primary_server": {"name": target_loc["server_name"], "host": target_loc["server_host"], "port": target_loc["server_port"]},
                 "async_server_count": 0,
             },
-            msg=f"Server {target_loc['server_name']} allows NO_COVER; ban skipped",
+            msg=f"服务器 {target_loc['server_name']} 允许 NO_COVER，已跳过封禁",
         )
 
     # NO_COVER: 过滤掉允许 NO_COVER 的服务器(如北京服)
@@ -134,21 +131,25 @@ async def ban_player(
         await admin_service.record_ban(player_obj, reason, operator_name)
         return success(
             data={"player_online": False, "async_server_count": 0, "broadcast_total": 0},
-            msg=f"No online servers; ban recorded for {player_obj.nucleus_id}",
+            msg=f"没有在线服务器，已记录玩家 {player_obj.nucleus_id} 的封禁",
         )
 
     # 不依赖可能过期的位置缓存:并行 bann (= kickid + banid) 所有在线服务器,
     # 这样玩家在哪台服都会被踢出,封禁列表也同步落地。
     online_server_key = f"{target_loc['server_host']}:{target_loc['server_port']}" if target_loc else None
     success_count, hits = await admin_service.broadcast_bann_player(
-        player_obj.nucleus_id, reason, online_servers, rcon_key, rcon_pwd,
+        player_obj.nucleus_id,
+        reason,
+        online_servers,
+        rcon_key,
+        rcon_pwd,
         online_server_key=online_server_key,
     )
 
     if success_count == 0:
         return error(
             ErrorCode.RCON_OPERATION_FAILED,
-            msg=f"Failed to ban player {player_obj.nucleus_id} on any online server",
+            msg=f"未能在任何在线服务器封禁玩家 {player_obj.nucleus_id}",
             data={"broadcast_total": len(online_servers)},
         )
 
@@ -185,7 +186,7 @@ async def ban_player(
             "broadcast_total": len(online_servers),
             "broadcast_success_count": success_count,
         },
-        msg=f"Player {player_obj.nucleus_id} banned on {success_count}/{len(online_servers)} server(s) for {reason}",
+        msg=f"玩家 {player_obj.nucleus_id} 已在 {success_count}/{len(online_servers)} 台服务器封禁，原因 {reason}",
     )
 
 
@@ -212,7 +213,7 @@ async def unban_player(nucleus_id_or_player_name: int | str):
         target_port = target_loc["server_port"]
         target_server_name = target_loc["server_name"]
         target_source = "ban_cache" if target_loc.get("_from_ban_cache") else "online"
-        target_source_desc = "cached ban server" if target_source == "ban_cache" else "online server"
+        target_source_desc = "缓存封禁服务器" if target_source == "ban_cache" else "在线服务器"
 
         unban_success = await admin_service.unban_player_on_server(player_obj.nucleus_id, target_host, target_port, rcon_key, rcon_pwd, timeout=1.0)
 
@@ -229,13 +230,13 @@ async def unban_player(nucleus_id_or_player_name: int | str):
                     "target_server": {"name": target_server_name, "host": target_host, "port": target_port},
                     "async_server_count": len(remain_servers),
                 },
-                msg=f"Player {player_obj.nucleus_id} unbanned on {target_source_desc} {target_server_name}; background sync started",
+                msg=f"玩家 {player_obj.nucleus_id} 已在{target_source_desc} {target_server_name} 解封，后台同步已启动",
             )
 
         if target_source == "online":
             return error(
                 ErrorCode.RCON_OPERATION_FAILED,
-                msg=f"Failed to unban player {player_obj.nucleus_id} on {target_source_desc} {target_server_name}",
+                msg=f"未能在{target_source_desc} {target_server_name} 解封玩家 {player_obj.nucleus_id}",
                 data={"player_online": True, "target_source": target_source, "target_server": {"name": target_server_name, "host": target_host, "port": target_port}},
             )
 
@@ -245,7 +246,7 @@ async def unban_player(nucleus_id_or_player_name: int | str):
         admin_service.schedule_unban_background(player_id=player_obj.id, nucleus_id=player_obj.nucleus_id, servers=online_servers)
         return success(
             data={"player_online": False, "async_server_count": len(online_servers)},
-            msg=f"Player {player_obj.nucleus_id} is not online; background unban task started",
+            msg=f"玩家 {player_obj.nucleus_id} 不在线，后台解封任务已启动",
         )
 
     await admin_service.record_unban(player_obj.nucleus_id)
@@ -256,7 +257,7 @@ async def unban_player(nucleus_id_or_player_name: int | str):
             "rcon_skipped": True,
             "skip_reason": "no_online_servers",
         },
-        msg=f"No online servers; local unban recorded for {player_obj.nucleus_id}",
+        msg=f"没有在线服务器，已在本地记录玩家 {player_obj.nucleus_id} 的解封",
     )
 
 
@@ -270,4 +271,4 @@ async def get_ban_list(
 
     results, total = await admin_service.list_bans(page_size=pg.page_size, offset=pg.offset, is_admin=is_admin)
 
-    return paginated(data=results, total=total, msg="Ban list retrieved")
+    return paginated(data=results, total=total, msg="封禁列表已获取")

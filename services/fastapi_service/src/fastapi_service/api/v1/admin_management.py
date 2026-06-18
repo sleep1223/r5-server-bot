@@ -122,7 +122,7 @@ async def admin_list_players(
         )
     except ValueError as exc:
         return error(ErrorCode.INVALID_REASON, str(exc))
-    return paginated(data=items, total=total, msg="Admin players retrieved")
+    return paginated(data=items, total=total, msg="管理员玩家列表已获取")
 
 
 @router.get("/players/{identifier}")
@@ -136,7 +136,7 @@ async def admin_get_player(identifier: int | str, access_server_id: str | None =
         access_server_id=access_server_id,
         include_history=True,
     )
-    return success(data=data, msg="Admin player retrieved")
+    return success(data=data, msg="管理员玩家详情已获取")
 
 
 @router.get("/players/{identifier}/access-matches")
@@ -153,7 +153,7 @@ async def admin_get_player_access_matches(identifier: int | str, access_server_i
         country=player.country,
         region=player.region,
     )
-    return success(data=data, msg="Player access matches retrieved")
+    return success(data=data, msg="玩家准入匹配结果已获取")
 
 
 @router.patch("/players/{identifier}/admin", dependencies=[Depends(verify_super_admin_app_key)])
@@ -166,7 +166,7 @@ async def admin_set_player_admin(identifier: int | str, body: PlayerAdminBody):
     )
     if err:
         return err
-    return success(data=data, msg="Player admin flag updated")
+    return success(data=data, msg="玩家管理员标记已更新")
 
 
 @router.post("/players/{identifier}/ban")
@@ -186,7 +186,7 @@ async def admin_ban_player(identifier: int | str, body: PlayerActionBody):
     )
     if err:
         return err
-    return success(data=data, msg="Admin ban submitted")
+    return success(data=data, msg="管理员封禁已提交")
 
 
 @router.post("/players/{identifier}/unban")
@@ -203,7 +203,7 @@ async def admin_unban_player(identifier: int | str, body: UnbanBody):
     )
     if err:
         return err
-    return success(data=data, msg="Admin unban submitted")
+    return success(data=data, msg="管理员解封已提交")
 
 
 @router.post("/players/{identifier}/kick")
@@ -223,7 +223,7 @@ async def admin_kick_player(identifier: int | str, body: PlayerActionBody):
     )
     if err:
         return err
-    return success(data=data, msg="Admin kick submitted")
+    return success(data=data, msg="管理员踢出已提交")
 
 
 @router.post("/access-actions/{action}")
@@ -245,7 +245,8 @@ async def admin_apply_access_action(action: Literal["ban", "kick"], body: Access
     )
     if err:
         return err
-    return success(data=data, msg=f"Admin {action} submitted")
+    action_label = {"ban": "封禁", "kick": "踢出"}.get(action, action)
+    return success(data=data, msg=f"管理员{action_label}操作已提交")
 
 
 @router.get("/access-rules")
@@ -268,7 +269,7 @@ async def admin_list_access_rules(
         page_size=pg.page_size,
         offset=pg.offset,
     )
-    return paginated(data=items, total=total, msg="Access rules retrieved")
+    return paginated(data=items, total=total, msg="准入规则已获取")
 
 
 @router.post("/access-rules/preview")
@@ -287,7 +288,7 @@ async def admin_preview_access_rules(body: AccessPreviewBody):
         country=body.country if body.country is not None else (player.country if player else None),
         region=body.region if body.region is not None else (player.region if player else None),
     )
-    return success(data=data, msg="Access rules previewed")
+    return success(data=data, msg="准入规则预览已生成")
 
 
 @router.post("/access-rules")
@@ -318,22 +319,22 @@ async def admin_create_access_rule(body: AccessRuleCreateBody):
     except ValueError as exc:
         return error(ErrorCode.INVALID_REASON, str(exc))
 
-    return success(data=player_access_service.serialize_access_rule(rule), msg="Access rule created")
+    return success(data=player_access_service.serialize_access_rule(rule), msg="准入规则已创建")
 
 
 @router.get("/access-rules/{rule_db_id}")
 async def admin_get_access_rule(rule_db_id: int):
     rule = await player_access_service.get_access_rule(rule_db_id)
     if not rule:
-        return error(ErrorCode.SERVER_NOT_FOUND, f"Access rule not found: {rule_db_id}")
-    return success(data=player_access_service.serialize_access_rule(rule), msg="Access rule retrieved")
+        return error(ErrorCode.SERVER_NOT_FOUND, f"未找到准入规则: {rule_db_id}")
+    return success(data=player_access_service.serialize_access_rule(rule), msg="准入规则已获取")
 
 
 @router.patch("/access-rules/{rule_db_id}")
 async def admin_update_access_rule(rule_db_id: int, body: AccessRuleUpdateBody):
     rule = await player_access_service.get_access_rule(rule_db_id)
     if not rule:
-        return error(ErrorCode.SERVER_NOT_FOUND, f"Access rule not found: {rule_db_id}")
+        return error(ErrorCode.SERVER_NOT_FOUND, f"未找到准入规则: {rule_db_id}")
 
     updates = body.model_dump(exclude_unset=True)
     try:
@@ -341,16 +342,16 @@ async def admin_update_access_rule(rule_db_id: int, body: AccessRuleUpdateBody):
     except ValueError as exc:
         return error(ErrorCode.INVALID_REASON, str(exc))
 
-    return success(data=player_access_service.serialize_access_rule(updated), msg="Access rule updated")
+    return success(data=player_access_service.serialize_access_rule(updated), msg="准入规则已更新")
 
 
 @router.delete("/access-rules/{rule_db_id}")
 async def admin_disable_access_rule(rule_db_id: int):
     rule = await player_access_service.get_access_rule(rule_db_id)
     if not rule:
-        return error(ErrorCode.SERVER_NOT_FOUND, f"Access rule not found: {rule_db_id}")
+        return error(ErrorCode.SERVER_NOT_FOUND, f"未找到准入规则: {rule_db_id}")
     disabled = await player_access_service.disable_access_rule(rule)
-    return success(data=player_access_service.serialize_access_rule(disabled), msg="Access rule disabled")
+    return success(data=player_access_service.serialize_access_rule(disabled), msg="准入规则已禁用")
 
 
 @router.get("/access-operations")
@@ -373,7 +374,7 @@ async def admin_list_access_operations(
         page_size=pg.page_size,
         offset=pg.offset,
     )
-    return paginated(data=items, total=total, msg="Access operations retrieved")
+    return paginated(data=items, total=total, msg="准入操作记录已获取")
 
 
 @router.get("/access-notices")
@@ -394,14 +395,14 @@ async def admin_list_access_notices(
         page_size=pg.page_size,
         offset=pg.offset,
     )
-    return paginated(data=items, total=total, msg="Access notices retrieved")
+    return paginated(data=items, total=total, msg="准入通知已获取")
 
 
 @router.post("/access-notices/{notice_id}/ack")
 async def admin_ack_access_notice(notice_id: int):
     notice = await player_access_service.get_access_notice(notice_id)
     if not notice:
-        return error(ErrorCode.SERVER_NOT_FOUND, f"Access notice not found: {notice_id}")
+        return error(ErrorCode.SERVER_NOT_FOUND, f"未找到准入通知: {notice_id}")
 
     player = None
     notice_player_id = getattr(notice, "player_id", None)
@@ -427,5 +428,5 @@ async def admin_ack_access_notice(notice_id: int):
             "notice": player_access_service.serialize_access_notice(updated),
             "operation": player_access_service.serialize_access_operation(operation),
         },
-        msg="Access notice acknowledged",
+        msg="准入通知已确认",
     )

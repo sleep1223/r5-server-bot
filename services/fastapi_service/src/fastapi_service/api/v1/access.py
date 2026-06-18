@@ -74,7 +74,7 @@ def _verify_optional_access_token(credentials: HTTPAuthorizationCredentials | No
     if settings.fastapi_access_tokens and credentials.credentials not in settings.fastapi_access_tokens:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication token",
+            detail="认证令牌无效",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

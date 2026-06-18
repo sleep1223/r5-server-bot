@@ -9,7 +9,7 @@ def require_rcon_config() -> tuple[str, str]:
     rcon_key = settings.r5_rcon_key
     rcon_pwd = settings.r5_rcon_password
     if not rcon_key or not rcon_pwd:
-        raise HTTPException(status_code=503, detail="RCON configuration missing")
+        raise HTTPException(status_code=503, detail="缺少 RCON 配置")
     return rcon_key, rcon_pwd
 
 
