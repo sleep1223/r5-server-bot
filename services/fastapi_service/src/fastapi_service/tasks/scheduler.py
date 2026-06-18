@@ -4,7 +4,7 @@ from loguru import logger
 
 from .close_stale_matches import close_stale_matches_task
 from .fetch_launcher_version import fetch_launcher_version_task
-from .fetch_servers import fetch_server_list_raw_task
+from .fetch_servers import fetch_server_list_raw_once, fetch_server_list_raw_task
 from .reconcile_matches import reconcile_matches_task
 from .refresh_player_kill_daily_stats import player_kill_daily_stats_refresh_task
 from .resolve_ips import ip_resolution_task
@@ -18,16 +18,21 @@ class TaskScheduler:
         self._tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
+        logger.info("启动玩家同步任务前先拉取初始服务器列表")
+        initial_server_count = await fetch_server_list_raw_once()
+        if initial_server_count is None:
+            logger.warning("初始服务器列表拉取失败，玩家同步将等待周期性拉取任务")
+
         self._tasks = [
+            asyncio.create_task(fetch_server_list_raw_task(delay_first=initial_server_count is not None)),
             asyncio.create_task(sync_players_task()),
-            asyncio.create_task(fetch_server_list_raw_task()),
             asyncio.create_task(ip_resolution_task()),
             asyncio.create_task(close_stale_matches_task()),
             asyncio.create_task(reconcile_matches_task()),
             asyncio.create_task(fetch_launcher_version_task()),
             asyncio.create_task(player_kill_daily_stats_refresh_task()),
         ]
-        logger.info(f"Started {len(self._tasks)} background tasks")
+        logger.info(f"已启动 {len(self._tasks)} 个后台任务")
 
     async def stop(self) -> None:
         for task in self._tasks:
@@ -35,9 +40,9 @@ class TaskScheduler:
         results = await asyncio.gather(*self._tasks, return_exceptions=True)
         for r in results:
             if isinstance(r, Exception) and not isinstance(r, asyncio.CancelledError):
-                logger.error(f"Background task error during shutdown: {r}")
+                logger.error(f"后台任务关闭时异常: {r}")
         self._tasks.clear()
-        logger.info("All background tasks stopped")
+        logger.info("所有后台任务已停止")
 
 
 task_scheduler = TaskScheduler()

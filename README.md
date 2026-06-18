@@ -41,8 +41,8 @@ uv tool install nb-cli
 **`env/.env` 关键配置项说明：**
 
 ```properties
-# 控制台输出的 netkey (对应 liveapi.cfg 中的配置)
-r5_target_keys='["server_key"]'
+# master-server JSON 中的 serverId；留空数组则尝试同步所有中国服
+r5_target_keys='["serverId"]'
 
 # RCON 配置 (对应 rcon_server.cfg 中的配置)
 r5_rcon_key="rcon_key"

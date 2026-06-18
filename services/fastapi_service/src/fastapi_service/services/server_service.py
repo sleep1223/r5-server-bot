@@ -1,8 +1,11 @@
 from shared_lib.models import Server
+from tortoise.expressions import Q
 
 from fastapi_service.core.cache import server_cache
 from fastapi_service.core.utils import parse_short_name
 from fastapi_service.services import player_access_service
+
+_SERVER_IDENTIFIER_FIELDS = ("serverId", "server_id", "key", "netkey")
 
 
 def _safe_int(value, default: int = 0) -> int:
@@ -10,6 +13,36 @@ def _safe_int(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _normalize_identifier(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _raw_server_identifiers(server: dict) -> list[str]:
+    identifiers: list[str] = []
+    seen: set[str] = set()
+    for field in _SERVER_IDENTIFIER_FIELDS:
+        identifier = _normalize_identifier(server.get(field))
+        if identifier and identifier not in seen:
+            identifiers.append(identifier)
+            seen.add(identifier)
+    return identifiers
+
+
+def _raw_server_identifier(server: dict) -> str:
+    identifiers = _raw_server_identifiers(server)
+    return identifiers[0] if identifiers else ""
+
+
+def _is_cn_raw_server(server: dict, name: str) -> bool:
+    region = str(server.get("region") or "").upper()
+    return "CN" in name or region in {"CN", "HK", "TW"}
+
+
+def _strip_public_server_fields(entry: dict) -> None:
+    for field in ("ip", "port", "key", "host"):
+        entry.pop(field, None)
 
 
 def get_server_info() -> list[dict]:
@@ -34,7 +67,12 @@ async def list_servers(
 
     synced_by_key: dict[str, dict] = {}
     synced_by_ip: dict[str, dict] = {}
+    synced_by_server_id: dict[str, dict] = {}
     for s_status in server_cache.servers.values():
+        server_identifier = str(s_status.get("server_id") or "").strip()
+        if server_identifier:
+            synced_by_server_id[server_identifier] = s_status
+
         host = str(s_status.get("ip") or "")
         port = s_status.get("port")
         if not host or not port:
@@ -55,6 +93,20 @@ async def list_servers(
         if isinstance(raw_servers, list):
             raw_list = [s for s in raw_servers if isinstance(s, dict)]
 
+    raw_identifiers: set[str] = set()
+    for s in raw_list:
+        raw_identifiers.update(_raw_server_identifiers(s))
+    raw_hosts = {str(s.get("ip") or "").strip() for s in raw_list if str(s.get("ip") or "").strip()}
+    server_filter = Q(has_status=True) | Q(is_self_hosted=True)
+    if raw_identifiers:
+        server_filter |= Q(server_id__in=list(raw_identifiers)) | Q(netkey__in=list(raw_identifiers))
+    if raw_hosts:
+        server_filter |= Q(host__in=list(raw_hosts))
+
+    online_server_rows = await Server.filter(server_filter).all()
+    db_by_identifier = {s.server_id: s for s in online_server_rows if s.server_id}
+    db_by_host = {s.host: s for s in online_server_rows if s.host}
+
     # cn_only 模式：只返回已同步的本地服务器；raw 列表未出现的也要能返回（避免拉取失败时丢失）
     results: list[dict] = []
 
@@ -66,34 +118,60 @@ async def list_servers(
     seen_keys: set[str] = set()
 
     for s in raw_list:
+        server_identifiers = _raw_server_identifiers(s)
+        server_identifier = server_identifiers[0] if server_identifiers else ""
         ip = str(s.get("ip") or "")
         port = _safe_int(s.get("port"))
+        db_server = None
+        for identifier in server_identifiers:
+            db_server = db_by_identifier.get(identifier)
+            if db_server:
+                break
+        if db_server is None and ip:
+            db_server = db_by_host.get(ip)
+        if db_server:
+            if not ip:
+                ip = db_server.host
+            if not port:
+                port = db_server.port
+
         key = f"{ip}:{port}" if ip and port else ""
-        status = synced_by_key.get(key) if key else None
+        status = None
+        for identifier in server_identifiers:
+            status = synced_by_server_id.get(identifier)
+            if status:
+                break
+        if status is None:
+            status = synced_by_key.get(key) if key else None
+        if not ip and db_server is None and status is None:
+            continue
         # raw 缺 port 时按 ip 兜底匹配，避免同一服务器在结果里出现两次
         if status is None and ip and not port:
             status = synced_by_ip.get(ip)
             if status:
                 port = _safe_int(status.get("port")) or port
                 key = f"{ip}:{port}" if port else ip
-        has_status = status is not None
-        if cn_only and not has_status:
-            continue
-
         full_name = s.get("name") or (status.get("_api_name") if status else None) or (status.get("hostname") if status else None) or "Unknown"
+        is_cn_raw = _is_cn_raw_server(s, full_name)
+        has_status = status is not None or db_server is not None or bool(ip)
+        if cn_only and not (status is not None or is_cn_raw):
+            continue
         if not _match_name(full_name):
             continue
 
         short_name = (status.get("short_name") if status else None) or parse_short_name(full_name)
         raw_player_count = _safe_int(s.get("playerCount") or s.get("numPlayers"))
         raw_max_players = _safe_int(s.get("maxPlayers"))
+        display_ip = ip if ip and ip != server_identifier else ""
 
         entry: dict = {
             "name": full_name,
             "short_name": short_name,
             "full_name": full_name,
-            "ip": ip or None,
-            "port": port or None,
+            "server_id": server_identifier or None,
+            "key": server_identifier or None,
+            "ip": display_ip or None,
+            "port": port if display_ip else None,
             "region": s.get("region"),
             "map": s.get("map"),
             "playlist": s.get("playlist"),
@@ -129,6 +207,7 @@ async def list_servers(
         elif not simple:
             entry["players"] = []
 
+        _strip_public_server_fields(entry)
         if key:
             seen_keys.add(key)
         results.append(entry)
@@ -179,6 +258,7 @@ async def list_servers(
                 )
                 player_list.append(p_info)
             entry["players"] = player_list
+        _strip_public_server_fields(entry)
         results.append(entry)
 
     return results

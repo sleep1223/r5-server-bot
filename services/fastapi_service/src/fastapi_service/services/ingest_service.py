@@ -83,18 +83,49 @@ def _mark_seen(batch_id: str) -> bool:
 
 
 async def _resolve_server(ref: ServerRef) -> Server:
+    server_identifier = (ref.server_id or "").strip() or None
     defaults = {
         "port": ref.port,
         "name": ref.name or f"server-{ref.host}",
         "is_self_hosted": True,
+        "server_id": server_identifier,
     }
-    server, created = await Server.get_or_create(host=ref.host, defaults=defaults)
+
+    server = await Server.get_or_none(server_id=server_identifier) if server_identifier else None
+    host_server = await Server.get_or_none(host=ref.host)
+    if server is not None and host_server is not None and server.id != host_server.id:
+        if host_server.server_id not in (None, server_identifier):
+            logger.warning(f"Server {ref.host} 已绑定其它 server_id={host_server.server_id}, 忽略本次 server_id={server_identifier}")
+            server = host_server
+            server_identifier = None
+        else:
+            await Server.filter(id=server.id).update(server_id=None, has_status=False)
+            server = host_server
+    elif server is None:
+        server = host_server
+
+    if server is None:
+        server = await Server.create(host=ref.host, **defaults)
+        logger.info(f"Server 创建: id={server.id}, host={ref.host}, server_id={server_identifier}")
+        return server
+
+    update_fields: list[str] = []
+    if server_identifier and server.server_id != server_identifier:
+        server.server_id = server_identifier
+        update_fields.append("server_id")
+    if server.host != ref.host:
+        server.host = ref.host
+        update_fields.append("host")
+    if server.port != ref.port:
+        server.port = ref.port
+        update_fields.append("port")
     if not server.is_self_hosted:
         server.is_self_hosted = True
-        await server.save(update_fields=["is_self_hosted", "updated_at"])
+        update_fields.append("is_self_hosted")
+    if update_fields:
+        await server.save(update_fields=[*update_fields, "updated_at"])
+    if "is_self_hosted" in update_fields:
         logger.info(f"Server {ref.host} 补标 is_self_hosted=True")
-    if created:
-        logger.info(f"Server 创建: id={server.id}, host={ref.host}")
     return server
 
 
@@ -299,11 +330,7 @@ async def _synthesize_match(server: Server, ts: int) -> Match:
     2. **Server 表**：`fetch_server_list_raw_task` 每 180s 拉远程服务器列表刷新 map/playlist
     3. **stub 占位**：以上都没有，用 unknown；等后续真 MatchSetup 来了替换
     """
-    latest_setup = (
-        await MatchSetup.filter(match__server_id=server.id)
-        .order_by("-timestamp")
-        .first()
-    )
+    latest_setup = await MatchSetup.filter(match__server_id=server.id).order_by("-timestamp").first()
     if latest_setup is not None:
         map_name = latest_setup.map_name
         playlist_name = latest_setup.playlist_name
@@ -327,9 +354,7 @@ async def _synthesize_match(server: Server, ts: int) -> Match:
         datacenter = None
         aim_assist_on = False
         source_label = "stub (no metadata available)"
-        logger.warning(
-            f"Synth Match 用 stub (server_id={server.id}): 既无历史 MatchSetup 也无远程 Server 元数据"
-        )
+        logger.warning(f"Synth Match 用 stub (server_id={server.id}): 既无历史 MatchSetup 也无远程 Server 元数据")
 
     match = await _insert_match(
         server,
@@ -341,9 +366,7 @@ async def _synthesize_match(server: Server, ts: int) -> Match:
         aim_assist_on=aim_assist_on,
         has_entered_playing=True,
     )
-    logger.info(
-        f"Match 创建 (synth from {source_label}): id={match.id}, full_match_id={match.full_match_id}"
-    )
+    logger.info(f"Match 创建 (synth from {source_label}): id={match.id}, full_match_id={match.full_match_id}")
     return match
 
 
@@ -378,7 +401,14 @@ async def process_batch(batch: IngestBatch) -> IngestResult:
 
     try:
         async with _BATCH_LOCK:
-            server = await _resolve_server(batch.server)
+            server_ref = batch.server
+            if not server_ref.server_id:
+                for event in batch.events:
+                    if isinstance(event, MatchSetupIn) and event.server_id:
+                        server_ref = server_ref.model_copy(update={"server_id": event.server_id})
+                        break
+
+            server = await _resolve_server(server_ref)
             player_infos = _collect_players(batch)
             player_map = await _bulk_upsert_players(player_infos)
 
@@ -464,9 +494,7 @@ async def _dispatch_event(
     if isinstance(event, GameStateChangedIn):
         next_match = active_match
         if active_match:
-            next_match = await _apply_state_transition(
-                active_match, event.state, event.timestamp, server.id
-            )
+            next_match = await _apply_state_transition(active_match, event.state, event.timestamp, server.id)
         elif event.state == _STATE_PLAYING:
             # 活跃 match 空 + 进入 Playing → 从该服务器最近一条 MatchSetup 继承元数据合成。
             # 覆盖 1v1/自定义房 SDK 只在服务器启动时 emit 一次 MatchSetup 的场景。
@@ -559,9 +587,6 @@ async def _dispatch_event(
                 attacker=attacker,
                 victim=victim,
                 awarded_to=awarded_to,
-                # attacker_data=event.attacker_data,
-                # victim_data=event.victim_data,
-                # awarded_to_data=event.awarded_to_data,
                 weapon=event.weapon,
                 server=server,
                 match=active_match,

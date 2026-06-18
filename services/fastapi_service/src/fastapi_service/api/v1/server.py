@@ -37,13 +37,13 @@ async def get_server_list(
         cn_only=cn_only,
         is_admin=is_admin,
     )
-    return success(data=results, msg=f"{len(results)} servers")
+    return success(data=results, msg=f"{len(results)} 台服务器")
 
 
 @router.get("/server/info", dependencies=[Depends(verify_token)])
 async def get_server_info():
     results = server_service.get_server_info()
-    return success(data=results, msg="Server info retrieved")
+    return success(data=results, msg="服务器信息已获取")
 
 
 @router.patch("/server/by-host/{host}/alias", dependencies=[Depends(verify_token)])
@@ -51,9 +51,9 @@ async def set_server_alias(host: str, body: ServerAliasBody):
     """设置或清空指定 host 的短名/别名。空字符串或 null 视为清空。"""
     result, err = await server_service.set_server_alias(host, body.short_name)
     if err == "not_found":
-        return error(ErrorCode.SERVER_NOT_FOUND, f"Server not found: {host}")
+        return error(ErrorCode.SERVER_NOT_FOUND, f"未找到服务器: {host}")
     if err == "alias_conflict":
         conflict_host = result["host"] if result else ""
-        return error(ErrorCode.SERVER_NOT_FOUND, f"Alias already used by host {conflict_host}")
+        return error(ErrorCode.SERVER_NOT_FOUND, f"别名已被主机 {conflict_host} 使用")
 
-    return success(data=result, msg="alias updated")
+    return success(data=result, msg="别名已更新")
