@@ -1,16 +1,24 @@
 from shared_lib.models import TeamMember, TeamPost, UserBinding
+from tortoise import connections
 from tortoise.transactions import in_transaction
+
+from fastapi_service.core.utils import calc_kd
 
 
 async def _get_player_kd(player_id: int) -> float:
     """计算玩家总 KD。"""
-    from shared_lib.models import PlayerKilled
-
-    kills = await PlayerKilled.filter(attacker_id=player_id).count()
-    deaths = await PlayerKilled.filter(victim_id=player_id).count()
-    if deaths == 0:
-        return float(kills)
-    return round(kills / deaths, 2)
+    rows = await connections.get("default").execute_query_dict(
+        """
+        SELECT
+            COALESCE(SUM(kills), 0)::int AS kills,
+            COALESCE(SUM(deaths), 0)::int AS deaths
+        FROM player_kill_daily_weapon_opponent_stats
+        WHERE player_id = $1
+        """,
+        [player_id],
+    )
+    row = rows[0] if rows else {"kills": 0, "deaths": 0}
+    return calc_kd(row["kills"] or 0, row["deaths"] or 0)
 
 
 async def _binding_to_dict(binding: UserBinding, include_kd: bool = True, include_private_fields: bool = True) -> dict:

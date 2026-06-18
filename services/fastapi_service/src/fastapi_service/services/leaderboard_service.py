@@ -2,17 +2,16 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from loguru import logger
 from shared_lib.config import settings
-from shared_lib.models import Player, PlayerKilled, Server
+from shared_lib.models import Player, Server
 from tortoise import connections
-from tortoise.expressions import F
-from tortoise.functions import Count
 
 from fastapi_service.core.constants import WEAPON_NAME_MAP, to_display_weapon, to_internal_weapon
 from fastapi_service.core.utils import CN_TZ, calc_kd, get_date_range
 
 # ── Common helpers ──
+
+_DAILY_STATS_TABLE = "player_kill_daily_weapon_opponent_stats"
 
 
 async def _get_excluded_server_ids() -> list[int]:
@@ -48,129 +47,90 @@ async def _aggregate_kills_deaths(
     excluded_server_ids: list[int] | None = None,
 ) -> dict[int, dict[str, int]]:
     """统一的 kill/death 聚合，返回 {player_id: {"kills": N, "deaths": N}}"""
-    if _can_use_daily_stats(extra_filters, group_kills_by, group_deaths_by):
-        window = _stat_date_window(start_time, end_time)
-        if window is not None:
-            server_id = extra_filters.get("server_id") if extra_filters else None
-            try:
-                stats = await _aggregate_kills_deaths_from_daily_stats(
-                    window[0],
-                    window[1],
-                    server_id=server_id,
-                    excluded_server_ids=excluded_server_ids,
-                )
-            except Exception as e:
-                logger.warning(f"read player_kill_daily_stats failed, fallback to player_killed: {e}")
-            else:
-                if stats:
-                    return stats
-                logger.debug("player_kill_daily_stats empty, fallback to player_killed")
+    if group_kills_by != "attacker_id" or group_deaths_by != "victim_id":
+        return {}
 
-    return await _aggregate_kills_deaths_from_events(
-        start_time,
-        end_time,
-        extra_filters=extra_filters,
-        group_kills_by=group_kills_by,
-        group_deaths_by=group_deaths_by,
+    if extra_filters is not None and set(extra_filters) != {"server_id"}:
+        return {}
+
+    start_day, end_day = _stat_date_window(start_time, end_time)
+    server_id = extra_filters.get("server_id") if extra_filters else None
+    return await _aggregate_kills_deaths_from_daily_stats(
+        start_day,
+        end_day,
+        server_id=server_id,
         excluded_server_ids=excluded_server_ids,
     )
 
 
-def _can_use_daily_stats(extra_filters: dict | None, group_kills_by: str, group_deaths_by: str) -> bool:
-    if group_kills_by != "attacker_id" or group_deaths_by != "victim_id":
-        return False
-    return extra_filters is None or set(extra_filters) == {"server_id"}
-
-
-def _stat_date_window(start_time: datetime | None, end_time: datetime | None) -> tuple[date, date] | None:
-    if start_time is None or end_time is None:
-        return None
-    start_day = start_time.astimezone(CN_TZ).date()
-    end_day = end_time.astimezone(CN_TZ).date() + timedelta(days=1)
+def _stat_date_window(start_time: datetime | None, end_time: datetime | None) -> tuple[date | None, date | None]:
+    start_day = start_time.astimezone(CN_TZ).date() if start_time else None
+    end_day = end_time.astimezone(CN_TZ).date() + timedelta(days=1) if end_time else None
     return start_day, end_day
 
 
+def _append_param(params: list[object], value: object) -> str:
+    params.append(value)
+    return f"${len(params)}"
+
+
+def _extend_where_sql(where_sql: str, clause: str) -> str:
+    if where_sql:
+        return f"{where_sql}\n      AND {clause}"
+    return f"WHERE {clause}"
+
+
+def _daily_stats_filter_sql(
+    *,
+    start_day: date | None,
+    end_day: date | None,
+    server_id: int | None = None,
+    excluded_server_ids: list[int] | None = None,
+    alias: str = "s",
+) -> tuple[str, list[object]]:
+    params: list[object] = []
+    prefix = f"{alias}." if alias else ""
+    clauses: list[str] = []
+
+    if start_day is not None:
+        clauses.append(f"{prefix}stat_date >= {_append_param(params, start_day)}::date")
+    if end_day is not None:
+        clauses.append(f"{prefix}stat_date < {_append_param(params, end_day)}::date")
+    if server_id is not None:
+        clauses.append(f"{prefix}server_id = {_append_param(params, server_id)}")
+    elif excluded_server_ids:
+        clauses.append(f"{prefix}server_id <> ALL({_append_param(params, excluded_server_ids)}::int[])")
+
+    return ("WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+
 async def _aggregate_kills_deaths_from_daily_stats(
-    start_day: date,
-    end_day: date,
+    start_day: date | None,
+    end_day: date | None,
     *,
     server_id: int | None = None,
     excluded_server_ids: list[int] | None = None,
 ) -> dict[int, dict[str, int]]:
-    params: list[object] = [start_day, end_day]
-    server_clause = ""
-    if server_id is not None:
-        params.append(server_id)
-        server_clause = f"AND server_id = ${len(params)}"
-    elif excluded_server_ids:
-        params.append(excluded_server_ids)
-        server_clause = f"AND server_id <> ALL(${len(params)}::int[])"
+    where_sql, params = _daily_stats_filter_sql(
+        start_day=start_day,
+        end_day=end_day,
+        server_id=server_id,
+        excluded_server_ids=excluded_server_ids,
+    )
 
     sql = f"""
     SELECT
         player_id,
         SUM(kills)::int AS kills,
         SUM(deaths)::int AS deaths
-    FROM player_kill_daily_stats
-    WHERE stat_date >= $1::date
-      AND stat_date <  $2::date
-      {server_clause}
+    FROM {_DAILY_STATS_TABLE} s
+    {where_sql}
     GROUP BY player_id
+    HAVING SUM(kills) > 0 OR SUM(deaths) > 0
     """
 
     rows = await connections.get("default").execute_query_dict(sql, params)
-    return {
-        row["player_id"]: {"kills": row["kills"] or 0, "deaths": row["deaths"] or 0}
-        for row in rows
-        if row["player_id"] is not None
-    }
-
-
-async def _aggregate_kills_deaths_from_events(
-    start_time: datetime | None,
-    end_time: datetime | None,
-    *,
-    extra_filters: dict | None = None,
-    group_kills_by: str = "attacker_id",
-    group_deaths_by: str = "victim_id",
-    excluded_server_ids: list[int] | None = None,
-) -> dict[int, dict[str, int]]:
-    filters: dict = {}
-    if start_time:
-        filters["created_at__gte"] = start_time
-    if end_time:
-        filters["created_at__lte"] = end_time
-    if extra_filters:
-        filters.update(extra_filters)
-    if excluded_server_ids:
-        filters["server_id__not_in"] = excluded_server_ids
-
-    kills_filter = {**filters, f"{group_kills_by}__isnull": False}
-    kills_data = (
-        await PlayerKilled.filter(**kills_filter)
-        .exclude(attacker_id=F("victim_id"))
-        .group_by(group_kills_by)
-        .annotate(k_count=Count("id"))
-        .values(group_kills_by, "k_count")
-    )
-
-    deaths_filter = {**filters, f"{group_deaths_by}__isnull": False}
-    deaths_data = (
-        await PlayerKilled.filter(**deaths_filter)
-        .exclude(attacker_id=F("victim_id"))
-        .group_by(group_deaths_by)
-        .annotate(d_count=Count("id"))
-        .values(group_deaths_by, "d_count")
-    )
-
-    stats: dict[int, dict[str, int]] = {}
-    for k in kills_data:
-        pid = k[group_kills_by]
-        stats.setdefault(pid, {"kills": 0, "deaths": 0})["kills"] = k["k_count"]
-    for d in deaths_data:
-        pid = d[group_deaths_by]
-        stats.setdefault(pid, {"kills": 0, "deaths": 0})["deaths"] = d["d_count"]
-    return stats
+    return {row["player_id"]: {"kills": row["kills"] or 0, "deaths": row["deaths"] or 0} for row in rows if row["player_id"] is not None}
 
 
 async def _enrich_with_player_names(stats: dict[int, dict], player_ids: list[int] | None = None) -> dict[int, dict]:
@@ -241,51 +201,44 @@ async def get_weapon_ranking(
     internal_weapons = [to_internal_weapon(w) for w in weapons]
     internal_weapons = [w for w in internal_weapons if w]
     if not internal_weapons:
-        return [], 0, "Invalid weapon(s)"
+        return [], 0, "武器参数无效"
 
     display_weapons_str = ", ".join(to_display_weapon(w) for w in internal_weapons)
 
     start_time, end_time = get_date_range(range_type)
-    filters: dict = {}
-    if start_time and end_time:
-        filters["created_at__range"] = (start_time, end_time)
-    if server_id is not None:
-        filters["server_id"] = server_id
-    else:
-        excluded_ids = await _get_excluded_server_ids()
-        if excluded_ids:
-            filters["server_id__not_in"] = excluded_ids
+    start_day, end_day = _stat_date_window(start_time, end_time)
+    excluded_ids = None if server_id is not None else await _get_excluded_server_ids()
+    where_sql, params = _daily_stats_filter_sql(
+        start_day=start_day,
+        end_day=end_day,
+        server_id=server_id,
+        excluded_server_ids=excluded_ids,
+    )
+    where_sql = _extend_where_sql(where_sql, f"s.weapon = ANY({_append_param(params, internal_weapons)}::text[])")
 
     # Aggregate by (weapon, player)
     stats_by_weapon: dict[str, dict[int, dict[str, int]]] = {iw: {} for iw in internal_weapons}
 
-    kills_data = await (
-        PlayerKilled
-        .filter(**filters, attacker_id__not_isnull=True, weapon__in=internal_weapons)
-        .exclude(attacker_id=F("victim_id"))
-        .group_by("weapon", "attacker_id")
-        .annotate(k_count=Count("id"))
-        .values("weapon", "attacker_id", "k_count")
-    )
-    deaths_data = await (
-        PlayerKilled.filter(**filters, victim_id__not_isnull=True, weapon__in=internal_weapons)
-        .exclude(attacker_id=F("victim_id"))
-        .group_by("weapon", "victim_id")
-        .annotate(d_count=Count("id"))
-        .values("weapon", "victim_id", "d_count")
+    rows = await connections.get("default").execute_query_dict(
+        f"""
+        SELECT
+            s.weapon,
+            s.player_id,
+            SUM(s.kills)::int AS kills,
+            SUM(s.deaths)::int AS deaths
+        FROM {_DAILY_STATS_TABLE} s
+        {where_sql}
+        GROUP BY s.weapon, s.player_id
+        HAVING SUM(s.kills) > 0 OR SUM(s.deaths) > 0
+        """,
+        params,
     )
 
-    for k in kills_data:
-        weapon_stats = stats_by_weapon.get(k["weapon"])
+    for row in rows:
+        weapon_stats = stats_by_weapon.get(row["weapon"])
         if weapon_stats is None:
             continue
-        weapon_stats.setdefault(k["attacker_id"], {"kills": 0, "deaths": 0})["kills"] = k["k_count"]
-
-    for d in deaths_data:
-        weapon_stats = stats_by_weapon.get(d["weapon"])
-        if weapon_stats is None:
-            continue
-        weapon_stats.setdefault(d["victim_id"], {"kills": 0, "deaths": 0})["deaths"] = d["d_count"]
+        weapon_stats[row["player_id"]] = {"kills": row["kills"] or 0, "deaths": row["deaths"] or 0}
 
     # Collect all player IDs involved, then exclude banned
     all_pids = {pid for ws in stats_by_weapon.values() for pid in ws}
@@ -356,34 +309,34 @@ async def get_player_vs_all(
     server_id: int | None = None,
     range_type: str = "all",
 ) -> tuple[list[dict], int, dict]:
-    server_filter: dict = {}
-    if server_id is not None:
-        server_filter["server_id"] = server_id
-    else:
-        excluded_ids = await _get_excluded_server_ids()
-        if excluded_ids:
-            server_filter["server_id__not_in"] = excluded_ids
     start_time, end_time = get_date_range(range_type)
-    if start_time:
-        server_filter["created_at__gte"] = start_time
-    if end_time:
-        server_filter["created_at__lte"] = end_time
-    kills_list = (
-        await PlayerKilled.filter(attacker_id=player_id, victim_id__not_isnull=True, **server_filter)
-        .exclude(victim_id=player_id)
-        .values("victim_id")
+    start_day, end_day = _stat_date_window(start_time, end_time)
+    excluded_ids = None if server_id is not None else await _get_excluded_server_ids()
+    where_sql, params = _daily_stats_filter_sql(
+        start_day=start_day,
+        end_day=end_day,
+        server_id=server_id,
+        excluded_server_ids=excluded_ids,
     )
-    deaths_list = (
-        await PlayerKilled.filter(victim_id=player_id, attacker_id__not_isnull=True, **server_filter)
-        .exclude(attacker_id=player_id)
-        .values("attacker_id")
+    where_sql = _extend_where_sql(where_sql, f"s.player_id = {_append_param(params, player_id)}")
+
+    rows = await connections.get("default").execute_query_dict(
+        f"""
+        SELECT
+            s.opponent_id,
+            SUM(s.kills)::int AS kills,
+            SUM(s.deaths)::int AS deaths
+        FROM {_DAILY_STATS_TABLE} s
+        {where_sql}
+        GROUP BY s.opponent_id
+        HAVING SUM(s.kills) > 0 OR SUM(s.deaths) > 0
+        """,
+        params,
     )
 
     opponents_stats: dict[int, dict[str, int]] = {}
-    for k in kills_list:
-        opponents_stats.setdefault(k["victim_id"], {"kills": 0, "deaths": 0})["kills"] += 1
-    for d in deaths_list:
-        opponents_stats.setdefault(d["attacker_id"], {"kills": 0, "deaths": 0})["deaths"] += 1
+    for row in rows:
+        opponents_stats[row["opponent_id"]] = {"kills": row["kills"] or 0, "deaths": row["deaths"] or 0}
 
     if not opponents_stats:
         return [], 0, _build_vs_all_summary(0, 0, None, None)
@@ -404,9 +357,8 @@ async def get_player_vs_all(
 
     _sort_results(results, sort)
 
-    # Calculate summary
-    total_kills = len(kills_list)
-    total_deaths = len(deaths_list)
+    total_kills = sum(data["kills"] for data in opponents_stats.values())
+    total_deaths = sum(data["deaths"] for data in opponents_stats.values())
 
     # Enemy KD for worst enemy detection
     for r in results:
@@ -470,42 +422,38 @@ async def get_player_weapon_stats(
     server_id: int | None = None,
     range_type: str = "all",
 ) -> tuple[list[dict], int, dict]:
-    server_filter: dict = {}
-    if server_id is not None:
-        server_filter["server_id"] = server_id
-    else:
-        excluded_ids = await _get_excluded_server_ids()
-        if excluded_ids:
-            server_filter["server_id__not_in"] = excluded_ids
     start_time, end_time = get_date_range(range_type)
-    if start_time:
-        server_filter["created_at__gte"] = start_time
-    if end_time:
-        server_filter["created_at__lte"] = end_time
-    kills_list = (
-        await PlayerKilled.filter(attacker_id=player_id, victim_id__not_isnull=True, **server_filter)
-        .exclude(victim_id=player_id)
-        .values("weapon")
+    start_day, end_day = _stat_date_window(start_time, end_time)
+    excluded_ids = None if server_id is not None else await _get_excluded_server_ids()
+    where_sql, params = _daily_stats_filter_sql(
+        start_day=start_day,
+        end_day=end_day,
+        server_id=server_id,
+        excluded_server_ids=excluded_ids,
     )
-    deaths_list = (
-        await PlayerKilled.filter(victim_id=player_id, attacker_id__not_isnull=True, **server_filter)
-        .exclude(attacker_id=player_id)
-        .values("weapon")
+    where_sql = _extend_where_sql(where_sql, f"s.player_id = {_append_param(params, player_id)}")
+
+    rows = await connections.get("default").execute_query_dict(
+        f"""
+        SELECT
+            s.weapon,
+            SUM(s.kills)::int AS kills,
+            SUM(s.deaths)::int AS deaths
+        FROM {_DAILY_STATS_TABLE} s
+        {where_sql}
+        GROUP BY s.weapon
+        HAVING SUM(s.kills) > 0 OR SUM(s.deaths) > 0
+        """,
+        params,
     )
 
     weapon_stats: dict[str, dict[str, int]] = {}
 
-    for k in kills_list:
-        w = _normalize_weapon(k.get("weapon"))
+    for row in rows:
+        w = _normalize_weapon(row.get("weapon"))
         if not w:
             continue
-        weapon_stats.setdefault(w, {"kills": 0, "deaths": 0})["kills"] += 1
-
-    for d in deaths_list:
-        w = _normalize_weapon(d.get("weapon"))
-        if not w:
-            continue
-        weapon_stats.setdefault(w, {"kills": 0, "deaths": 0})["deaths"] += 1
+        weapon_stats[w] = {"kills": row["kills"] or 0, "deaths": row["deaths"] or 0}
 
     if not weapon_stats:
         return [], 0, {"total_kills": 0, "total_deaths": 0, "kd": 0.0}
@@ -517,8 +465,8 @@ async def get_player_weapon_stats(
 
     _sort_results(results, sort)
 
-    total_kills = len(kills_list)
-    total_deaths = len(deaths_list)
+    total_kills = sum(data["kills"] for data in weapon_stats.values())
+    total_deaths = sum(data["deaths"] for data in weapon_stats.values())
     summary = {"total_kills": total_kills, "total_deaths": total_deaths, "kd": calc_kd(total_kills, total_deaths)}
 
     paged, total = _paginate(results, offset=offset, page_size=page_size)

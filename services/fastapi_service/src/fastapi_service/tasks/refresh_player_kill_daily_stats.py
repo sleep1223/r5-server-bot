@@ -10,7 +10,7 @@ _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 _refresh_lock = asyncio.Lock()
 
 _DELETE_SQL = """
-DELETE FROM player_kill_daily_stats
+DELETE FROM player_kill_daily_weapon_opponent_stats
 WHERE stat_date >= $1::date
   AND stat_date <  $2::date
 """
@@ -26,6 +26,8 @@ events AS (
         (pk.created_at AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
         pk.server_id,
         pk.attacker_id AS player_id,
+        pk.victim_id AS opponent_id,
+        COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
         1 AS kills,
         0 AS deaths,
         0 AS awarded_kills
@@ -43,6 +45,8 @@ events AS (
         (pk.created_at AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
         pk.server_id,
         pk.victim_id AS player_id,
+        pk.attacker_id AS opponent_id,
+        COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
         0 AS kills,
         1 AS deaths,
         0 AS awarded_kills
@@ -60,6 +64,8 @@ events AS (
         (pk.created_at AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
         pk.server_id,
         pk.awarded_to_id AS player_id,
+        pk.victim_id AS opponent_id,
+        COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
         0 AS kills,
         0 AS deaths,
         1 AS awarded_kills
@@ -72,10 +78,12 @@ events AS (
       AND pk.victim_id IS NOT NULL
       AND pk.attacker_id <> pk.victim_id
 )
-INSERT INTO player_kill_daily_stats (
+INSERT INTO player_kill_daily_weapon_opponent_stats (
     stat_date,
     server_id,
     player_id,
+    opponent_id,
+    weapon,
     kills,
     deaths,
     awarded_kills,
@@ -85,12 +93,14 @@ SELECT
     stat_date,
     server_id,
     player_id,
+    opponent_id,
+    weapon,
     SUM(kills)::int,
     SUM(deaths)::int,
     SUM(awarded_kills)::int,
     now()
 FROM events
-GROUP BY stat_date, server_id, player_id
+GROUP BY stat_date, server_id, player_id, opponent_id, weapon
 """
 
 
@@ -99,16 +109,16 @@ def _today_shanghai() -> date:
 
 
 async def refresh_player_kill_daily_stats_window(start_day: date, end_day: date) -> None:
-    """Rebuild player kill daily stats for [start_day, end_day)."""
+    """Rebuild player kill daily weapon/opponent stats for [start_day, end_day)."""
     if start_day >= end_day:
-        logger.warning(f"skip player kill daily stats refresh: invalid window {start_day}..{end_day}")
+        logger.warning(f"跳过玩家击杀日统计刷新: 窗口无效 {start_day}..{end_day}")
         return
 
     async with _refresh_lock:
         async with in_transaction() as conn:
             await conn.execute_query(_DELETE_SQL, [start_day, end_day])
             await conn.execute_query(_INSERT_SQL, [start_day, end_day])
-    logger.info(f"refreshed player_kill_daily_stats window: {start_day}..{end_day}")
+    logger.info(f"已刷新 player_kill_daily_weapon_opponent_stats 窗口: {start_day}..{end_day}")
 
 
 async def player_kill_daily_stats_refresh_task() -> None:

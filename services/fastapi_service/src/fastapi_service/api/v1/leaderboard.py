@@ -35,7 +35,7 @@ async def get_kd_leaderboard(
     if server:
         server_obj = await resolve_server(server)
         if not server_obj:
-            return error(ErrorCode.SERVER_NOT_FOUND, f"Server not found: {server}")
+            return error(ErrorCode.SERVER_NOT_FOUND, f"未找到服务器: {server}")
 
     results, total = await leaderboard_service.get_kd_ranking(
         range_type=range,
@@ -49,14 +49,14 @@ async def get_kd_leaderboard(
     extra: dict = {}
     if server_obj:
         extra["server"] = _server_info(server_obj)
-    return paginated(data=results, total=total, msg=f"KD Leaderboard for {range} range", **extra)
+    return paginated(data=results, total=total, msg=f"{range} 范围 KD 排行榜", **extra)
 
 
 @router.get("/leaderboard/weapon")
 async def get_weapon_leaderboard(
     weapon: list[str] = Query(
         default=["r99", "volt", "wingman", "flatline", "r301", "player"],
-        description="Weapon names (e.g., r301) or internal codes; multiple allowed",
+        description="武器名称(如 r301)或内部代码，可传多个",
     ),
     range: Literal["today", "yesterday", "week", "month"] = "today",
     pg: Pagination = Depends(get_pagination),
@@ -70,7 +70,7 @@ async def get_weapon_leaderboard(
     if server:
         server_obj = await resolve_server(server)
         if not server_obj:
-            return error(ErrorCode.SERVER_NOT_FOUND, f"Server not found: {server}")
+            return error(ErrorCode.SERVER_NOT_FOUND, f"未找到服务器: {server}")
 
     results, total, display_weapons_str = await leaderboard_service.get_weapon_ranking(
         weapons=weapon,
@@ -85,4 +85,4 @@ async def get_weapon_leaderboard(
     extra: dict = {}
     if server_obj:
         extra["server"] = _server_info(server_obj)
-    return paginated(data=results, total=total, msg=f"Weapon Leaderboard for {display_weapons_str} ({range})", **extra)
+    return paginated(data=results, total=total, msg=f"{display_weapons_str} 武器排行榜 ({range})", **extra)

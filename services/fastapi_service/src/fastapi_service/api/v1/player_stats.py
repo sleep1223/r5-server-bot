@@ -39,7 +39,7 @@ async def get_player_vs_all_stats(
     if server:
         server_obj = await resolve_server(server)
         if not server_obj:
-            return error(ErrorCode.SERVER_NOT_FOUND, f"Server not found: {server}")
+            return error(ErrorCode.SERVER_NOT_FOUND, f"未找到服务器: {server}")
 
     results, total, summary = await leaderboard_service.get_player_vs_all(
         player_id=player.id,
@@ -51,13 +51,13 @@ async def get_player_vs_all_stats(
     )
 
     if not results and total == 0:
-        return success(data=[], msg=f"Player {nucleus_id_or_player_name} has no opponents ({range})")
+        return success(data=[], msg=f"玩家 {nucleus_id_or_player_name} 在 {range} 范围内没有对手记录")
 
     player_info = {"name": player.name, "nucleus_id": player.nucleus_id, "country": player.country, "region": player.region}
     extra: dict = {"summary": summary, "player": player_info}
     if server_obj:
         extra["server"] = _server_info(server_obj)
-    return paginated(data=results, total=total, msg=f"KD Leaderboard for {nucleus_id_or_player_name} ({range})", **extra)
+    return paginated(data=results, total=total, msg=f"玩家 {nucleus_id_or_player_name} 的 KD 对阵榜 ({range})", **extra)
 
 
 @router.get("/players/{nucleus_id_or_player_name}/weapons")
@@ -78,7 +78,7 @@ async def get_player_weapon_stats(
     if server:
         server_obj = await resolve_server(server)
         if not server_obj:
-            return error(ErrorCode.SERVER_NOT_FOUND, f"Server not found: {server}")
+            return error(ErrorCode.SERVER_NOT_FOUND, f"未找到服务器: {server}")
 
     results, total, summary = await leaderboard_service.get_player_weapon_stats(
         player_id=player.id,
@@ -90,10 +90,10 @@ async def get_player_weapon_stats(
     )
 
     if not results and total == 0:
-        return success(data=[], msg=f"Player {nucleus_id_or_player_name} has no weapon stats ({range})")
+        return success(data=[], msg=f"玩家 {nucleus_id_or_player_name} 在 {range} 范围内没有武器统计")
 
     player_info = {"name": player.name, "nucleus_id": player.nucleus_id, "country": player.country, "region": player.region}
     extra: dict = {"summary": summary, "player": player_info}
     if server_obj:
         extra["server"] = _server_info(server_obj)
-    return paginated(data=results, total=total, msg=f"Weapon stats for {nucleus_id_or_player_name} ({range})", **extra)
+    return paginated(data=results, total=total, msg=f"玩家 {nucleus_id_or_player_name} 的武器统计 ({range})", **extra)
