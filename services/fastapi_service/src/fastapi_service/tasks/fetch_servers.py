@@ -26,6 +26,18 @@ def _raw_server_identifier(raw: dict) -> str:
     return ""
 
 
+def _raw_server_netkey(raw: dict) -> str | None:
+    for field in ("key", "netkey"):
+        value = str(raw.get(field) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _is_cn_region(raw: dict) -> bool:
+    return str(raw.get("region") or "").strip().upper() == "CN"
+
+
 async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
     """把上游服务器列表同步到 Server 表，并翻转 has_status 标记。"""
     if not raw_list:
@@ -42,7 +54,25 @@ async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
             if not ip and not server_identifier:
                 continue
 
+            port = _safe_int(raw.get("port"), settings.ws_public_port or 37015)
+            full_name = raw.get("name") or f"server-{ip or server_identifier}"
+            short_name = parse_short_name(full_name) or None
+            raw_netkey = _raw_server_netkey(raw)
+
             server = await Server.get_or_none(server_id=server_identifier) if server_identifier else None
+            if server is None and server_identifier and _is_cn_region(raw):
+                server = (
+                    await Server.filter(name=full_name)
+                    .exclude(server_id=server_identifier)
+                    .exclude(server_id__isnull=True)
+                    .order_by("-last_seen_at", "-id")
+                    .first()
+                )
+                if server:
+                    logger.info(
+                        f"CN 服务器 server_id 已按名称更新: "
+                        f"name={full_name}, old={server.server_id}, new={server_identifier}"
+                    )
             if not ip and server is None:
                 logger.debug(f"跳过缺少 host 的原始服务器: server_id={server_identifier}")
                 continue
@@ -52,15 +82,10 @@ async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
             if server_identifier:
                 seen_server_ids.add(server_identifier)
 
-            port = _safe_int(raw.get("port"), settings.ws_public_port or 37015)
-            full_name = raw.get("name") or f"server-{ip or server_identifier}"
-            short_name = parse_short_name(full_name) or None
-
             defaults = {
                 "port": port,
                 "name": full_name,
                 "region": raw.get("region"),
-                "netkey": raw.get("key") or server_identifier or None,
                 "playlist": raw.get("playlist"),
                 "map": raw.get("map"),
                 "player_count": _safe_int(raw.get("playerCount") or raw.get("numPlayers")),
@@ -69,6 +94,8 @@ async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
                 "has_status": True,
                 "last_seen_at": now,
             }
+            if raw_netkey:
+                defaults["netkey"] = raw_netkey
             if server_identifier:
                 defaults["server_id"] = server_identifier
 
