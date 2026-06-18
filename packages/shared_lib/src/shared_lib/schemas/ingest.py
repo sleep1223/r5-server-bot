@@ -14,6 +14,7 @@ class ServerRef(BaseModel):
     host: str
     port: int = 37015
     name: str | None = None
+    server_id: str | None = None
 
 
 class _BaseEventIn(BaseModel):
@@ -74,9 +75,6 @@ class PlayerKilledIn(_BaseEventIn):
     attacker: PlayerInfo | None = None
     victim: PlayerInfo | None = None
     awarded_to: PlayerInfo | None = None
-    attacker_data: dict | None = None
-    victim_data: dict | None = None
-    awarded_to_data: dict | None = None
     weapon: str
 
 

@@ -258,6 +258,9 @@ class LiveAPIListener:
         )
 
     def on_MatchSetup(self, msg):
+        if self.server_ref is not None and self.server_ref.server_id != msg.serverId:
+            self.server_ref = self.server_ref.model_copy(update={"server_id": msg.serverId})
+
         match_tracker.on_match_setup(
             server_id=msg.serverId,
             map_name=msg.map,
@@ -387,9 +390,6 @@ class LiveAPIListener:
                 attacker=attacker,
                 victim=victim,
                 awarded_to=awarded_to,
-                attacker_data=MessageToDict(msg.attacker, preserving_proto_field_name=True) if msg.HasField("attacker") else None,
-                victim_data=MessageToDict(msg.victim, preserving_proto_field_name=True) if msg.HasField("victim") else None,
-                awarded_to_data=MessageToDict(msg.awardedTo, preserving_proto_field_name=True) if msg.HasField("awardedTo") else None,
                 weapon=msg.weapon,
             )
         )
