@@ -1,13 +1,13 @@
 import traceback
 
 import httpx
-from .common import on_command
-from nonebot.adapters.onebot.v11 import Message
+from nonebot.adapters.onebot.v11 import Bot, Event, Message
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
+from nonebot.permission import SUPERUSER
 
 from ..api_client import api_client
-from .common import r5_service
+from .common import on_command, r5_service
 
 # Service definition
 admin_service = r5_service.create_subservice("admin")
@@ -46,12 +46,32 @@ def _get_server_name(server: dict) -> str:
 def _error_msg(res: dict) -> str:
     """将 API 错误码转为中文提示"""
     code = res.get("code", "")
+    detail = res.get("detail")
+    if detail:
+        return str(detail)
     return ERROR_CN.get(code, res.get("msg") or "未知错误")
+
+
+async def _is_superuser(bot: Bot, event: Event) -> bool:
+    return await SUPERUSER(bot, event)
+
+
+def _rcon_summary(data: dict) -> str:
+    total = int(data.get("broadcast_total") or 0)
+    success_count = int(data.get("broadcast_success_count") or 0)
+    if data.get("rcon_skipped"):
+        return "⚠️ RCON 未执行：当前没有可执行的在线服务器"
+    if data.get("rcon_failed"):
+        return f"⚠️ RCON 已广播 {total} 台服务器但未成功"
+    return f"🔄 RCON 成功: {success_count}/{total}"
 
 
 @cmd_ban.handle()
 @ban_service.patch_handler()
-async def handle_ban(args: Message = CommandArg()) -> None:
+async def handle_ban(bot: Bot, event: Event, args: Message = CommandArg()) -> None:
+    if not await _is_superuser(bot, event):
+        await cmd_ban.finish("⛔ NoneBot 端不再向普通管理员开放 /ban，请使用 /kick。")
+
     text = args.extract_plain_text().strip()
     parts = text.split()
 
@@ -77,21 +97,9 @@ async def handle_ban(args: Message = CommandArg()) -> None:
             await cmd_ban.finish(f"❌ 封禁失败: {_error_msg(res)}")
 
         data = res.get("data") or {}
-        async_count = data.get("async_server_count", 0)
-
-        if data.get("skipped") and data.get("skip_reason") == "no_cover_allowed":
-            primary = data.get("primary_server") or {}
-            server_name = _get_server_name(primary)
-            await cmd_ban.finish(f"⏭️ 已跳过封禁\n\n👤 玩家: {target}\n📌 原因: {reason_cn}\n🖥️ 服务器: {server_name}\n💡 该服务器允许撤回掩体，已跳过封禁")
-
-        if data.get("player_online") is True:
-            primary = data.get("primary_server") or {}
-            server_name = _get_server_name(primary)
-            await cmd_ban.finish(f"🔨 封禁成功\n\n👤 玩家: {target}\n📌 原因: {reason_cn}\n🟢 状态: 在线\n🖥️ 服务器: {server_name}\n🔄 后台同步: {async_count} 个服务器")
-        elif data.get("player_online") is False:
-            await cmd_ban.finish(f"🔨 已启动后台封禁\n\n👤 玩家: {target}\n📌 原因: {reason_cn}\n🔴 状态: 离线\n🔄 后台执行: {async_count} 个服务器")
-        else:
-            await cmd_ban.finish(f"🔨 封禁已提交: {target}")
+        player = data.get("player") or {}
+        player_name = player.get("name") or target
+        await cmd_ban.finish(f"🔨 封禁已提交\n\n👤 玩家: {player_name}\n📌 原因: {reason_cn}\n{_rcon_summary(data)}")
 
     except FinishedException:
         raise
@@ -127,28 +135,11 @@ async def handle_kick(args: Message = CommandArg()) -> None:
             await cmd_kick.finish(f"❌ 踢出失败: {_error_msg(res)}")
 
         data = res.get("data") or {}
-
-        if data.get("skipped") and data.get("skip_reason") == "no_cover_allowed":
-            server = data.get("server") or {}
-            server_name = _get_server_name(server)
-            await cmd_kick.finish(f"⏭️ 已跳过踢出\n\n👤 玩家: {target}\n📌 原因: {reason_cn}\n🖥️ 服务器: {server_name}\n💡 该服务器允许撤回掩体，已跳过踢出")
-
-        if data.get("player_online") is True:
-            server = data.get("server") or {}
-            server_name = _get_server_name(server)
-            await cmd_kick.finish(f"👢 踢出成功\n\n👤 玩家: {target}\n📌 原因: {reason_cn}\n🖥️ 服务器: {server_name}")
-        elif data.get("player_online") is False:
-            broadcast_total = data.get("broadcast_total", 0)
-            fail_reason = data.get("fail_reason")
-            if fail_reason == "no_online_servers":
-                detail = "⚠️ 当前无在线服务器,RCON 踢出未执行"
-            elif fail_reason == "no_server_hit":
-                detail = f"⚠️ 已广播 {broadcast_total} 台服务器但未命中玩家\n可能玩家已离线,或玩家列表尚未刷新到该玩家"
-            else:
-                detail = "🔴 状态: 离线"
-            await cmd_kick.finish(f"👢 踢出记录 +1\n\n👤 玩家: {target}\n📌 原因: {reason_cn}\n{detail}\n(已记录踢出次数)")
-        else:
-            await cmd_kick.finish(f"👢 踢出已提交: {target}")
+        player = data.get("player") or {}
+        player_name = player.get("name") or target
+        hit_server = data.get("hit_server") or {}
+        server_line = f"\n🖥️ 服务器: {_get_server_name(hit_server)}" if hit_server else ""
+        await cmd_kick.finish(f"👢 踢出已提交\n\n👤 玩家: {player_name}\n📌 原因: {reason_cn}{server_line}\n{_rcon_summary(data)}")
 
     except FinishedException:
         raise
@@ -159,7 +150,10 @@ async def handle_kick(args: Message = CommandArg()) -> None:
 
 @cmd_unban.handle()
 @unban_service.patch_handler()
-async def handle_unban(args: Message = CommandArg()) -> None:
+async def handle_unban(bot: Bot, event: Event, args: Message = CommandArg()) -> None:
+    if not await _is_superuser(bot, event):
+        await cmd_unban.finish("⛔ NoneBot 端不再向普通管理员开放 /unban。")
+
     target = args.extract_plain_text().strip()
     if not target:
         await cmd_unban.finish("⚠️ 用法: /unban <玩家名或ID>")
@@ -174,19 +168,10 @@ async def handle_unban(args: Message = CommandArg()) -> None:
             await cmd_unban.finish(f"❌ 解封失败: {_error_msg(res)}")
 
         data = res.get("data") or {}
-        async_count = data.get("async_server_count", 0)
-        target_server = data.get("target_server")
-        target_source = data.get("target_source")
-
-        if data.get("rcon_skipped") and data.get("skip_reason") == "no_online_servers":
-            await cmd_unban.finish(f"🔓 已解除本地封禁\n\n👤 玩家: {target}\n⚠️ 当前无在线服务器，RCON 未同步")
-
-        if target_server:
-            server_name = _get_server_name(target_server)
-            source_cn = "封禁缓存" if target_source == "ban_cache" else "在线"
-            await cmd_unban.finish(f"🔓 解封成功\n\n👤 玩家: {target}\n🖥️ 服务器: {server_name}\n📡 来源: {source_cn}\n🔄 后台同步: {async_count} 个服务器")
-        else:
-            await cmd_unban.finish(f"🔓 已启动后台解封\n\n👤 玩家: {target}\n🔴 状态: 离线\n🔄 后台执行: {async_count} 个服务器")
+        player = data.get("player") or {}
+        player_name = player.get("name") or target
+        released_count = len(data.get("released_rules") or [])
+        await cmd_unban.finish(f"🔓 解封已提交\n\n👤 玩家: {player_name}\n🧹 释放规则: {released_count}\n{_rcon_summary(data)}")
 
     except FinishedException:
         raise

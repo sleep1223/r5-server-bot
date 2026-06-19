@@ -59,6 +59,42 @@ async def bind_player(platform: str, platform_uid: str, player_query: str) -> tu
     }, None
 
 
+def _admin_grant_payload(binding: UserBinding, status: str) -> dict:
+    player = binding.player
+    return {
+        "status": status,
+        "platform": binding.platform,
+        "platform_uid": binding.platform_uid,
+        "player_id": player.id,
+        "player_name": player.name,
+        "is_admin": is_admin_binding(binding),
+        "is_super_admin": is_super_admin_binding(binding),
+    }
+
+
+async def grant_admin_by_platform(platform: str, platform_uid: str) -> tuple[dict, str | None]:
+    """将已绑定的平台账号对应玩家标记为管理员；未绑定时返回 not_bound，便于批量同步。"""
+    normalized_platform_uid = str(platform_uid or "").strip()
+    binding = await UserBinding.filter(platform=platform, platform_uid=normalized_platform_uid).prefetch_related("player").first()
+    if not binding:
+        return {
+            "status": "not_bound",
+            "platform": platform,
+            "platform_uid": normalized_platform_uid,
+            "is_admin": False,
+            "is_super_admin": False,
+        }, None
+
+    if is_super_admin_binding(binding):
+        return _admin_grant_payload(binding, "skipped_super_admin"), None
+    if is_admin_binding(binding):
+        return _admin_grant_payload(binding, "already_admin"), None
+
+    await Player.filter(id=binding.player.id).update(is_admin=True)
+    binding.player.is_admin = True  # type: ignore[assignment]
+    return _admin_grant_payload(binding, "granted"), None
+
+
 async def unbind(platform: str, platform_uid: str) -> bool:
     """解除绑定。"""
     deleted = await UserBinding.filter(platform=platform, platform_uid=platform_uid).delete()

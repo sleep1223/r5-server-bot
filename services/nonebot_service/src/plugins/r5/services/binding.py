@@ -1,13 +1,13 @@
 import traceback
 
 import httpx
-from .common import BINDING_GUIDE, FRIEND_HINT, on_command
-from nonebot.adapters.onebot.v11 import Event, Message, PrivateMessageEvent
+from nonebot.adapters.onebot.v11 import Bot, Event, Message, PrivateMessageEvent
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
 
 from ..api_client import api_client
-from .common import r5_service
+from .admin_group import grant_admin_if_group_member
+from .common import BINDING_GUIDE, FRIEND_HINT, on_command, r5_service
 
 binding_svc = r5_service.create_subservice("binding")
 admin_binding_svc = binding_svc.create_subservice("admin")
@@ -39,9 +39,15 @@ def _format_existing_binding_message(name: str, app_key: str) -> str:
     return msg
 
 
+def _append_admin_grant_notice(message: str, grant_status: str) -> str:
+    if grant_status == "granted":
+        return f"{message}\n\n✅ 已同步管理群管理员权限。"
+    return message
+
+
 @bind_cmd.handle()
 @binding_svc.patch_handler()
-async def handle_bind(event: Event, args: Message = CommandArg()) -> None:
+async def handle_bind(bot: Bot, event: Event, args: Message = CommandArg()) -> None:
     player_query = args.extract_plain_text().strip()
     if not player_query:
         await bind_cmd.finish("⚠️ 请提供游戏昵称或ID，如: /绑定 MyName 或 /绑定 10086")
@@ -66,14 +72,16 @@ async def handle_bind(event: Event, args: Message = CommandArg()) -> None:
                     binding_data = binding_req.get("data", {})
                     name = binding_data.get("player_name", "未知")
                     app_key = binding_data.get("app_key", "")
-                    await bind_cmd.finish(_format_existing_binding_message(name, app_key))
+                    grant_status = await grant_admin_if_group_member(bot, user_id)
+                    await bind_cmd.finish(_append_admin_grant_notice(_format_existing_binding_message(name, app_key), grant_status))
 
             await bind_cmd.finish(f"❌ {req.get('msg', '绑定失败')}")
 
         data = req.get("data", {})
         app_key = data.get("app_key", "")
         name = data.get("player_name", player_query)
-        await bind_cmd.finish(_format_binding_success_message(name, app_key))
+        grant_status = await grant_admin_if_group_member(bot, user_id)
+        await bind_cmd.finish(_append_admin_grant_notice(_format_binding_success_message(name, app_key), grant_status))
 
     except FinishedException:
         raise
@@ -109,7 +117,7 @@ async def handle_unbind(event: Event) -> None:
 
 @admin_bind_cmd.handle()
 @admin_binding_svc.patch_handler()
-async def handle_admin_bind(args: Message = CommandArg()) -> None:
+async def handle_admin_bind(bot: Bot, args: Message = CommandArg()) -> None:
     """管理员绑定: /管理绑定 <QQ号> <游戏昵称或ID>"""
     text = args.extract_plain_text().strip()
     parts = text.split(maxsplit=1)
@@ -131,7 +139,8 @@ async def handle_admin_bind(args: Message = CommandArg()) -> None:
 
         data = req.get("data", {})
         name = data.get("player_name", player_query)
-        await admin_bind_cmd.finish(f"✅ 管理员绑定成功\nQQ: {target_qq} → 玩家: {name}")
+        grant_status = await grant_admin_if_group_member(bot, target_qq)
+        await admin_bind_cmd.finish(_append_admin_grant_notice(f"✅ 管理员绑定成功\nQQ: {target_qq} → 玩家: {name}", grant_status))
 
     except FinishedException:
         raise

@@ -16,6 +16,10 @@ from .rcon import rcon_session
 SELF_UNBAN_CONFIRMATION_TEXT = "我已了解规则"
 
 
+def _normalize_exact_target(value: object | None) -> str:
+    return str(value or "").strip().casefold()
+
+
 async def broadcast_kick_player(
     nucleus_id: int,
     reason: str,
@@ -248,13 +252,13 @@ async def _exact_player_search(
         else:
             exact_name = query
 
-    exact_targets = {value for value in (exact_name, exact_uid) if value}
+    exact_targets = {_normalize_exact_target(value) for value in (exact_name, exact_uid) if value}
     if not exact_targets:
         return False, set(), set()
 
     player_filter: Q | None = None
     if exact_name:
-        player_filter = Q(name=exact_name)
+        player_filter = Q(name__iexact=exact_name)
     if exact_uid:
         uid_filter = Q(nucleus_id=int(exact_uid))
         player_filter = uid_filter if player_filter is None else player_filter | uid_filter
@@ -306,7 +310,7 @@ def _operation_matches_exact_player(operation: PlayerAccessOperation, *, player_
     if getattr(operation, "player_id", None) in player_ids:
         return True
     target = _operation_target(operation)
-    return bool(target and target in exact_targets)
+    return bool(target and _normalize_exact_target(target) in exact_targets)
 
 
 def _ban_matches_exact_player(ban: BanRecord, *, player_ids: set[int]) -> bool:

@@ -11,14 +11,19 @@ class R5ApiClient:
         self.config = get_plugin_config(Config)
         self.base_url = self.config.r5_api_base
         self.token = self.config.r5_api_token
+        self.admin_app_key = self.config.r5_admin_app_key
         self.headers = {
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
         }
 
-    async def _request(self, method: str, endpoint: str, **kwargs) -> httpx.Response:
+    async def _request(self, method: str, endpoint: str, *, headers: dict[str, str] | None = None, **kwargs) -> httpx.Response:
+        request_headers = {**self.headers, **(headers or {})}
         async with httpx.AsyncClient() as client:
-            return await client.request(method, f"{self.base_url}{endpoint}", headers=self.headers, **kwargs)
+            return await client.request(method, f"{self.base_url}{endpoint}", headers=request_headers, **kwargs)
+
+    def _admin_headers(self) -> dict[str, str]:
+        return {"X-App-Key": self.admin_app_key}
 
     async def get_kd_leaderboard(
         self,
@@ -170,15 +175,15 @@ class R5ApiClient:
         return await self._request("GET", "/server", params=params, timeout=timeout)
 
     async def ban_player(self, target: str, reason: str, timeout: float = 5.0) -> httpx.Response:
-        params = {"reason": reason}
-        return await self._request("POST", f"/players/{target}/ban", params=params, timeout=timeout)
+        data = {"reason": reason}
+        return await self._request("POST", f"/admin/players/{target}/ban", json=data, headers=self._admin_headers(), timeout=timeout)
 
     async def kick_player(self, target: str, reason: str, timeout: float = 5.0) -> httpx.Response:
-        params = {"reason": reason}
-        return await self._request("POST", f"/players/{target}/kick", params=params, timeout=timeout)
+        data = {"reason": reason}
+        return await self._request("POST", f"/admin/players/{target}/kick", json=data, headers=self._admin_headers(), timeout=timeout)
 
     async def unban_player(self, target: str, timeout: float = 12.0) -> httpx.Response:
-        return await self._request("POST", f"/players/{target}/unban", timeout=timeout)
+        return await self._request("POST", f"/admin/players/{target}/unban", json={}, headers=self._admin_headers(), timeout=timeout)
 
     async def query_player(self, query: str, page_no: int = 1, page_size: int = 20, timeout: float = 5.0) -> httpx.Response:
         params = {"q": query, "page_no": page_no, "page_size": page_size}
@@ -216,6 +221,10 @@ class R5ApiClient:
     async def admin_bind_player(self, platform: str, platform_uid: str, player_query: str, timeout: float = 5.0) -> httpx.Response:
         data = {"platform": platform, "platform_uid": platform_uid, "player_query": player_query}
         return await self._request("POST", "/user/admin/bind", json=data, timeout=timeout)
+
+    async def grant_admin_by_platform(self, platform: str, platform_uid: str, timeout: float = 5.0) -> httpx.Response:
+        data = {"platform": platform, "platform_uid": platform_uid}
+        return await self._request("POST", "/user/admin/grant", json=data, timeout=timeout)
 
     async def unbind_player(self, platform: str, platform_uid: str, timeout: float = 5.0) -> httpx.Response:
         params = {"platform": platform, "platform_uid": platform_uid}

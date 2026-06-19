@@ -22,6 +22,11 @@ class AdminBindRequest(BaseModel):
     player_query: str  # 游戏昵称或 nucleus_id
 
 
+class AdminGrantRequest(BaseModel):
+    platform: str
+    platform_uid: str
+
+
 def _bind_error_response(err: str):
     if "未找到" in err:
         return error(ErrorCode.BINDING_PLAYER_NOT_FOUND, msg=err)
@@ -56,6 +61,18 @@ async def admin_bind_player(payload: AdminBindRequest):
     if err:
         return _bind_error_response(err)
     return success(data=data, msg="管理员绑定成功")
+
+
+@router.post("/user/admin/grant", dependencies=[Depends(verify_token)])
+async def admin_grant_player(payload: AdminGrantRequest):
+    """按平台账号同步已绑定玩家的管理员标记。"""
+    data, err = await binding_service.grant_admin_by_platform(
+        platform=payload.platform,
+        platform_uid=payload.platform_uid,
+    )
+    if err:
+        return error(ErrorCode.BINDING_NOT_FOUND, msg=err)
+    return success(data=data, msg="管理员权限已同步")
 
 
 @router.delete("/user/bind", dependencies=[Depends(verify_token)])

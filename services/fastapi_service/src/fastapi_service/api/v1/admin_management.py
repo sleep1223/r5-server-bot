@@ -62,7 +62,7 @@ class AccessPreviewBody(BaseModel):
 class AccessRuleCreateBody(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    rule_type: Literal["uid", "ip", "cidr", "geo", "country", "region"]
+    rule_type: Literal["uid", "ip", "cidr", "geo", "country", "region", "geo_policy"]
     action: Literal["allow", "deny"]
     value: str
     server_scope: Literal["global", "server"] = "global"
@@ -80,7 +80,7 @@ class AccessRuleCreateBody(BaseModel):
 class AccessRuleUpdateBody(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    rule_type: Literal["uid", "ip", "cidr", "geo", "country", "region"] | None = None
+    rule_type: Literal["uid", "ip", "cidr", "geo", "country", "region", "geo_policy"] | None = None
     action: Literal["allow", "deny"] | None = None
     value: str | None = None
     server_scope: Literal["global", "server"] | None = None
@@ -252,7 +252,7 @@ async def admin_apply_access_action(action: Literal["ban", "kick"], body: Access
 @router.get("/access-rules")
 async def admin_list_access_rules(
     q: str | None = None,
-    rule_type: Literal["uid", "ip", "cidr", "geo", "country", "region"] | None = None,
+    rule_type: Literal["uid", "ip", "cidr", "geo", "country", "region", "geo_policy"] | None = None,
     action: Literal["allow", "deny"] | None = None,
     server_scope: Literal["global", "server"] | None = None,
     server_id: str | None = None,

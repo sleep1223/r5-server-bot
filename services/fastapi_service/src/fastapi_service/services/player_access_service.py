@@ -13,22 +13,78 @@ from tortoise.expressions import Q
 from fastapi_service.core.cache import server_cache
 from fastapi_service.core.utils import CN_TZ, generate_hash, resolve_ips_batch
 
-RULE_TYPES = {"uid", "ip", "cidr", "geo", "country", "region"}
+GEO_POLICY_RULE_TYPE = "geo_policy"
+GEO_POLICY_RULE_VALUE = "mainland_boundary"
+GEO_POLICY_GLOBAL_RULE_ID = "server_geo_policy:global"
+GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON = "REGION_LOCK_TO_HK"
+GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON = "REGION_LOCK_TO_MAINLAND"
+RULE_TYPES = {"uid", "ip", "cidr", "geo", "country", "region", GEO_POLICY_RULE_TYPE}
 RULE_ACTIONS = {"allow", "deny"}
 SERVER_SCOPES = {"global", "server"}
+DEFAULT_REASON_LOCALE = "zh"
+SELF_UNBAN_URL = "r5.sleep0.de/bans"
+REGION_LOCK_REASON = "REGION_LOCK"
 REASON_TEXTS = {
-    "NO_COVER": "撤回掩体",
-    "BE_POLITE": "言行不当",
-    "CHEAT": "作弊",
-    "RULES": "违反规则",
+    "zh": {
+        "NO_COVER": "撤回掩体",
+        "BE_POLITE": "言行不当",
+        "CHEAT": "作弊",
+        "RULES": "违反规则",
+        REGION_LOCK_REASON: "您的网络延迟过高，请选择延迟更低的服务器",
+        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "您的网络延迟过高，请前往香港服务器游玩",
+        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "您的网络延迟过高，请选择国内服务器游玩",
+    },
+    "en": {
+        "NO_COVER": "No-cover rule violation",
+        "BE_POLITE": "Inappropriate behavior",
+        "CHEAT": "Cheating",
+        "RULES": "Rule violation",
+        REGION_LOCK_REASON: "Your latency is too high. Please choose a lower-latency server",
+        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "Your latency is too high. Please play on a Hong Kong server",
+        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "Your latency is too high. Please play on a mainland China server",
+    },
+    "ja": {
+        "NO_COVER": "遮蔽物の撤去違反",
+        "BE_POLITE": "不適切な言動",
+        "CHEAT": "チート行為",
+        "RULES": "ルール違反",
+        REGION_LOCK_REASON: "通信遅延が高すぎます。より低遅延のサーバーを選択してください",
+        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "通信遅延が高すぎます。香港サーバーでプレイしてください",
+        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "通信遅延が高すぎます。中国国内サーバーでプレイしてください",
+    },
 }
 ACTION_REASON_PREFIXES = {
-    "ban": "已被封禁",
-    "kick": "已被踢出",
+    "zh": {
+        "ban": "已被封禁",
+        "kick": "已被踢出",
+    },
+    "en": {
+        "ban": "Banned",
+        "kick": "Kicked",
+    },
+    "ja": {
+        "ban": "参加禁止",
+        "kick": "キック",
+    },
 }
 ACTION_DEFAULT_REASONS = {
-    "ban": "禁止进入该服务器",
-    "kick": "请访问网站确认后再进入服务器",
+    "zh": {
+        "ban": "禁止进入该服务器",
+        "kick": "请访问网站确认后再进入服务器",
+    },
+    "en": {
+        "ban": "You are banned from this server",
+        "kick": "Please visit the website to confirm before joining this server",
+    },
+    "ja": {
+        "ban": "このサーバーへの参加は禁止されています",
+        "kick": "参加する前にウェブサイトで確認してください",
+    },
+}
+SELF_UNBAN_GUIDES = {
+    "zh": f"请前往 {SELF_UNBAN_URL} 自助解封",
+    "en": f"Visit {SELF_UNBAN_URL} to self-unban",
+    "ja": f"セルフ解除は {SELF_UNBAN_URL} にアクセスしてください",
 }
 
 
@@ -56,7 +112,8 @@ def _normalize_ip(ip: object | None) -> str:
     if not text:
         return ""
     try:
-        return str(ipaddress.ip_address(text))
+        address = ipaddress.ip_address(text)
+        return str(address.ipv4_mapped or address) if isinstance(address, ipaddress.IPv6Address) else str(address)
     except ValueError:
         return text
 
@@ -121,23 +178,79 @@ def _split_reason_token(reason: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def action_reason_text(action: str | None, reason: str | None) -> str:
+def _normalize_reason_locale(locale: str | None) -> str:
+    normalized = str(locale or DEFAULT_REASON_LOCALE).strip().lower().replace("_", "-")
+    if normalized.startswith("zh"):
+        return "zh"
+    if normalized.startswith("ja") or normalized.startswith("jp"):
+        return "ja"
+    if normalized.startswith("en"):
+        return "en"
+    return DEFAULT_REASON_LOCALE
+
+
+def reason_locale_from_geo(country: str | None, region: str | None = None) -> str:
+    country_text = str(country or "").strip().lower()
+    region_text = str(region or "").strip().lower()
+    geo_text = f"{country_text} {region_text}"
+
+    if any(marker in geo_text for marker in ("日本", "japan", " jp")) or country_text == "jp":
+        return "ja"
+    if any(marker in geo_text for marker in ("中国", "china", "hong kong", "macau", "taiwan", "香港", "澳门", "澳門", "台湾", "台灣")):
+        return "zh"
+    if country_text in {"cn", "hk", "mo", "tw"}:
+        return "zh"
+    return "en" if country_text or region_text else DEFAULT_REASON_LOCALE
+
+
+def _is_mainland_china_geo(country: str | None, region: str | None = None) -> bool | None:
+    country_text = str(country or "").strip().lower()
+    region_text = str(region or "").strip().lower()
+    geo_text = f"{country_text} {region_text}"
+
+    if not country_text and not region_text:
+        return None
+
+    non_mainland_markers = ("hong kong", "macau", "macao", "taiwan", "香港", "澳门", "澳門", "台湾", "台灣")
+    if any(marker in geo_text for marker in non_mainland_markers) or country_text in {"hk", "mo", "tw"}:
+        return False
+
+    if country_text in {"cn", "china"} or "中国" in country_text:
+        return True
+
+    return False
+
+
+def action_reason_text(action: str | None, reason: str | None, *, locale: str = DEFAULT_REASON_LOCALE) -> str:
+    reason_locale = _normalize_reason_locale(locale)
     normalized_action = str(action or "").strip().lower()
     text = str(reason or "").strip()
+    default_reasons = ACTION_DEFAULT_REASONS[reason_locale]
 
     if not text:
-        return ACTION_DEFAULT_REASONS.get(normalized_action, "禁止进入该服务器")
+        return default_reasons.get(normalized_action, default_reasons["ban"])
 
     token_action, token_reason = _split_reason_token(text)
     if token_reason:
         normalized_action = normalized_action or (token_action or "")
         text = token_reason
-    elif text not in REASON_TEXTS:
+    elif text.lower() == "banned" and normalized_action == "ban":
+        return default_reasons["ban"]
+    elif text not in REASON_TEXTS[reason_locale]:
         return text
 
-    reason_text = REASON_TEXTS.get(text, text)
-    prefix = ACTION_REASON_PREFIXES.get(normalized_action)
+    reason_text = REASON_TEXTS[reason_locale].get(text, text)
+    prefix = ACTION_REASON_PREFIXES[reason_locale].get(normalized_action)
     return f"{prefix}: {reason_text}" if prefix else reason_text
+
+
+def _with_self_unban_guide(reason: str, *, locale: str = DEFAULT_REASON_LOCALE) -> str:
+    if SELF_UNBAN_URL in reason:
+        return reason
+    reason_locale = _normalize_reason_locale(locale)
+    guide = SELF_UNBAN_GUIDES[reason_locale]
+    separator = ". " if reason_locale in {"en", "ja"} else "。"
+    return f"{reason}{separator}{guide}"
 
 
 async def upsert_sdk_server_snapshot(
@@ -282,12 +395,12 @@ def _scoped_ban_rule_id(uid: str, server_id: str | None) -> str:
     return _ban_rule_id(uid)
 
 
-def _ban_reason(reason: str | None) -> str:
-    return action_reason_text("ban", reason)
+def _ban_reason(reason: str | None, *, locale: str = DEFAULT_REASON_LOCALE) -> str:
+    return action_reason_text("ban", reason, locale=locale)
 
 
-def _kick_reason(reason: str | None) -> str:
-    return action_reason_text("kick", reason)
+def _kick_reason(reason: str | None, *, locale: str = DEFAULT_REASON_LOCALE) -> str:
+    return action_reason_text("kick", reason, locale=locale)
 
 
 def _normalize_server_scope(server_scope: object | None, server_id: object | None = None) -> tuple[str, str | None]:
@@ -314,9 +427,13 @@ def _scope_filter(
     return Q(server_scope="global")
 
 
-def _active_rule_filter() -> Q:
+def _not_expired_rule_filter() -> Q:
     now = _now()
-    return Q(enabled=True) & (Q(expires_at__isnull=True) | Q(expires_at__gt=now))
+    return Q(expires_at__isnull=True) | Q(expires_at__gt=now)
+
+
+def _active_rule_filter() -> Q:
+    return Q(enabled=True) & _not_expired_rule_filter()
 
 
 def _scope_sort_key(
@@ -344,11 +461,13 @@ def _default_allow() -> dict[str, Any]:
     }
 
 
-def _rule_decision(rule: PlayerAccessRule) -> dict[str, Any]:
+def _rule_decision(rule: PlayerAccessRule, *, locale: str = DEFAULT_REASON_LOCALE) -> dict[str, Any]:
+    reason_locale = _normalize_reason_locale(locale)
     allow = rule.action == "allow"
     return {
         "allow": allow,
-        "reason": None if allow else action_reason_text(rule.source_action, rule.reason),
+        "reason": None if allow else action_reason_text(rule.source_action, rule.reason, locale=reason_locale),
+        "reason_locale": reason_locale,
         "rule_id": rule.rule_id or f"access_rule:{rule.id}",
         "rule_type": rule.rule_type,
         "server_scope": rule.server_scope,
@@ -358,10 +477,12 @@ def _rule_decision(rule: PlayerAccessRule) -> dict[str, Any]:
     }
 
 
-def _legacy_ban_decision(uid: str, reason: str | None, operator: str | None) -> dict[str, Any]:
+def _legacy_ban_decision(uid: str, reason: str | None, operator: str | None, *, locale: str = DEFAULT_REASON_LOCALE) -> dict[str, Any]:
+    reason_locale = _normalize_reason_locale(locale)
     return {
         "allow": False,
-        "reason": _ban_reason(reason),
+        "reason": _ban_reason(reason, locale=reason_locale),
+        "reason_locale": reason_locale,
         "rule_id": _ban_rule_id(uid),
         "rule_type": "uid",
         "server_scope": "global",
@@ -371,10 +492,15 @@ def _legacy_ban_decision(uid: str, reason: str | None, operator: str | None) -> 
     }
 
 
-def _notice_decision(notice: PlayerAccessNotice) -> dict[str, Any]:
+def _notice_decision(notice: PlayerAccessNotice, *, locale: str = DEFAULT_REASON_LOCALE) -> dict[str, Any]:
+    reason_locale = _normalize_reason_locale(locale)
+    reason = action_reason_text(notice.action, notice.message or notice.reason, locale=reason_locale)
+    if str(notice.action or "").strip().lower() == "kick" and notice.requires_ack:
+        reason = _with_self_unban_guide(reason, locale=reason_locale)
     return {
         "allow": False,
-        "reason": action_reason_text(notice.action, notice.message or notice.reason),
+        "reason": reason,
+        "reason_locale": reason_locale,
         "rule_id": f"kick_notice:{notice.id}",
         "rule_type": "notice",
         "server_scope": notice.server_scope,
@@ -492,6 +618,135 @@ async def _resolve_geo(ip: str) -> tuple[str | None, str | None]:
     return country, region
 
 
+async def _resolve_server_geo(identity: dict[str, Any], server_ip: object | None = None) -> tuple[str | None, str | None]:
+    server = identity.get("server")
+    candidate_ip = _normalize_ip(server_ip) or _normalize_ip(getattr(server, "host", None))
+    if candidate_ip:
+        country, region = await _resolve_geo(candidate_ip)
+        if country or region:
+            return country, region
+
+    server_region = str(getattr(server, "region", "") or "").strip()
+    if server_region:
+        return server_region, None
+    return None, None
+
+
+async def _ensure_default_server_geo_policy_rule() -> None:
+    try:
+        existing = await PlayerAccessRule.filter(
+            rule_type=GEO_POLICY_RULE_TYPE,
+            action="deny",
+            value=GEO_POLICY_RULE_VALUE,
+            server_scope="global",
+        ).first()
+        if existing:
+            return
+
+        await PlayerAccessRule.create(
+            rule_type=GEO_POLICY_RULE_TYPE,
+            action="deny",
+            value=GEO_POLICY_RULE_VALUE,
+            server_scope="global",
+            server_id=None,
+            reason=REGION_LOCK_REASON,
+            rule_id=GEO_POLICY_GLOBAL_RULE_ID,
+            source_action="kick",
+            enabled=False,
+            priority=100,
+        )
+    except IntegrityError:
+        return
+    except Exception as exc:
+        logger.warning(f"默认服务器地区准入规则初始化失败: {exc}")
+
+
+async def _server_geo_policy_config_rule(
+    server_id: object | None = None,
+    *,
+    server_keys: Iterable[object] | object | None = None,
+) -> PlayerAccessRule | None:
+    await _ensure_default_server_geo_policy_rule()
+
+    normalized_server_keys = _normalize_server_keys(server_id, server_keys)
+    scope_q = Q(server_scope="global")
+    if normalized_server_keys:
+        scope_q |= Q(server_scope="server", server_id__in=normalized_server_keys)
+
+    try:
+        rules = await PlayerAccessRule.filter(
+            scope_q,
+            _not_expired_rule_filter(),
+            rule_type=GEO_POLICY_RULE_TYPE,
+            action="deny",
+            value=GEO_POLICY_RULE_VALUE,
+        ).order_by("priority", "id")
+    except Exception as exc:
+        logger.warning(f"服务器地区准入规则查询失败: {exc}")
+        return None
+
+    if not rules:
+        return None
+
+    server_rules = [rule for rule in rules if rule.server_scope == "server"]
+    if server_rules:
+        return sorted(server_rules, key=lambda r: _scope_sort_key(r, server_id, server_keys=server_keys))[0]
+
+    global_rules = [rule for rule in rules if rule.server_scope == "global"]
+    if global_rules:
+        return sorted(global_rules, key=lambda r: _scope_sort_key(r, server_id, server_keys=server_keys))[0]
+    return None
+
+
+def _server_geo_policy_decision(
+    *,
+    player_country: str | None,
+    player_region: str | None,
+    server_country: str | None,
+    server_region: str | None,
+    config_rule: PlayerAccessRule | None,
+    reason_locale: str = DEFAULT_REASON_LOCALE,
+) -> dict[str, Any] | None:
+    if not config_rule or not config_rule.enabled:
+        return None
+
+    player_is_mainland = _is_mainland_china_geo(player_country, player_region)
+    server_is_mainland = _is_mainland_china_geo(server_country, server_region)
+    if player_is_mainland is None or server_is_mainland is None:
+        return None
+    if player_is_mainland == server_is_mainland:
+        return None
+
+    direction = "domestic_server_foreign_player" if server_is_mainland else "overseas_server_domestic_player"
+    reason_locale = _normalize_reason_locale(reason_locale)
+    source_action = str(config_rule.source_action or "").strip().lower()
+    if source_action not in {"ban", "kick"}:
+        source_action = "kick"
+    reason = str(config_rule.reason or "").strip() or REGION_LOCK_REASON
+    if reason == REGION_LOCK_REASON:
+        reason = GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON if direction == "domestic_server_foreign_player" else GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON
+    rule = serialize_access_rule(config_rule)
+    rule.update({
+        "source_action": source_action,
+        "matched_policy": direction,
+        "player_country": player_country,
+        "player_region": player_region,
+        "server_country": server_country,
+        "server_region": server_region,
+    })
+    return {
+        "allow": False,
+        "reason": action_reason_text(source_action, reason, locale=reason_locale),
+        "reason_locale": reason_locale,
+        "rule_id": config_rule.rule_id or f"access_rule:{config_rule.id}",
+        "rule_type": config_rule.rule_type,
+        "server_scope": config_rule.server_scope,
+        "server_id": config_rule.server_id,
+        "rule": rule,
+        "source": "server_geo_policy",
+    }
+
+
 async def _matching_geo_deny_rule(
     *,
     ip: str,
@@ -536,15 +791,15 @@ async def _matching_geo_deny_rule(
     return sorted(matches, key=lambda r: _scope_sort_key(r, server_id, server_keys=server_keys))[0]
 
 
-async def _legacy_ban_for_uid(uid: str, player: Player | None) -> dict[str, Any] | None:
+async def _legacy_ban_for_uid(uid: str, player: Player | None, *, locale: str = DEFAULT_REASON_LOCALE) -> dict[str, Any] | None:
     player = player or await _find_player_for_uid(uid)
     if not player or player.status != "banned":
         return None
 
     record = await BanRecord.filter(player=player).order_by("-created_at").first()
     if record is None:
-        return _legacy_ban_decision(uid, "banned", None)
-    return _legacy_ban_decision(uid, record.reason, record.operator)
+        return _legacy_ban_decision(uid, "banned", None, locale=locale)
+    return _legacy_ban_decision(uid, record.reason, record.operator, locale=locale)
 
 
 async def _pending_notice_for_uid(
@@ -592,25 +847,29 @@ async def evaluate_player_access(
     player: Player | None = None,
     country: str | None = None,
     region: str | None = None,
+    server_country: str | None = None,
+    server_region: str | None = None,
+    reason_locale: str = DEFAULT_REASON_LOCALE,
 ) -> dict[str, Any]:
     """Evaluate access using the SDK document's fixed priority order."""
     uid_text = normalize_uid(uid)
     ip_text = _normalize_ip(ip)
+    locale = _normalize_reason_locale(reason_locale)
 
     if uid_text:
         notice = await _pending_notice_for_uid(uid_text, server_id=server_id, server_keys=server_keys)
         if notice:
-            return _notice_decision(notice)
+            return _notice_decision(notice, locale=locale)
 
         rule = await _first_exact_rule("uid", "allow", uid_text, server_id=server_id, server_keys=server_keys)
         if rule:
-            return _rule_decision(rule)
+            return _rule_decision(rule, locale=locale)
 
         rule = await _first_exact_rule("uid", "deny", uid_text, server_id=server_id, server_keys=server_keys)
         if rule:
-            return _rule_decision(rule)
+            return _rule_decision(rule, locale=locale)
 
-        legacy_ban = await _legacy_ban_for_uid(uid_text, player)
+        legacy_ban = await _legacy_ban_for_uid(uid_text, player, locale=locale)
         if legacy_ban:
             return legacy_ban
 
@@ -628,15 +887,28 @@ async def evaluate_player_access(
             server_keys=server_keys,
         )
         if rule:
-            return _rule_decision(rule)
+            return _rule_decision(rule, locale=locale)
 
         rule = await _first_exact_rule("ip", "deny", ip_text, server_id=server_id, server_keys=server_keys) or await _matching_cidr_rule("deny", ip_text, server_id=server_id, server_keys=server_keys)
         if rule:
-            return _rule_decision(rule)
+            return _rule_decision(rule, locale=locale)
 
     rule = await _matching_geo_deny_rule(ip=ip_text, country=country, region=region, server_id=server_id, server_keys=server_keys)
     if rule:
-        return _rule_decision(rule)
+        return _rule_decision(rule, locale=locale)
+
+    if server_country or server_region:
+        policy_rule = await _server_geo_policy_config_rule(server_id, server_keys=server_keys)
+        policy_decision = _server_geo_policy_decision(
+            player_country=country,
+            player_region=region,
+            server_country=server_country,
+            server_region=server_region,
+            config_rule=policy_rule,
+            reason_locale=locale,
+        )
+        if policy_decision:
+            return policy_decision
 
     return _default_allow()
 
@@ -818,14 +1090,21 @@ async def check_player_access(
         ip=ip,
     )
     normalized_uid = normalize_uid(uid, nucleus_id)
+    country = player.country if player else None
+    region = player.region if player else None
+    reason_locale = reason_locale_from_geo(country, region)
+    server_country, server_region = await _resolve_server_geo(identity, server_ip)
     decision = await evaluate_player_access(
         uid=normalized_uid,
         ip=ip,
         server_id=server_id,
         server_keys=server_keys,
         player=player,
-        country=player.country if player else None,
-        region=player.region if player else None,
+        country=country,
+        region=region,
+        server_country=server_country,
+        server_region=server_region,
+        reason_locale=reason_locale,
     )
     action = action_from_access_decision(decision)
     log_message = (
@@ -837,6 +1116,9 @@ async def check_player_access(
         f"port={port or '-'}, "
         f"server_id={server_id or '-'}, "
         f"server_keys={server_keys or '-'}, "
+        f"player_geo={country or '-'}/{region or '-'}, "
+        f"server_geo={server_country or '-'}/{server_region or '-'}, "
+        f"reason_locale={reason_locale}, "
         f"action={action or '-'}, "
         f"rule_id={decision.get('rule_id') or '-'}, "
         f"reason={decision.get('reason') or '-'}"
@@ -875,6 +1157,7 @@ async def process_online_players_report(
     server_keys = identity["server_keys"]
     cache_server_id = identity["canonical_key"] or server_id
     server_cache.update_access_report(cache_server_id, report)
+    server_country, server_region = await _resolve_server_geo(identity, report.get("serverIp"))
 
     reported_players = report.get("players") or []
     actions: list[dict[str, Any]] = []
@@ -890,14 +1173,20 @@ async def process_online_players_report(
             ip=player_payload.get("ip"),
             input_device=_input_device_from_payload(player_payload),
         )
+        country = player.country if player else player_payload.get("country")
+        region = player.region if player else player_payload.get("region")
+        reason_locale = reason_locale_from_geo(country, region)
         decision = await evaluate_player_access(
             uid=uid_text,
             ip=player_payload.get("ip"),
             server_id=server_id,
             server_keys=server_keys,
             player=player,
-            country=player.country if player else player_payload.get("country"),
-            region=player.region if player else player_payload.get("region"),
+            country=country,
+            region=region,
+            server_country=server_country,
+            server_region=server_region,
+            reason_locale=reason_locale,
         )
         action = action_from_access_decision(decision)
         if not action:
@@ -918,6 +1207,7 @@ async def process_online_players_report(
         "在线玩家上报: "
         f"server_id={server_id}, players={len(reported_players)}, "
         f"server_keys={server_keys or '-'}, "
+        f"server_geo={server_country or '-'}/{server_region or '-'}, "
         f"actions={len(actions)}, map={report.get('map') or '-'}, "
         f"num={report.get('numPlayers')}/{report.get('maxPlayers')}"
     )
@@ -1001,15 +1291,24 @@ def _normalize_rule_value(rule_type: str, value: object) -> str:
 
     if rule_type == "ip":
         try:
-            return str(ipaddress.ip_address(text))
+            ipaddress.ip_address(text)
         except ValueError as exc:
             raise ValueError("value 必须是有效 IP 地址") from exc
+        return _normalize_ip(text)
 
     if rule_type == "cidr":
         try:
             return str(ipaddress.ip_network(text, strict=False))
         except ValueError as exc:
             raise ValueError("value 必须是有效 CIDR") from exc
+
+    if rule_type == GEO_POLICY_RULE_TYPE:
+        normalized = text.strip().lower()
+        if normalized in {"server_geo_policy", "mainland", "mainland_china", "domestic_overseas"}:
+            return GEO_POLICY_RULE_VALUE
+        if normalized != GEO_POLICY_RULE_VALUE:
+            raise ValueError(f"{GEO_POLICY_RULE_TYPE} value 必须是 {GEO_POLICY_RULE_VALUE}")
+        return normalized
 
     return text
 
@@ -1029,6 +1328,8 @@ def normalize_access_rule_payload(
     normalized_action = str(action or "").strip().lower()
     if normalized_action not in RULE_ACTIONS:
         raise ValueError(f"action 必须是以下值之一: {sorted(RULE_ACTIONS)}")
+    if normalized_type == GEO_POLICY_RULE_TYPE and normalized_action != "deny":
+        raise ValueError(f"{GEO_POLICY_RULE_TYPE} 仅支持 action=deny")
 
     normalized_scope, normalized_server_id = _normalize_server_scope(server_scope, server_id)
     return {
@@ -1161,6 +1462,9 @@ async def create_access_rule(
         server_scope=server_scope,
         server_id=server_id,
     )
+    if payload["rule_type"] == GEO_POLICY_RULE_TYPE:
+        reason = (reason or "").strip() or REGION_LOCK_REASON
+        source_action = (source_action or "").strip() or "kick"
     return await PlayerAccessRule.create(
         **payload,
         reason=(reason or "").strip() or None,
@@ -1419,26 +1723,32 @@ async def get_player_access_state(
     server_id: object | None = None,
 ) -> dict[str, Any]:
     uid_value = normalize_uid(uid if uid is not None else (player.nucleus_id if player else None))
+    country = player.country if player else None
+    region = player.region if player else None
     return await evaluate_player_access(
         uid=uid_value,
         ip=ip if ip is not None else (player.ip if player else None),
         server_id=server_id,
         player=player,
-        country=player.country if player else None,
-        region=player.region if player else None,
+        country=country,
+        region=region,
+        reason_locale=reason_locale_from_geo(country, region),
     )
 
 
 async def build_online_player_info(player_data: dict, *, is_admin: bool = False, server_id: object | None = None) -> dict[str, Any]:
     uid = normalize_uid(player_data.get("uniqueid"))
     player = await _find_player_for_uid(uid) if uid else None
+    country = player_data.get("country")
+    region = player_data.get("region")
     access = await evaluate_player_access(
         uid=uid,
         ip=player_data.get("ip"),
         server_id=server_id,
         player=player,
-        country=player_data.get("country"),
-        region=player_data.get("region"),
+        country=country,
+        region=region,
+        reason_locale=reason_locale_from_geo(country, region),
     )
 
     info: dict[str, Any] = {

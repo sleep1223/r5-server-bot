@@ -27,9 +27,9 @@ __plugin_meta__ = PluginMetadata(
        查询玩家在线状态
 
     5. 管理指令:
-       /ban <玩家名/ID>
-       /kick <玩家名/ID>
-       /unban <玩家名/ID>
+       /kick <玩家名/ID> [原因]
+       /ban <玩家名/ID> [原因] (超级用户)
+       /unban <玩家名/ID> (超级用户)
 
     6. 捐赠指令:
        捐赠查看
@@ -42,9 +42,9 @@ __plugin_meta__ = PluginMetadata(
     config=Config,
 )
 
-from .services import admin, binding, donation, friend, help, kd, match, query, status, team, weapons
+from .services import admin, admin_group, binding, donation, friend, help, kd, match, query, status, team, weapons
 
 # Config
 plugin_config = get_plugin_config(Config)
 
-__all__ = ["admin", "binding", "donation", "friend", "help", "kd", "match", "query", "status", "team", "weapons"]
+__all__ = ["admin", "admin_group", "binding", "donation", "friend", "help", "kd", "match", "query", "status", "team", "weapons"]
