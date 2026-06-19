@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import HTTPAuthorizationCredentials
+from pydantic import BaseModel, ConfigDict, Field
 from shared_lib.config import settings
 
 from fastapi_service.core.auth import security_scheme, verify_token
@@ -14,6 +15,15 @@ from fastapi_service.services.rcon import require_rcon_config
 from ..deps import Pagination, get_pagination
 
 router = APIRouter()
+
+
+class SelfUnbanBody(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    player_name: str | None = None
+    nucleus_id: int | None = None
+    operation_id: int | None = None
+    confirmation_text: str = Field(..., min_length=1)
 
 
 @router.post("/players/{nucleus_id_or_player_name}/kick", dependencies=[Depends(verify_token)])
@@ -263,12 +273,35 @@ async def unban_player(nucleus_id_or_player_name: int | str):
 
 @router.get("/bans")
 async def get_ban_list(
+    q: str | None = Query(None, description="精确搜索玩家名或 Nucleus ID"),
+    player_name: str | None = Query(None, description="精确搜索玩家名"),
+    nucleus_id: int | None = Query(None, description="精确搜索 Nucleus ID"),
     pg: Pagination = Depends(get_pagination),
     credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
 ):
     """获取封禁记录列表。"""
     is_admin = check_is_admin(credentials, settings.fastapi_access_tokens)
 
-    results, total = await admin_service.list_bans(page_size=pg.page_size, offset=pg.offset, is_admin=is_admin)
+    results, total = await admin_service.list_bans(
+        page_size=pg.page_size,
+        offset=pg.offset,
+        is_admin=is_admin,
+        player_query=q,
+        player_name=player_name,
+        nucleus_id=nucleus_id,
+    )
 
     return paginated(data=results, total=total, msg="封禁列表已获取")
+
+
+@router.post("/bans/self-unban")
+async def self_unban_player(body: SelfUnbanBody):
+    data, err = await admin_service.self_unban_player(
+        player_name=body.player_name,
+        nucleus_id=body.nucleus_id,
+        operation_id=body.operation_id,
+        confirmation_text=body.confirmation_text,
+    )
+    if err:
+        return err
+    return success(data=data, msg="已确认规则，自助解封已提交")

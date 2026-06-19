@@ -153,8 +153,7 @@ def _normalize_display_status(status: str | None) -> str | None:
 def _action_reason(action: str, reason: str | None) -> str | None:
     if not reason:
         return None
-    prefix = "BAN" if action == "ban" else "KICK"
-    return f"#{prefix}_REASON_{reason}"
+    return player_access_service.action_reason_text(action, reason)
 
 
 def _expires_at(duration_seconds: int | None) -> datetime | None:
@@ -194,6 +193,9 @@ def _operation_result_payload(result: dict[str, Any]) -> dict[str, Any]:
         payload["hit_server"] = result["hit_server"]
     if result.get("synced_ip_rule"):
         payload["synced_ip_rule_id"] = result["synced_ip_rule"].get("rule_id")
+    player = result.get("player") or {}
+    if isinstance(player, dict) and player.get("ip"):
+        payload["player_ip"] = player["ip"]
     if result.get("notice"):
         payload["notice_id"] = result["notice"].get("id")
     if result.get("released_rules") is not None:

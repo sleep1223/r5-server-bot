@@ -225,6 +225,29 @@ class Match(models.Model):
         table = "matches"
 
 
+class SdkMatchEndReport(models.Model):
+    id = fields.IntField(pk=True)
+    server = fields.ForeignKeyField("models.Server", related_name="sdk_match_end_reports", null=True, on_delete=fields.SET_NULL)
+    match = fields.ForeignKeyField("models.Match", related_name="sdk_end_reports", null=True, on_delete=fields.SET_NULL)
+    server_identifier = fields.CharField(max_length=128, db_index=True)
+    server_ip = fields.CharField(max_length=64, null=True, db_index=True)
+    server_port = fields.IntField(null=True)
+    map_name = fields.CharField(max_length=100, null=True)
+    playlist_name = fields.CharField(max_length=100, null=True)
+    sdk_version = fields.CharField(max_length=100, null=True)
+    tick = fields.BigIntField(null=True)
+    spawn_count = fields.IntField(default=0)
+    ended_at = fields.DatetimeField(db_index=True)
+    num_players = fields.IntField(default=0)
+    max_players = fields.IntField(default=0)
+    payload = fields.JSONField()
+    created_at = fields.DatetimeField(auto_now_add=True)
+
+    class Meta:
+        table = "sdk_match_end_reports"
+        indexes = (("server_identifier", "ended_at"), ("server_id", "ended_at"), ("match_id", "created_at"))
+
+
 class IpInfo(models.Model):
     id = fields.IntField(pk=True)
     ip = fields.CharField(max_length=50, unique=True, db_index=True)

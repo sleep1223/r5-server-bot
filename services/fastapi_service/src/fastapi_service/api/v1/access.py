@@ -2,7 +2,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from shared_lib.config import settings
 
 from fastapi_service.core.auth import security_scheme
@@ -20,12 +20,16 @@ class PlayerAccessRequest(BaseModel):
     ip: str
     port: int
     serverId: str
+    serverIp: str | None = None
+    serverPort: int | None = None
 
 
 class PlayerAccessResponse(BaseModel):
     allow: bool
     reason: str | None = None
     ruleId: str | None = None
+    action: Literal["kick", "ban"] | None = None
+    canSelfUnban: bool = False
 
 
 class OnlinePlayer(BaseModel):
@@ -49,11 +53,13 @@ class OnlinePlayer(BaseModel):
 
 class OnlinePlayersRequest(BaseModel):
     serverId: str
+    serverIp: str | None = None
+    serverPort: int | None = None
     map: str | None = None
     tick: int | None = None
     numPlayers: int | None = None
     maxPlayers: int | None = None
-    players: list[OnlinePlayer] = []
+    players: list[OnlinePlayer] = Field(default_factory=list)
 
 
 class OnlinePlayerAction(BaseModel):
@@ -92,11 +98,15 @@ async def check_player_access(
         ip=payload.ip,
         port=payload.port,
         server_id=payload.serverId,
+        server_ip=payload.serverIp,
+        server_port=payload.serverPort,
     )
     return PlayerAccessResponse(
         allow=bool(decision["allow"]),
         reason=decision.get("reason"),
         ruleId=decision.get("rule_id"),
+        action=player_access_service.action_from_access_decision(decision),
+        canSelfUnban=decision.get("source") == "kick_notice",
     )
 
 

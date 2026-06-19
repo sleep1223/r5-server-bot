@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import ipaddress
-from datetime import datetime
-from typing import Any
+import json
+from datetime import datetime, timezone
+from typing import Any, Iterable
 
 from loguru import logger
-from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule
+from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server
 from tortoise.exceptions import IntegrityError
 from tortoise.expressions import Q
 
@@ -15,6 +16,20 @@ from fastapi_service.core.utils import CN_TZ, generate_hash, resolve_ips_batch
 RULE_TYPES = {"uid", "ip", "cidr", "geo", "country", "region"}
 RULE_ACTIONS = {"allow", "deny"}
 SERVER_SCOPES = {"global", "server"}
+REASON_TEXTS = {
+    "NO_COVER": "撤回掩体",
+    "BE_POLITE": "言行不当",
+    "CHEAT": "作弊",
+    "RULES": "违反规则",
+}
+ACTION_REASON_PREFIXES = {
+    "ban": "已被封禁",
+    "kick": "已被踢出",
+}
+ACTION_DEFAULT_REASONS = {
+    "ban": "禁止进入该服务器",
+    "kick": "请访问网站确认后再进入服务器",
+}
 
 
 def normalize_uid(uid: object | None, nucleus_id: object | None = None) -> str:
@@ -46,12 +61,211 @@ def _normalize_ip(ip: object | None) -> str:
         return text
 
 
+def _safe_int(value: object | None, default: int = 0) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _append_unique_text(items: list[str], value: object | None) -> None:
+    text = str(value or "").strip()
+    if text and text not in items:
+        items.append(text)
+
+
+def _server_address_key(server_ip: object | None, server_port: object | None) -> str | None:
+    host = _normalize_ip(server_ip) or None
+    port = _safe_int(server_port, 0)
+    if not host or not port:
+        return None
+    return f"{host}:{port}"
+
+
+def _normalize_server_keys(
+    server_id: object | None = None,
+    server_keys: Iterable[object] | object | None = None,
+) -> list[str]:
+    keys: list[str] = []
+    _append_unique_text(keys, server_id)
+    if server_keys is None:
+        return keys
+
+    if isinstance(server_keys, str):
+        _append_unique_text(keys, server_keys)
+        return keys
+
+    try:
+        iterator = iter(server_keys)  # type: ignore[arg-type]
+    except TypeError:
+        _append_unique_text(keys, server_keys)
+        return keys
+
+    for key in iterator:
+        _append_unique_text(keys, key)
+    return keys
+
+
 def _input_device_from_payload(payload: dict[str, Any]) -> str | None:
     for key in ("inputDevice", "input_device", "input", "device"):
         text = str(payload.get(key) or "").strip()
         if text:
             return text[:50]
     return None
+
+
+def _split_reason_token(reason: str) -> tuple[str | None, str | None]:
+    for action, prefix in (("ban", "#BAN_REASON_"), ("kick", "#KICK_REASON_")):
+        if reason.startswith(prefix):
+            return action, reason[len(prefix) :]
+    return None, None
+
+
+def action_reason_text(action: str | None, reason: str | None) -> str:
+    normalized_action = str(action or "").strip().lower()
+    text = str(reason or "").strip()
+
+    if not text:
+        return ACTION_DEFAULT_REASONS.get(normalized_action, "禁止进入该服务器")
+
+    token_action, token_reason = _split_reason_token(text)
+    if token_reason:
+        normalized_action = normalized_action or (token_action or "")
+        text = token_reason
+    elif text not in REASON_TEXTS:
+        return text
+
+    reason_text = REASON_TEXTS.get(text, text)
+    prefix = ACTION_REASON_PREFIXES.get(normalized_action)
+    return f"{prefix}: {reason_text}" if prefix else reason_text
+
+
+async def upsert_sdk_server_snapshot(
+    *,
+    server_id: object | None,
+    server_ip: object | None = None,
+    server_port: object | None = None,
+    map_name: object | None = None,
+    num_players: object | None = None,
+    max_players: object | None = None,
+    has_status: bool = False,
+) -> Server | None:
+    server_identifier = str(server_id or "").strip() or None
+    host = _normalize_ip(server_ip) or None
+    port = _safe_int(server_port, 0) or 37015
+
+    if not server_identifier and not host:
+        return None
+
+    server = await Server.get_or_none(server_id=server_identifier) if server_identifier else None
+    host_server = await Server.get_or_none(host=host) if host else None
+    if server is not None and host_server is not None and server.id != host_server.id:
+        if host_server.server_id not in (None, server_identifier):
+            logger.warning(f"SDK 服务器上报 host={host} 已绑定其它 server_id={host_server.server_id}, 忽略本次 server_id={server_identifier}")
+            server = host_server
+            server_identifier = None
+        else:
+            await Server.filter(id=server.id).update(server_id=None, has_status=False)
+            server = host_server
+    elif server is None:
+        server = host_server
+
+    now = datetime.now(timezone.utc)
+    if server is None:
+        if not host:
+            return None
+        try:
+            server = await Server.create(
+                server_id=server_identifier,
+                host=host,
+                port=port,
+                name=f"server-{server_identifier or host}",
+                map=str(map_name or "") or None,
+                player_count=_safe_int(num_players, 0),
+                max_players=_safe_int(max_players, 0),
+                is_self_hosted=True,
+                has_status=has_status,
+                last_seen_at=now,
+            )
+        except IntegrityError:
+            return await upsert_sdk_server_snapshot(
+                server_id=server_identifier,
+                server_ip=host,
+                server_port=port,
+                map_name=map_name,
+                num_players=num_players,
+                max_players=max_players,
+                has_status=has_status,
+            )
+        return server
+
+    updates: dict[str, Any] = {"last_seen_at": now}
+    if server_identifier and server.server_id != server_identifier:
+        updates["server_id"] = server_identifier
+    if host and server.host != host:
+        updates["host"] = host
+    if port and server.port != port:
+        updates["port"] = port
+    if map_name is not None:
+        updates["map"] = str(map_name or "") or None
+    if num_players is not None:
+        updates["player_count"] = _safe_int(num_players, 0)
+    if max_players is not None:
+        updates["max_players"] = _safe_int(max_players, 0)
+    if not server.is_self_hosted:
+        updates["is_self_hosted"] = True
+    if has_status and not server.has_status:
+        updates["has_status"] = True
+
+    await Server.filter(id=server.id).update(**updates)
+    for key, value in updates.items():
+        setattr(server, key, value)
+    return server
+
+
+async def resolve_access_server_identity(
+    *,
+    server_id: object | None,
+    server_ip: object | None = None,
+    server_port: object | None = None,
+    map_name: object | None = None,
+    num_players: object | None = None,
+    max_players: object | None = None,
+    has_status: bool = False,
+) -> dict[str, Any]:
+    server = await upsert_sdk_server_snapshot(
+        server_id=server_id,
+        server_ip=server_ip,
+        server_port=server_port,
+        map_name=map_name,
+        num_players=num_players,
+        max_players=max_players,
+        has_status=has_status,
+    )
+
+    requested_server_id = str(server_id or "").strip() or None
+    reported_host = _normalize_ip(server_ip) or None
+    reported_port = _safe_int(server_port, 0) or None
+    reported_address_key = _server_address_key(reported_host, reported_port)
+
+    keys: list[str] = []
+    _append_unique_text(keys, requested_server_id)
+    _append_unique_text(keys, reported_address_key)
+    _append_unique_text(keys, reported_host)
+
+    if server is not None:
+        _append_unique_text(keys, server.server_id)
+        _append_unique_text(keys, server.netkey)
+        _append_unique_text(keys, _server_address_key(server.host, server.port))
+        _append_unique_text(keys, server.host)
+
+    canonical_key = _server_address_key(server.host, server.port) if server is not None else reported_address_key
+    return {
+        "server": server,
+        "server_keys": keys,
+        "canonical_key": canonical_key or requested_server_id,
+        "requested_server_id": requested_server_id,
+    }
 
 
 def _now() -> datetime:
@@ -69,11 +283,11 @@ def _scoped_ban_rule_id(uid: str, server_id: str | None) -> str:
 
 
 def _ban_reason(reason: str | None) -> str:
-    return f"#BAN_REASON_{reason}" if reason else "禁止进入该服务器"
+    return action_reason_text("ban", reason)
 
 
 def _kick_reason(reason: str | None) -> str:
-    return f"#KICK_REASON_{reason}" if reason else "请访问网站确认后再进入服务器"
+    return action_reason_text("kick", reason)
 
 
 def _normalize_server_scope(server_scope: object | None, server_id: object | None = None) -> tuple[str, str | None]:
@@ -89,10 +303,14 @@ def _normalize_server_scope(server_scope: object | None, server_id: object | Non
     return scope, normalized_server_id
 
 
-def _scope_filter(server_id: object | None = None) -> Q:
-    normalized_server_id = str(server_id or "").strip()
-    if normalized_server_id:
-        return Q(server_scope="global") | Q(server_scope="server", server_id=normalized_server_id)
+def _scope_filter(
+    server_id: object | None = None,
+    *,
+    server_keys: Iterable[object] | object | None = None,
+) -> Q:
+    normalized_server_keys = _normalize_server_keys(server_id, server_keys)
+    if normalized_server_keys:
+        return Q(server_scope="global") | Q(server_scope="server", server_id__in=normalized_server_keys)
     return Q(server_scope="global")
 
 
@@ -101,10 +319,17 @@ def _active_rule_filter() -> Q:
     return Q(enabled=True) & (Q(expires_at__isnull=True) | Q(expires_at__gt=now))
 
 
-def _scope_sort_key(rule: PlayerAccessRule, server_id: object | None = None) -> tuple[int, int, int]:
-    normalized_server_id = str(server_id or "").strip()
-    scope_rank = 0 if normalized_server_id and rule.server_scope == "server" and rule.server_id == normalized_server_id else 1
-    return scope_rank, rule.priority, rule.id
+def _scope_sort_key(
+    rule: PlayerAccessRule,
+    server_id: object | None = None,
+    *,
+    server_keys: Iterable[object] | object | None = None,
+) -> tuple[int, int, int, int]:
+    normalized_server_keys = _normalize_server_keys(server_id, server_keys)
+    key_rank = {key: index for index, key in enumerate(normalized_server_keys)}
+    matched_rank = key_rank.get(str(rule.server_id or "").strip(), len(key_rank))
+    scope_rank = 0 if rule.server_scope == "server" and matched_rank < len(key_rank) else 1
+    return scope_rank, rule.priority, matched_rank, rule.id
 
 
 def _default_allow() -> dict[str, Any]:
@@ -123,7 +348,7 @@ def _rule_decision(rule: PlayerAccessRule) -> dict[str, Any]:
     allow = rule.action == "allow"
     return {
         "allow": allow,
-        "reason": None if allow else rule.reason,
+        "reason": None if allow else action_reason_text(rule.source_action, rule.reason),
         "rule_id": rule.rule_id or f"access_rule:{rule.id}",
         "rule_type": rule.rule_type,
         "server_scope": rule.server_scope,
@@ -149,7 +374,7 @@ def _legacy_ban_decision(uid: str, reason: str | None, operator: str | None) -> 
 def _notice_decision(notice: PlayerAccessNotice) -> dict[str, Any]:
     return {
         "allow": False,
-        "reason": notice.message or _kick_reason(notice.reason),
+        "reason": action_reason_text(notice.action, notice.message or notice.reason),
         "rule_id": f"kick_notice:{notice.id}",
         "rule_type": "notice",
         "server_scope": notice.server_scope,
@@ -172,7 +397,7 @@ def action_from_access_decision(decision: dict[str, Any]) -> str | None:
     if source_action in {"ban", "kick"}:
         return source_action
 
-    return "kick"
+    return "ban"
 
 
 async def _find_player_for_uid(uid: str) -> Player | None:
@@ -197,10 +422,11 @@ async def _first_exact_rule(
     value: str,
     *,
     server_id: object | None = None,
+    server_keys: Iterable[object] | object | None = None,
 ) -> PlayerAccessRule | None:
     try:
         rules = await PlayerAccessRule.filter(
-            _scope_filter(server_id),
+            _scope_filter(server_id, server_keys=server_keys),
             _active_rule_filter(),
             rule_type=rule_type,
             action=action,
@@ -208,13 +434,19 @@ async def _first_exact_rule(
         ).order_by("priority", "id")
         if not rules:
             return None
-        return sorted(rules, key=lambda r: _scope_sort_key(r, server_id))[0]
+        return sorted(rules, key=lambda r: _scope_sort_key(r, server_id, server_keys=server_keys))[0]
     except Exception as exc:
         logger.warning(f"玩家准入精确规则查询失败: {exc}")
         return None
 
 
-async def _matching_cidr_rule(action: str, ip: str, *, server_id: object | None = None) -> PlayerAccessRule | None:
+async def _matching_cidr_rule(
+    action: str,
+    ip: str,
+    *,
+    server_id: object | None = None,
+    server_keys: Iterable[object] | object | None = None,
+) -> PlayerAccessRule | None:
     if not ip:
         return None
     try:
@@ -224,7 +456,7 @@ async def _matching_cidr_rule(action: str, ip: str, *, server_id: object | None 
 
     try:
         rules = await PlayerAccessRule.filter(
-            _scope_filter(server_id),
+            _scope_filter(server_id, server_keys=server_keys),
             _active_rule_filter(),
             rule_type="cidr",
             action=action,
@@ -242,7 +474,7 @@ async def _matching_cidr_rule(action: str, ip: str, *, server_id: object | None 
             logger.warning(f"玩家准入 CIDR 规则值无效: value={rule.value!r}")
     if not matches:
         return None
-    return sorted(matches, key=lambda r: _scope_sort_key(r, server_id))[0]
+    return sorted(matches, key=lambda r: _scope_sort_key(r, server_id, server_keys=server_keys))[0]
 
 
 async def _resolve_geo(ip: str) -> tuple[str | None, str | None]:
@@ -266,10 +498,11 @@ async def _matching_geo_deny_rule(
     country: str | None,
     region: str | None,
     server_id: object | None = None,
+    server_keys: Iterable[object] | object | None = None,
 ) -> PlayerAccessRule | None:
     try:
         rules = await PlayerAccessRule.filter(
-            _scope_filter(server_id),
+            _scope_filter(server_id, server_keys=server_keys),
             _active_rule_filter(),
             rule_type__in=["geo", "country", "region"],
             action="deny",
@@ -300,7 +533,7 @@ async def _matching_geo_deny_rule(
             matches.append(rule)
     if not matches:
         return None
-    return sorted(matches, key=lambda r: _scope_sort_key(r, server_id))[0]
+    return sorted(matches, key=lambda r: _scope_sort_key(r, server_id, server_keys=server_keys))[0]
 
 
 async def _legacy_ban_for_uid(uid: str, player: Player | None) -> dict[str, Any] | None:
@@ -314,13 +547,18 @@ async def _legacy_ban_for_uid(uid: str, player: Player | None) -> dict[str, Any]
     return _legacy_ban_decision(uid, record.reason, record.operator)
 
 
-async def _pending_notice_for_uid(uid: str, server_id: object | None = None) -> PlayerAccessNotice | None:
+async def _pending_notice_for_uid(
+    uid: str,
+    server_id: object | None = None,
+    *,
+    server_keys: Iterable[object] | object | None = None,
+) -> PlayerAccessNotice | None:
     if not uid:
         return None
 
     try:
         notices = await PlayerAccessNotice.filter(
-            _scope_filter(server_id),
+            _scope_filter(server_id, server_keys=server_keys),
             uid=uid,
             requires_ack=True,
             acknowledged_at__isnull=True,
@@ -334,11 +572,13 @@ async def _pending_notice_for_uid(uid: str, server_id: object | None = None) -> 
     if not active_notices:
         return None
 
-    normalized_server_id = str(server_id or "").strip()
+    normalized_server_keys = _normalize_server_keys(server_id, server_keys)
+    key_rank = {key: index for index, key in enumerate(normalized_server_keys)}
 
-    def _notice_sort_key(notice: PlayerAccessNotice) -> tuple[int, int]:
-        scope_rank = 0 if normalized_server_id and notice.server_scope == "server" and notice.server_id == normalized_server_id else 1
-        return scope_rank, -notice.id
+    def _notice_sort_key(notice: PlayerAccessNotice) -> tuple[int, int, int]:
+        matched_rank = key_rank.get(str(notice.server_id or "").strip(), len(key_rank))
+        scope_rank = 0 if notice.server_scope == "server" and matched_rank < len(key_rank) else 1
+        return scope_rank, matched_rank, -notice.id
 
     return sorted(active_notices, key=_notice_sort_key)[0]
 
@@ -348,6 +588,7 @@ async def evaluate_player_access(
     uid: object | None,
     ip: object | None = None,
     server_id: object | None = None,
+    server_keys: Iterable[object] | object | None = None,
     player: Player | None = None,
     country: str | None = None,
     region: str | None = None,
@@ -357,15 +598,15 @@ async def evaluate_player_access(
     ip_text = _normalize_ip(ip)
 
     if uid_text:
-        notice = await _pending_notice_for_uid(uid_text, server_id=server_id)
+        notice = await _pending_notice_for_uid(uid_text, server_id=server_id, server_keys=server_keys)
         if notice:
             return _notice_decision(notice)
 
-        rule = await _first_exact_rule("uid", "allow", uid_text, server_id=server_id)
+        rule = await _first_exact_rule("uid", "allow", uid_text, server_id=server_id, server_keys=server_keys)
         if rule:
             return _rule_decision(rule)
 
-        rule = await _first_exact_rule("uid", "deny", uid_text, server_id=server_id)
+        rule = await _first_exact_rule("uid", "deny", uid_text, server_id=server_id, server_keys=server_keys)
         if rule:
             return _rule_decision(rule)
 
@@ -374,15 +615,26 @@ async def evaluate_player_access(
             return legacy_ban
 
     if ip_text:
-        rule = await _first_exact_rule("ip", "allow", ip_text, server_id=server_id) or await _matching_cidr_rule("allow", ip_text, server_id=server_id)
+        rule = await _first_exact_rule(
+            "ip",
+            "allow",
+            ip_text,
+            server_id=server_id,
+            server_keys=server_keys,
+        ) or await _matching_cidr_rule(
+            "allow",
+            ip_text,
+            server_id=server_id,
+            server_keys=server_keys,
+        )
         if rule:
             return _rule_decision(rule)
 
-        rule = await _first_exact_rule("ip", "deny", ip_text, server_id=server_id) or await _matching_cidr_rule("deny", ip_text, server_id=server_id)
+        rule = await _first_exact_rule("ip", "deny", ip_text, server_id=server_id, server_keys=server_keys) or await _matching_cidr_rule("deny", ip_text, server_id=server_id, server_keys=server_keys)
         if rule:
             return _rule_decision(rule)
 
-    rule = await _matching_geo_deny_rule(ip=ip_text, country=country, region=region, server_id=server_id)
+    rule = await _matching_geo_deny_rule(ip=ip_text, country=country, region=region, server_id=server_id, server_keys=server_keys)
     if rule:
         return _rule_decision(rule)
 
@@ -405,6 +657,7 @@ async def trace_player_access(
     uid: object | None,
     ip: object | None = None,
     server_id: object | None = None,
+    server_keys: Iterable[object] | object | None = None,
     player: Player | None = None,
     country: str | None = None,
     region: str | None = None,
@@ -414,19 +667,19 @@ async def trace_player_access(
     checks: list[dict[str, Any]] = []
 
     if uid_text:
-        notice = await _pending_notice_for_uid(uid_text, server_id=server_id)
+        notice = await _pending_notice_for_uid(uid_text, server_id=server_id, server_keys=server_keys)
         checks.append(_trace_record("kick_notice", notice is not None, notice))
         if notice:
             decision = _notice_decision(notice)
             return {"decision": decision, "checks": checks, "matched_rules": [decision]}
 
-        rule = await _first_exact_rule("uid", "allow", uid_text, server_id=server_id)
+        rule = await _first_exact_rule("uid", "allow", uid_text, server_id=server_id, server_keys=server_keys)
         checks.append(_trace_record("uid_allow", rule is not None, rule))
         if rule:
             decision = _rule_decision(rule)
             return {"decision": decision, "checks": checks, "matched_rules": [decision]}
 
-        rule = await _first_exact_rule("uid", "deny", uid_text, server_id=server_id)
+        rule = await _first_exact_rule("uid", "deny", uid_text, server_id=server_id, server_keys=server_keys)
         checks.append(_trace_record("uid_deny", rule is not None, rule))
         if rule:
             decision = _rule_decision(rule)
@@ -444,13 +697,24 @@ async def trace_player_access(
         checks.append(_trace_record("uid", False, note="uid_missing"))
 
     if ip_text:
-        rule = await _first_exact_rule("ip", "allow", ip_text, server_id=server_id) or await _matching_cidr_rule("allow", ip_text, server_id=server_id)
+        rule = await _first_exact_rule(
+            "ip",
+            "allow",
+            ip_text,
+            server_id=server_id,
+            server_keys=server_keys,
+        ) or await _matching_cidr_rule(
+            "allow",
+            ip_text,
+            server_id=server_id,
+            server_keys=server_keys,
+        )
         checks.append(_trace_record("ip_cidr_allow", rule is not None, rule))
         if rule:
             decision = _rule_decision(rule)
             return {"decision": decision, "checks": checks, "matched_rules": [decision]}
 
-        rule = await _first_exact_rule("ip", "deny", ip_text, server_id=server_id) or await _matching_cidr_rule("deny", ip_text, server_id=server_id)
+        rule = await _first_exact_rule("ip", "deny", ip_text, server_id=server_id, server_keys=server_keys) or await _matching_cidr_rule("deny", ip_text, server_id=server_id, server_keys=server_keys)
         checks.append(_trace_record("ip_cidr_deny", rule is not None, rule))
         if rule:
             decision = _rule_decision(rule)
@@ -458,7 +722,7 @@ async def trace_player_access(
     else:
         checks.append(_trace_record("ip", False, note="ip_missing"))
 
-    rule = await _matching_geo_deny_rule(ip=ip_text, country=country, region=region, server_id=server_id)
+    rule = await _matching_geo_deny_rule(ip=ip_text, country=country, region=region, server_id=server_id, server_keys=server_keys)
     checks.append(_trace_record("geo_deny", rule is not None, rule))
     if rule:
         decision = _rule_decision(rule)
@@ -537,21 +801,61 @@ async def check_player_access(
     ip: object | None,
     port: int | None = None,
     server_id: str | None = None,
+    server_ip: object | None = None,
+    server_port: object | None = None,
 ) -> dict[str, Any]:
+    identity = await resolve_access_server_identity(
+        server_id=server_id,
+        server_ip=server_ip,
+        server_port=server_port,
+        has_status=False,
+    )
+    server_keys = identity["server_keys"]
     player = await upsert_access_player_snapshot(
         uid=uid,
         nucleus_id=nucleus_id,
         player_name=player_name,
         ip=ip,
     )
-    return await evaluate_player_access(
-        uid=normalize_uid(uid, nucleus_id),
+    normalized_uid = normalize_uid(uid, nucleus_id)
+    decision = await evaluate_player_access(
+        uid=normalized_uid,
         ip=ip,
         server_id=server_id,
+        server_keys=server_keys,
         player=player,
         country=player.country if player else None,
         region=player.region if player else None,
     )
+    action = action_from_access_decision(decision)
+    log_message = (
+        "单个玩家准入检测: "
+        f"allow={bool(decision.get('allow'))}, "
+        f"uid={normalized_uid or '-'}, "
+        f"player={player_name or (player.name if player else '-')}, "
+        f"ip={_normalize_ip(ip) or '-'}, "
+        f"port={port or '-'}, "
+        f"server_id={server_id or '-'}, "
+        f"server_keys={server_keys or '-'}, "
+        f"action={action or '-'}, "
+        f"rule_id={decision.get('rule_id') or '-'}, "
+        f"reason={decision.get('reason') or '-'}"
+    )
+    if decision.get("allow"):
+        logger.info(log_message)
+    else:
+        blocked_rule = decision.get("rule") or decision.get("notice")
+        if not blocked_rule:
+            blocked_rule = {
+                "source": decision.get("source"),
+                "rule_id": decision.get("rule_id"),
+                "rule_type": decision.get("rule_type"),
+                "server_scope": decision.get("server_scope"),
+                "server_id": decision.get("server_id"),
+                "operator": decision.get("operator"),
+            }
+        logger.error(f"{log_message}, 拦截规则={json.dumps(blocked_rule, ensure_ascii=False, default=str, sort_keys=True)}")
+    return decision
 
 
 async def process_online_players_report(
@@ -559,10 +863,22 @@ async def process_online_players_report(
     server_id: str,
     report: dict[str, Any],
 ) -> dict[str, Any]:
-    server_cache.update_access_report(server_id, report)
+    identity = await resolve_access_server_identity(
+        server_id=server_id,
+        server_ip=report.get("serverIp"),
+        server_port=report.get("serverPort"),
+        map_name=report.get("map"),
+        num_players=report.get("numPlayers"),
+        max_players=report.get("maxPlayers"),
+        has_status=True,
+    )
+    server_keys = identity["server_keys"]
+    cache_server_id = identity["canonical_key"] or server_id
+    server_cache.update_access_report(cache_server_id, report)
 
+    reported_players = report.get("players") or []
     actions: list[dict[str, Any]] = []
-    for player_payload in report.get("players") or []:
+    for player_payload in reported_players:
         uid_text = normalize_uid(player_payload.get("uid"), player_payload.get("nucleusId"))
         if not uid_text:
             continue
@@ -578,6 +894,7 @@ async def process_online_players_report(
             uid=uid_text,
             ip=player_payload.get("ip"),
             server_id=server_id,
+            server_keys=server_keys,
             player=player,
             country=player.country if player else player_payload.get("country"),
             region=player.region if player else player_payload.get("region"),
@@ -597,6 +914,13 @@ async def process_online_players_report(
             action_payload["nucleusId"] = nucleus_id
         actions.append(action_payload)
 
+    logger.info(
+        "在线玩家上报: "
+        f"server_id={server_id}, players={len(reported_players)}, "
+        f"server_keys={server_keys or '-'}, "
+        f"actions={len(actions)}, map={report.get('map') or '-'}, "
+        f"num={report.get('numPlayers')}/{report.get('maxPlayers')}"
+    )
     return {"actions": actions}
 
 

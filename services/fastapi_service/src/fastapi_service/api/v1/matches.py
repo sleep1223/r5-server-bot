@@ -1,8 +1,11 @@
-from typing import Literal
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.security import HTTPAuthorizationCredentials
+from pydantic import BaseModel, ConfigDict, Field
 from shared_lib.config import settings
 
+from fastapi_service.core.auth import security_scheme
 from fastapi_service.core.errors import ErrorCode
 from fastapi_service.core.response import error, paginated, success
 from fastapi_service.services import match_service, player_service
@@ -13,6 +16,71 @@ from ..deps import Pagination, get_pagination
 router = APIRouter()
 
 
+class MatchMetrics(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    kills: int = 0
+    damage: int = 0
+    damageTaken: int = 0
+    shotsFired: int = 0
+    shotsHit: int = 0
+    accuracy: float = 0
+    accuracyPercent: float = 0
+    matches: int = 0
+    wins: int = 0
+    rankedScore: int = 0
+    characterName: str = ""
+
+
+class WeaponKill(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    weapon: str
+    kills: int
+
+
+class MatchReportPlayer(BaseModel):
+    model_config = ConfigDict(coerce_numbers_to_str=True, extra="allow")
+
+    uid: str
+    nucleusId: int
+    playerName: str
+    team: int = 0
+    lifeState: int = 0
+    eliminated: bool = False
+    metrics: MatchMetrics = Field(default_factory=MatchMetrics)
+    tracker: dict[str, Any] = Field(default_factory=dict)
+    weaponKills: list[WeaponKill] = Field(default_factory=list)
+
+
+class MatchEndReport(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    serverId: str
+    serverIp: str
+    serverPort: int
+    map: str
+    playlist: str
+    sdkVersion: str
+    tick: int
+    spawnCount: int
+    endedAt: int
+    numPlayers: int
+    maxPlayers: int
+    players: list[MatchReportPlayer] = Field(default_factory=list)
+
+
+def _verify_optional_sdk_token(credentials: HTTPAuthorizationCredentials | None) -> None:
+    if not credentials:
+        return
+    if settings.fastapi_access_tokens and credentials.credentials not in settings.fastapi_access_tokens:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="认证令牌无效",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 def _server_info(server) -> dict:
     return {
         "id": server.id,
@@ -20,6 +88,20 @@ def _server_info(server) -> dict:
         "name": server.name,
         "short_name": server.short_name,
     }
+
+
+@router.post("/matches/end")
+async def report_match_end(
+    payload: MatchEndReport,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
+):
+    """接收 SDK 在 GameShutdown 后发送的对局结算报告。"""
+    _verify_optional_sdk_token(credentials)
+    try:
+        result = await match_service.process_match_end_report(payload.model_dump(mode="json"))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return success(data=result, msg="对局结算已接收")
 
 
 @router.get("/matches/recent")

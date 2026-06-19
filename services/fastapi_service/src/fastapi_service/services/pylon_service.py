@@ -13,6 +13,7 @@ from fastapi_service.services.jwt_auth_service import (
     get_public_key_hash,
     normalize_server_endpoint,
 )
+from fastapi_service.services.player_access_service import action_reason_text
 from fastapi_service.services.pylon_db_service import (
     BanLookupResult,
     lookup_bans_by_persona_ids,
@@ -91,7 +92,8 @@ async def authenticate_client(
 
     ban = await lookup_player_ban_by_persona_id(int(user_id))
     if ban.is_banned:
-        logger.info(f"Steam 鉴权拦截已封禁玩家: user_id={user_id}, reason={ban.reason}")
+        ban_reason = action_reason_text("ban", ban.reason)
+        logger.info(f"Steam 鉴权拦截已封禁玩家: user_id={user_id}, reason={ban_reason}")
         await write_steam_auth_log(
             steam_id=int(user_id),
             persona_name=steam.persona or steam_username,
@@ -102,7 +104,7 @@ async def authenticate_client(
         )
         return _auth_error(
             403,
-            f"error: account banned ({ban.reason or 'unknown'})",
+            f"error: account banned ({ban_reason})",
         )
 
     display_name = steam.persona or steam_username or "steam_user"
@@ -160,7 +162,7 @@ def _ban_response(ban: BanLookupResult) -> dict[str, Any]:
         return {"banned": False}
     return {
         "banned": True,
-        "reason": ban.reason or "#DISCONNECT_BANNED",
+        "reason": action_reason_text("ban", ban.reason),
         "banType": ban.ban_type,
     }
 
@@ -200,7 +202,7 @@ async def bulk_check_bans(players: list[tuple[str, str | None]]) -> PylonRespons
         banned_players.append({
             "id": player_id,
             "ip": player_ip or "",
-            "reason": ban.reason or "#DISCONNECT_BANNED",
+            "reason": action_reason_text("ban", ban.reason),
             "banType": ban.ban_type,
         })
 
@@ -220,11 +222,25 @@ def get_eula() -> PylonResponse:
     )
 
 
+def _server_address_key(ip: str | None, port: int | None) -> str | None:
+    host = str(ip or "").strip()
+    try:
+        port_int = int(port or 0)
+    except (TypeError, ValueError):
+        port_int = 0
+    if not host or not port_int:
+        return None
+    return f"{host}:{port_int}"
+
+
 def add_server(*, ip: str | None, port: int | None, hidden: bool, checksum: int | None) -> PylonResponse:
     payload: dict[str, Any] = {
         "ip": ip or "",
         "port": port or 0,
     }
+    access_server_id = _server_address_key(ip, port)
+    if access_server_id:
+        payload["accessServerId"] = access_server_id
     if hidden:
         payload["token"] = f"selfhost:{checksum or 0}:{port or 0}"
     return PylonResponse(status_code=200, content=payload)

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
-from shared_lib.models import Match, Player, PlayerKilled, Server
+from loguru import logger
+from shared_lib.models import Match, Player, PlayerKilled, SdkMatchEndReport, Server
 from tortoise import connections
 from tortoise.expressions import Q
 from tortoise.functions import Count
 
 from fastapi_service.core.utils import calc_kd, get_date_range
+from fastapi_service.services import player_access_service
 
 # PlayerKilled 按 created_at 月度分区；按 match_id 聚合时用 match 时间推出
 # created_at 边界，保证分区裁剪命中。两端留 buffer 覆盖事件处理抖动。
@@ -28,6 +31,152 @@ def _pk_created_at_bounds(matches: list[dict]) -> dict:
     if ended:
         bounds["created_at__lte"] = max(ended) + _PARTITION_PRUNE_TAIL
     return bounds
+
+
+def _safe_int(value: object | None, default: int = 0) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _timestamp_to_dt(value: object) -> datetime:
+    timestamp = _safe_int(value, 0)
+    if timestamp <= 0:
+        return datetime.now(timezone.utc)
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+
+
+def _sdk_full_match_id(server: Server, ended_at: datetime) -> str:
+    server_key = str(server.server_id or server.host or server.id).replace(":", "-")
+    return f"{server_key}-{ended_at:%Y%m%d-%H%M%S}-sdk"
+
+
+async def _upsert_report_players(players: list[dict[str, Any]]) -> int:
+    count = 0
+    for player in players:
+        uid = player.get("uid")
+        nucleus_id = player.get("nucleusId")
+        if not uid and nucleus_id is None:
+            continue
+        saved = await player_access_service.upsert_access_player_snapshot(
+            uid=uid,
+            nucleus_id=nucleus_id,
+            player_name=player.get("playerName"),
+        )
+        if saved:
+            count += 1
+    return count
+
+
+async def _find_or_create_sdk_match(server: Server, report: dict[str, Any], ended_at: datetime) -> tuple[Match, bool]:
+    map_name = str(report.get("map") or "") or "unknown"
+    playlist_name = str(report.get("playlist") or "") or "unknown"
+    active = await Match.filter(server=server, status="active").order_by("-started_at").first()
+    updates = {
+        "map_name": map_name,
+        "playlist_name": playlist_name,
+        "playlist_desc": playlist_name,
+        "ended_at": ended_at,
+        "status": "completed",
+        "end_reason": "sdk_match_end",
+        "current_state": "WinnerDetermined",
+        "has_entered_playing": True,
+    }
+    if active:
+        await Match.filter(id=active.id).update(**updates)
+        for key, value in updates.items():
+            setattr(active, key, value)
+        return active, False
+
+    full_match_id = _sdk_full_match_id(server, ended_at)
+    existing = await Match.get_or_none(full_match_id=full_match_id)
+    if existing:
+        await Match.filter(id=existing.id).update(**updates)
+        for key, value in updates.items():
+            setattr(existing, key, value)
+        return existing, False
+
+    match = await Match.create(
+        full_match_id=full_match_id,
+        server=server,
+        map_name=map_name,
+        playlist_name=playlist_name,
+        playlist_desc=playlist_name,
+        datacenter=None,
+        aim_assist_on=False,
+        started_at=ended_at,
+        ended_at=ended_at,
+        status="completed",
+        end_reason="sdk_match_end",
+        current_state="WinnerDetermined",
+        has_entered_playing=True,
+    )
+    return match, True
+
+
+async def process_match_end_report(report: dict[str, Any]) -> dict[str, Any]:
+    server_identifier = str(report.get("serverId") or "").strip()
+    ended_at = _timestamp_to_dt(report.get("endedAt"))
+    players = [player for player in report.get("players") or [] if isinstance(player, dict)]
+
+    server = await player_access_service.upsert_sdk_server_snapshot(
+        server_id=server_identifier,
+        server_ip=report.get("serverIp"),
+        server_port=report.get("serverPort"),
+        map_name=report.get("map"),
+        num_players=report.get("numPlayers"),
+        max_players=report.get("maxPlayers"),
+        has_status=True,
+    )
+    if server is None:
+        raise ValueError("serverIp/serverPort 无效，无法创建或关联服务器")
+
+    player_count = await _upsert_report_players(players)
+    match, created_match = await _find_or_create_sdk_match(server, report, ended_at)
+
+    report_values = {
+        "server_id": server.id,
+        "match_id": match.id,
+        "server_identifier": server_identifier,
+        "server_ip": str(report.get("serverIp") or "") or None,
+        "server_port": _safe_int(report.get("serverPort"), 0) or None,
+        "map_name": str(report.get("map") or "") or None,
+        "playlist_name": str(report.get("playlist") or "") or None,
+        "sdk_version": str(report.get("sdkVersion") or "") or None,
+        "tick": _safe_int(report.get("tick"), 0) or None,
+        "spawn_count": _safe_int(report.get("spawnCount"), 0),
+        "ended_at": ended_at,
+        "num_players": _safe_int(report.get("numPlayers"), len(players)),
+        "max_players": _safe_int(report.get("maxPlayers"), 0),
+        "payload": report,
+    }
+    existing_report = await SdkMatchEndReport.filter(
+        server_identifier=server_identifier,
+        ended_at=ended_at,
+        tick=report_values["tick"],
+    ).first()
+    if existing_report:
+        await SdkMatchEndReport.filter(id=existing_report.id).update(**report_values)
+        report_id = existing_report.id
+    else:
+        saved_report = await SdkMatchEndReport.create(**report_values)
+        report_id = saved_report.id
+
+    logger.info(
+        "对局结束上报: "
+        f"server_id={server_identifier or server.id}, report_id={report_id}, "
+        f"match_id={match.id}, players={player_count}/{len(players)}, "
+        f"created_match={created_match}, map={report_values['map_name'] or '-'}, "
+        f"playlist={report_values['playlist_name'] or '-'}"
+    )
+    return {
+        "report_id": report_id,
+        "server_id": server.id,
+        "match_id": match.id,
+        "created_match": created_match,
+        "players": player_count,
+    }
 
 
 async def get_recent_matches(

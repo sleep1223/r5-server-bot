@@ -91,6 +91,8 @@ class ServerCache:
 
         self._access_reports[server_key] = {
             "server_id": server_key,
+            "server_host": data.get("serverIp"),
+            "server_port": data.get("serverPort"),
             "map": data.get("map"),
             "tick": data.get("tick"),
             "num_players": data.get("numPlayers"),
@@ -115,11 +117,13 @@ class ServerCache:
                     continue
                 if str(p_data.get("uniqueid")) != p_id_str:
                     continue
+                server_host = report.get("server_host") or server_id
+                server_port = report.get("server_port") or 0
                 return {
                     "server_id": server_id,
                     "server_name": server_id,
-                    "server_host": server_id,
-                    "server_port": 0,
+                    "server_host": server_host,
+                    "server_port": server_port,
                     "online_at": updated_at,
                     "ping": 0,
                     "player_ip": p_data.get("ip"),
