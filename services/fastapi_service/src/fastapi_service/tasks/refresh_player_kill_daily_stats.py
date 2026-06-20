@@ -77,6 +77,34 @@ events AS (
       AND pk.attacker_id IS NOT NULL
       AND pk.victim_id IS NOT NULL
       AND pk.attacker_id <> pk.victim_id
+
+    UNION ALL
+
+    SELECT
+        (COALESCE(m.ended_at, m.started_at, pmws.created_at) AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
+        pmws.server_id,
+        pmws.player_id,
+        NULL::int AS opponent_id,
+        COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown') AS weapon,
+        pmws.kills AS kills,
+        0 AS deaths,
+        0 AS awarded_kills
+    FROM player_match_weapon_stats pmws
+    JOIN matches m ON m.id = pmws.match_id
+    CROSS JOIN bounds b
+    WHERE COALESCE(m.ended_at, m.started_at, pmws.created_at) >= b.start_ts
+      AND COALESCE(m.ended_at, m.started_at, pmws.created_at) <  b.end_ts
+      AND pmws.server_id IS NOT NULL
+      AND pmws.player_id IS NOT NULL
+      AND pmws.kills > 0
+      AND NOT EXISTS (
+          SELECT 1
+          FROM player_killed pk_existing
+          WHERE pk_existing.match_id = pmws.match_id
+            AND pk_existing.created_at >= b.start_ts - interval '2 hours'
+            AND pk_existing.created_at <  b.end_ts + interval '30 minutes'
+            AND pk_existing.attacker_id IS NOT NULL
+      )
 )
 INSERT INTO player_kill_daily_weapon_opponent_stats (
     stat_date,

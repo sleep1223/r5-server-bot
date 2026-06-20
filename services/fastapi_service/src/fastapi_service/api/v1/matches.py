@@ -39,6 +39,20 @@ class WeaponKill(BaseModel):
     kills: int
 
 
+class WeaponStat(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    weapon: str
+    shots: int = 0
+    hits: int = 0
+    bulletsHit: float = 0
+    damage: float = 0
+    headshots: int = 0
+    kills: int = 0
+    accuracy: float = 0
+    accuracyPercent: float = 0
+
+
 class MatchReportPlayer(BaseModel):
     model_config = ConfigDict(coerce_numbers_to_str=True, extra="allow")
 
@@ -51,6 +65,22 @@ class MatchReportPlayer(BaseModel):
     metrics: MatchMetrics = Field(default_factory=MatchMetrics)
     tracker: dict[str, Any] = Field(default_factory=dict)
     weaponKills: list[WeaponKill] = Field(default_factory=list)
+    weaponStats: list[WeaponStat] = Field(default_factory=list)
+
+
+class MatchKillEvent(BaseModel):
+    model_config = ConfigDict(coerce_numbers_to_str=True, extra="allow")
+
+    tick: int | None = None
+    recordedAt: int | None = None
+    damageSourceId: int | None = None
+    attackerUid: str | None = None
+    attackerNucleusId: int | None = None
+    attackerName: str | None = None
+    victimUid: str | None = None
+    victimNucleusId: int | None = None
+    victimName: str | None = None
+    weapon: str = "unknown"
 
 
 class MatchEndReport(BaseModel):
@@ -68,6 +98,7 @@ class MatchEndReport(BaseModel):
     numPlayers: int
     maxPlayers: int
     players: list[MatchReportPlayer] = Field(default_factory=list)
+    killEvents: list[MatchKillEvent] = Field(default_factory=list)
 
 
 def _verify_optional_sdk_token(credentials: HTTPAuthorizationCredentials | None) -> None:

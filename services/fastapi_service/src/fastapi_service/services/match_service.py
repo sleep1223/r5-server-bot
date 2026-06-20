@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from loguru import logger
-from shared_lib.models import Match, Player, PlayerKilled, SdkMatchEndReport, Server
+from shared_lib.models import Match, Player, PlayerKilled, PlayerMatchWeaponStat, SdkMatchEndReport, Server
 from tortoise import connections
 from tortoise.expressions import Q
 from tortoise.functions import Count
@@ -16,6 +16,7 @@ from fastapi_service.services import player_access_service
 # created_at 边界，保证分区裁剪命中。两端留 buffer 覆盖事件处理抖动。
 _PARTITION_PRUNE_LEAD = timedelta(hours=2)  # match started_at 之前写入的事件容差
 _PARTITION_PRUNE_TAIL = timedelta(minutes=30)  # ended_at 之后仍可能写入的尾巴
+_SDK_MATCH_END_CATEGORY = "sdk_match_end"
 
 
 def _pk_created_at_bounds(matches: list[dict]) -> dict:
@@ -40,6 +41,13 @@ def _safe_int(value: object | None, default: int = 0) -> int:
         return default
 
 
+def _safe_float(value: object | None, default: float = 0.0) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 def _timestamp_to_dt(value: object) -> datetime:
     timestamp = _safe_int(value, 0)
     if timestamp <= 0:
@@ -52,8 +60,42 @@ def _sdk_full_match_id(server: Server, ended_at: datetime) -> str:
     return f"{server_key}-{ended_at:%Y%m%d-%H%M%S}-sdk"
 
 
-async def _upsert_report_players(players: list[dict[str, Any]]) -> int:
+def _cache_player_aliases(
+    player_map: dict[str, Player],
+    player: Player,
+    *,
+    uid: object | None = None,
+    nucleus_id: object | None = None,
+) -> None:
+    for value in (
+        player_access_service.normalize_uid(uid, nucleus_id),
+        player_access_service.normalize_uid(uid),
+        player_access_service.normalize_uid(nucleus_id),
+        player_access_service.normalize_uid(player.nucleus_id),
+    ):
+        if value:
+            player_map[value] = player
+
+
+def _lookup_report_player(
+    player_map: dict[str, Player],
+    *,
+    uid: object | None = None,
+    nucleus_id: object | None = None,
+) -> Player | None:
+    for value in (
+        player_access_service.normalize_uid(uid, nucleus_id),
+        player_access_service.normalize_uid(uid),
+        player_access_service.normalize_uid(nucleus_id),
+    ):
+        if value and value in player_map:
+            return player_map[value]
+    return None
+
+
+async def _upsert_report_players(players: list[dict[str, Any]]) -> tuple[int, dict[str, Player]]:
     count = 0
+    player_map: dict[str, Player] = {}
     for player in players:
         uid = player.get("uid")
         nucleus_id = player.get("nucleusId")
@@ -66,7 +108,8 @@ async def _upsert_report_players(players: list[dict[str, Any]]) -> int:
         )
         if saved:
             count += 1
-    return count
+            _cache_player_aliases(player_map, saved, uid=uid, nucleus_id=nucleus_id)
+    return count, player_map
 
 
 async def _find_or_create_sdk_match(server: Server, report: dict[str, Any], ended_at: datetime) -> tuple[Match, bool]:
@@ -115,6 +158,82 @@ async def _find_or_create_sdk_match(server: Server, report: dict[str, Any], ende
     return match, True
 
 
+def _weapon_stats_from_payload(player_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    weapon_stats = [stat for stat in player_payload.get("weaponStats") or [] if isinstance(stat, dict)]
+    if weapon_stats:
+        return weapon_stats
+
+    fallback_stats: list[dict[str, Any]] = []
+    for weapon_kill in player_payload.get("weaponKills") or []:
+        if not isinstance(weapon_kill, dict):
+            continue
+        fallback_stats.append(
+            {
+                "weapon": weapon_kill.get("weapon"),
+                "kills": weapon_kill.get("kills"),
+            }
+        )
+    return fallback_stats
+
+
+async def _save_sdk_weapon_stats(
+    *,
+    match: Match,
+    server: Server,
+    players: list[dict[str, Any]],
+    player_map: dict[str, Player],
+) -> int:
+    await PlayerMatchWeaponStat.filter(match=match, source=_SDK_MATCH_END_CATEGORY).delete()
+
+    rows: list[PlayerMatchWeaponStat] = []
+    for player_payload in players:
+        player = _lookup_report_player(
+            player_map,
+            uid=player_payload.get("uid"),
+            nucleus_id=player_payload.get("nucleusId"),
+        )
+        if player is None:
+            continue
+
+        for stat in _weapon_stats_from_payload(player_payload):
+            weapon = str(stat.get("weapon") or "").strip() or "unknown"
+            shots = max(_safe_int(stat.get("shots"), 0), 0)
+            hits = max(_safe_int(stat.get("hits"), 0), 0)
+            bullets_hit = max(_safe_float(stat.get("bulletsHit"), 0.0), 0.0)
+            damage = max(_safe_float(stat.get("damage"), 0.0), 0.0)
+            headshots = max(_safe_int(stat.get("headshots"), 0), 0)
+            kills = max(_safe_int(stat.get("kills"), 0), 0)
+
+            accuracy = _safe_float(stat.get("accuracy"), -1.0)
+            if accuracy < 0.0:
+                accuracy = float(hits) / float(shots) if shots > 0 else 0.0
+            accuracy_percent = _safe_float(stat.get("accuracyPercent"), -1.0)
+            if accuracy_percent < 0.0:
+                accuracy_percent = accuracy * 100.0
+
+            rows.append(
+                PlayerMatchWeaponStat(
+                    player=player,
+                    match=match,
+                    server=server,
+                    weapon=weapon,
+                    shots=shots,
+                    hits=hits,
+                    bullets_hit=bullets_hit,
+                    damage=damage,
+                    headshots=headshots,
+                    kills=kills,
+                    accuracy=accuracy,
+                    accuracy_percent=accuracy_percent,
+                    source=_SDK_MATCH_END_CATEGORY,
+                )
+            )
+
+    if rows:
+        await PlayerMatchWeaponStat.bulk_create(rows)
+    return len(rows)
+
+
 async def process_match_end_report(report: dict[str, Any]) -> dict[str, Any]:
     server_identifier = str(report.get("serverId") or "").strip()
     ended_at = _timestamp_to_dt(report.get("endedAt"))
@@ -132,7 +251,8 @@ async def process_match_end_report(report: dict[str, Any]) -> dict[str, Any]:
     if server is None:
         raise ValueError("serverIp/serverPort 无效，无法创建或关联服务器")
 
-    player_count = await _upsert_report_players(players)
+    player_count, player_map = await _upsert_report_players(players)
+    kill_events = [event for event in report.get("killEvents") or [] if isinstance(event, dict)]
     match, created_match = await _find_or_create_sdk_match(server, report, ended_at)
 
     report_values = {
@@ -163,10 +283,18 @@ async def process_match_end_report(report: dict[str, Any]) -> dict[str, Any]:
         saved_report = await SdkMatchEndReport.create(**report_values)
         report_id = saved_report.id
 
+    weapon_stat_count = await _save_sdk_weapon_stats(
+        match=match,
+        server=server,
+        players=players,
+        player_map=player_map,
+    )
+
     logger.info(
         "对局结束上报: "
         f"server_id={server_identifier or server.id}, report_id={report_id}, "
         f"match_id={match.id}, players={player_count}/{len(players)}, "
+        f"kill_events={len(kill_events)}, weapon_stats={weapon_stat_count}, "
         f"created_match={created_match}, map={report_values['map_name'] or '-'}, "
         f"playlist={report_values['playlist_name'] or '-'}"
     )
@@ -176,6 +304,8 @@ async def process_match_end_report(report: dict[str, Any]) -> dict[str, Any]:
         "match_id": match.id,
         "created_match": created_match,
         "players": player_count,
+        "kill_events": len(kill_events),
+        "weapon_stats": weapon_stat_count,
     }
 
 

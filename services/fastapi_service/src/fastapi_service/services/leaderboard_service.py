@@ -320,6 +320,21 @@ async def get_player_vs_all(
     )
     where_sql = _extend_where_sql(where_sql, f"s.player_id = {_append_param(params, player_id)}")
 
+    total_rows = await connections.get("default").execute_query_dict(
+        f"""
+        SELECT
+            COALESCE(SUM(s.kills), 0)::int AS kills,
+            COALESCE(SUM(s.deaths), 0)::int AS deaths
+        FROM {_DAILY_STATS_TABLE} s
+        {where_sql}
+        """,
+        params,
+    )
+    total_row = total_rows[0] if total_rows else {"kills": 0, "deaths": 0}
+    total_kills = total_row["kills"] or 0
+    total_deaths = total_row["deaths"] or 0
+    opponent_where_sql = _extend_where_sql(where_sql, "s.opponent_id IS NOT NULL")
+
     rows = await connections.get("default").execute_query_dict(
         f"""
         SELECT
@@ -327,7 +342,7 @@ async def get_player_vs_all(
             SUM(s.kills)::int AS kills,
             SUM(s.deaths)::int AS deaths
         FROM {_DAILY_STATS_TABLE} s
-        {where_sql}
+        {opponent_where_sql}
         GROUP BY s.opponent_id
         HAVING SUM(s.kills) > 0 OR SUM(s.deaths) > 0
         """,
@@ -339,7 +354,7 @@ async def get_player_vs_all(
         opponents_stats[row["opponent_id"]] = {"kills": row["kills"] or 0, "deaths": row["deaths"] or 0}
 
     if not opponents_stats:
-        return [], 0, _build_vs_all_summary(0, 0, None, None)
+        return [], 0, _build_vs_all_summary(total_kills, total_deaths, None, None)
 
     op_map = await _enrich_with_player_names(opponents_stats)
 
@@ -356,9 +371,6 @@ async def get_player_vs_all(
         })
 
     _sort_results(results, sort)
-
-    total_kills = sum(data["kills"] for data in opponents_stats.values())
-    total_deaths = sum(data["deaths"] for data in opponents_stats.values())
 
     # Enemy KD for worst enemy detection
     for r in results:

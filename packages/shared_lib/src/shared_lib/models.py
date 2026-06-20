@@ -139,11 +139,39 @@ class PlayerKilled(BaseEvent):
         # created_at 索引和复合 PK 由 PG 分区建表 SQL 创建，不再由 Tortoise generate_schemas 管理
 
 
+class PlayerMatchWeaponStat(models.Model):
+    id = fields.IntField(pk=True)
+    player = fields.ForeignKeyField("models.Player", related_name="match_weapon_stats")
+    match = fields.ForeignKeyField("models.Match", related_name="weapon_stats")
+    server = fields.ForeignKeyField("models.Server", related_name="match_weapon_stats")
+    weapon = fields.CharField(max_length=100, db_index=True)
+    shots = fields.IntField(default=0)
+    hits = fields.IntField(default=0)
+    bullets_hit = fields.FloatField(default=0)
+    damage = fields.FloatField(default=0)
+    headshots = fields.IntField(default=0)
+    kills = fields.IntField(default=0)
+    accuracy = fields.FloatField(default=0)
+    accuracy_percent = fields.FloatField(default=0)
+    source = fields.CharField(max_length=30, default="sdk_match_end", db_index=True)
+    created_at = fields.DatetimeField(auto_now_add=True)
+    updated_at = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "player_match_weapon_stats"
+        unique_together = (("match", "player", "weapon", "source"),)
+        indexes = (
+            ("match_id", "player_id"),
+            ("player_id", "weapon"),
+            ("server_id", "weapon"),
+        )
+
+
 class PlayerKillDailyWeaponOpponentStat(models.Model):
     id = fields.BigIntField(pk=True)
     stat_date = fields.DateField(db_index=True)
     player = fields.ForeignKeyField("models.Player", related_name="daily_weapon_opponent_stats")
-    opponent = fields.ForeignKeyField("models.Player", related_name="daily_opponent_weapon_stats")
+    opponent = fields.ForeignKeyField("models.Player", related_name="daily_opponent_weapon_stats", null=True)
     server = fields.ForeignKeyField("models.Server", related_name="daily_weapon_opponent_stats")
     weapon = fields.CharField(max_length=100, db_index=True)
     kills = fields.IntField(default=0)
