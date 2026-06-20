@@ -1610,10 +1610,43 @@ async def create_access_notice(
     expires_at: datetime | None = None,
 ) -> PlayerAccessNotice:
     scope, normalized_server_id = _normalize_server_scope(server_scope, server_id)
+    uid_text = normalize_uid(uid)
+    action_text = str(action or "").strip().lower()
+    if action_text == "kick":
+        existing_notice = await (
+            PlayerAccessNotice.filter(
+                uid=uid_text,
+                action="kick",
+                server_scope=scope,
+                server_id=normalized_server_id,
+                requires_ack=True,
+                acknowledged_at__isnull=True,
+            )
+            .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=_now()))
+            .order_by("-created_at", "-id")
+            .first()
+        )
+        if existing_notice:
+            next_context = dict(message_context or {})
+            next_context["pending_notice_reused"] = True
+            updates = {
+                "player_id": player.id,
+                "reason": (reason or "").strip() or None,
+                "message": (message or "").strip() or None,
+                "message_context": next_context,
+                "operation_id": operation.id if operation else None,
+                "expires_at": expires_at,
+                "updated_at": _now(),
+            }
+            await PlayerAccessNotice.filter(id=existing_notice.id).update(**updates)
+            for key, value in updates.items():
+                setattr(existing_notice, key, value)
+            return existing_notice
+
     return await PlayerAccessNotice.create(
         player_id=player.id,
-        uid=normalize_uid(uid),
-        action=action,
+        uid=uid_text,
+        action=action_text,
         reason=(reason or "").strip() or None,
         message=(message or "").strip() or None,
         message_context=message_context,
@@ -1623,6 +1656,133 @@ async def create_access_notice(
         operation_id=operation.id if operation else None,
         expires_at=expires_at,
     )
+
+
+async def sync_legacy_access_records(*, batch_size: int = 5000) -> dict[str, int]:
+    """Backfill old ban/kick state into access-rule/notice tables.
+
+    Older admin paths wrote only players.status / ban_records / kick_count. The
+    SDK access pipeline now reads PlayerAccessRule and PlayerAccessNotice first,
+    so this keeps historical state visible and enforceable without migrations.
+    """
+    stats = {
+        "banned_checked": 0,
+        "ban_rules_created": 0,
+        "kick_checked": 0,
+        "kick_notices_created": 0,
+    }
+    batch_size = max(1, batch_size)
+
+    offset = 0
+    while True:
+        banned_players = await (
+            Player.filter(status="banned", nucleus_id__isnull=False)
+            .order_by("-updated_at", "-id")
+            .offset(offset)
+            .limit(batch_size)
+        )
+        if not banned_players:
+            break
+        offset += batch_size
+
+        uid_by_player_id = {
+            player.id: uid
+            for player in banned_players
+            if (uid := normalize_uid(player.nucleus_id))
+        }
+        existing_rule_values = set()
+        if uid_by_player_id:
+            existing_rule_values = set(
+                await PlayerAccessRule.filter(
+                    rule_type="uid",
+                    action="deny",
+                    value__in=list(set(uid_by_player_id.values())),
+                    enabled=True,
+                ).values_list("value", flat=True)
+            )
+
+        for player in banned_players:
+            uid = uid_by_player_id.get(player.id)
+            if not uid:
+                continue
+            stats["banned_checked"] += 1
+            if uid in existing_rule_values:
+                continue
+
+            record = await BanRecord.filter(player=player).order_by("-created_at", "-id").first()
+            rule = await ensure_uid_blacklist_rule(
+                player,
+                record.reason if record else "RULES",
+                record.operator if record else "legacy_sync",
+                source_action="ban",
+            )
+            if rule:
+                existing_rule_values.add(uid)
+                stats["ban_rules_created"] += 1
+
+    offset = 0
+    while True:
+        kicked_players = await (
+            Player.filter(Q(kick_count__gt=0) | Q(status="kicked"), nucleus_id__isnull=False)
+            .exclude(status="banned")
+            .order_by("-updated_at", "-id")
+            .offset(offset)
+            .limit(batch_size)
+        )
+        if not kicked_players:
+            break
+        offset += batch_size
+
+        uid_by_player_id = {
+            player.id: uid
+            for player in kicked_players
+            if (uid := normalize_uid(player.nucleus_id))
+        }
+        existing_notice_uids: set[str] = set()
+        existing_notice_player_ids: set[int] = set()
+        if uid_by_player_id:
+            notice_rows = await PlayerAccessNotice.filter(
+                Q(uid__in=list(set(uid_by_player_id.values())))
+                | Q(player_id__in=list(uid_by_player_id.keys()))
+            ).values("uid", "player_id")
+            existing_notice_uids = {
+                str(row["uid"])
+                for row in notice_rows
+                if row.get("uid") is not None
+            }
+            existing_notice_player_ids = {
+                int(row["player_id"])
+                for row in notice_rows
+                if row.get("player_id") is not None
+            }
+
+        for player in kicked_players:
+            uid = uid_by_player_id.get(player.id)
+            if not uid:
+                continue
+            stats["kick_checked"] += 1
+            if uid in existing_notice_uids or player.id in existing_notice_player_ids:
+                continue
+
+            await create_access_notice(
+                player=player,
+                uid=uid,
+                action="kick",
+                reason="RULES",
+                message=_kick_reason("RULES"),
+                message_context={
+                    "legacy_sync": True,
+                    "kick_count": player.kick_count,
+                    "player_status": player.status,
+                },
+                server_scope="global",
+                server_id=None,
+            )
+            existing_notice_uids.add(uid)
+            existing_notice_player_ids.add(player.id)
+            stats["kick_notices_created"] += 1
+
+    return stats
 
 
 async def list_access_notices(

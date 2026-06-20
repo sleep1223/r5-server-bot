@@ -234,6 +234,8 @@ async def admin_get_player(identifier: int | str, access_server_id: str | None =
 
 @router.get("/players/{identifier}/access-matches")
 async def admin_get_player_access_matches(identifier: int | str, access_server_id: str | None = None, binding: UserBinding = Depends(verify_admin_app_key)):
+    _require_super_admin(binding)
+
     player, err = await player_service.get_player_by_identifier(identifier)
     if err:
         return err
@@ -246,8 +248,6 @@ async def admin_get_player_access_matches(identifier: int | str, access_server_i
         country=player.country,
         region=player.region,
     )
-    if not is_super_admin_binding(binding):
-        data = _sanitize_access_trace_for_regular_admin(data)
     return success(data=data, msg="玩家准入匹配结果已获取")
 
 
@@ -408,10 +408,7 @@ async def admin_list_access_rules(
     pg: Pagination = Depends(get_pagination),
     binding: UserBinding = Depends(verify_admin_app_key),
 ):
-    if not is_super_admin_binding(binding):
-        if action == "allow":
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="普通管理员只能查看黑名单")
-        action = "deny"
+    _require_super_admin(binding)
 
     items, total = await player_access_service.list_access_rules(
         q=q,
@@ -478,11 +475,11 @@ async def admin_create_access_rule(body: AccessRuleCreateBody):
 
 @router.get("/access-rules/{rule_db_id}")
 async def admin_get_access_rule(rule_db_id: int, binding: UserBinding = Depends(verify_admin_app_key)):
+    _require_super_admin(binding)
+
     rule = await player_access_service.get_access_rule(rule_db_id)
     if not rule:
         return error(ErrorCode.SERVER_NOT_FOUND, f"未找到准入规则: {rule_db_id}")
-    if not is_super_admin_binding(binding) and rule.action != "deny":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="普通管理员只能查看黑名单")
     return success(data=player_access_service.serialize_access_rule(rule), msg="准入规则已获取")
 
 

@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+import time
+from math import ceil
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, ConfigDict, Field
 from shared_lib.config import settings
@@ -16,6 +19,9 @@ from ..deps import Pagination, get_pagination
 
 router = APIRouter()
 
+SELF_UNBAN_IP_RATE_LIMIT_SECONDS = 60.0
+_SELF_UNBAN_IP_LAST_SUCCESS: dict[str, float] = {}
+
 
 class SelfUnbanBody(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -24,6 +30,51 @@ class SelfUnbanBody(BaseModel):
     nucleus_id: int | None = None
     operation_id: int | None = None
     confirmation_text: str = Field(..., min_length=1)
+
+
+def _request_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    if forwarded_for:
+        first_ip = forwarded_for.split(",", 1)[0].strip()
+        if first_ip:
+            return first_ip
+
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if real_ip:
+        return real_ip
+
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _prune_self_unban_ip_rate_limit(now: float) -> None:
+    expired_ips = [
+        ip
+        for ip, last_success_at in _SELF_UNBAN_IP_LAST_SUCCESS.items()
+        if now - last_success_at >= SELF_UNBAN_IP_RATE_LIMIT_SECONDS
+    ]
+    for ip in expired_ips:
+        _SELF_UNBAN_IP_LAST_SUCCESS.pop(ip, None)
+
+
+def _reserve_self_unban_ip_slot(ip: str, *, now: float | None = None) -> tuple[float | None, int]:
+    current = time.monotonic() if now is None else now
+    _prune_self_unban_ip_rate_limit(current)
+
+    last_success_at = _SELF_UNBAN_IP_LAST_SUCCESS.get(ip)
+    if last_success_at is not None:
+        remaining = SELF_UNBAN_IP_RATE_LIMIT_SECONDS - (current - last_success_at)
+        if remaining > 0:
+            return None, ceil(remaining)
+
+    _SELF_UNBAN_IP_LAST_SUCCESS[ip] = current
+    return current, 0
+
+
+def _release_self_unban_ip_slot(ip: str, reserved_at: float | None) -> None:
+    if reserved_at is not None and _SELF_UNBAN_IP_LAST_SUCCESS.get(ip) == reserved_at:
+        _SELF_UNBAN_IP_LAST_SUCCESS.pop(ip, None)
 
 
 @router.post("/players/{nucleus_id_or_player_name}/kick", dependencies=[Depends(verify_token)])
@@ -295,7 +346,16 @@ async def get_ban_list(
 
 
 @router.post("/bans/self-unban")
-async def self_unban_player(body: SelfUnbanBody):
+async def self_unban_player(request: Request, body: SelfUnbanBody):
+    client_ip = _request_ip(request)
+    reserved_at, retry_after_seconds = _reserve_self_unban_ip_slot(client_ip)
+    if retry_after_seconds > 0:
+        return error(
+            ErrorCode.INVALID_REASON,
+            f"同一 IP 每分钟只能自助解封一次，请 {retry_after_seconds} 秒后再试",
+            retry_after_seconds=retry_after_seconds,
+        )
+
     data, err = await admin_service.self_unban_player(
         player_name=body.player_name,
         nucleus_id=body.nucleus_id,
@@ -303,5 +363,6 @@ async def self_unban_player(body: SelfUnbanBody):
         confirmation_text=body.confirmation_text,
     )
     if err:
+        _release_self_unban_ip_slot(client_ip, reserved_at)
         return err
-    return success(data=data, msg="已确认规则，自助解封已提交")
+    return success(data=data, msg="已确认规则，自助解封已提交", retry_after_seconds=int(SELF_UNBAN_IP_RATE_LIMIT_SECONDS))

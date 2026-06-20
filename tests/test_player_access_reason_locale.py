@@ -2,7 +2,7 @@ import unittest
 
 from fastapi_service.core.utils import generate_hash
 from fastapi_service.services import player_access_service as access_service
-from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessRule
+from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule
 from tortoise import Tortoise
 
 TORTOISE_TEST_CONFIG = {
@@ -445,6 +445,118 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(decision["allow"])
         self.assertIsNone(decision["reason"])
         self.assertEqual(decision["rule"]["rule_id"], "allow-banned-uid")
+
+    async def test_legacy_access_sync_backfills_bans_and_kick_notices_once(self) -> None:
+        banned = await Player.create(
+            nucleus_id=1000000000101,
+            nucleus_hash=generate_hash("1000000000101"),
+            name="legacy-banned",
+            status="banned",
+        )
+        await BanRecord.create(player=banned, reason="NO_COVER", operator="legacy-admin")
+
+        kicked = await Player.create(
+            nucleus_id=1000000000102,
+            nucleus_hash=generate_hash("1000000000102"),
+            name="legacy-kicked",
+            status="offline",
+            kick_count=1,
+        )
+
+        banned_with_kick_count = await Player.create(
+            nucleus_id=1000000000103,
+            nucleus_hash=generate_hash("1000000000103"),
+            name="legacy-banned-kicked",
+            status="banned",
+            kick_count=1,
+        )
+        await BanRecord.create(player=banned_with_kick_count, reason="CHEAT", operator="legacy-admin")
+
+        existing_notice_player = await Player.create(
+            nucleus_id=1000000000104,
+            nucleus_hash=generate_hash("1000000000104"),
+            name="legacy-kicked-existing",
+            status="offline",
+            kick_count=1,
+        )
+        await PlayerAccessNotice.create(
+            player=existing_notice_player,
+            uid=str(existing_notice_player.nucleus_id),
+            action="kick",
+            reason="RULES",
+            requires_ack=True,
+        )
+
+        stats = await access_service.sync_legacy_access_records()
+
+        self.assertEqual(stats["ban_rules_created"], 2)
+        self.assertEqual(stats["kick_notices_created"], 1)
+        self.assertTrue(await PlayerAccessRule.filter(rule_type="uid", value=str(banned.nucleus_id), enabled=True).exists())
+        self.assertTrue(await PlayerAccessRule.filter(rule_type="uid", value=str(banned_with_kick_count.nucleus_id), enabled=True).exists())
+        self.assertEqual(await PlayerAccessNotice.filter(uid=str(kicked.nucleus_id)).count(), 1)
+        self.assertEqual(await PlayerAccessNotice.filter(uid=str(banned_with_kick_count.nucleus_id)).count(), 0)
+        self.assertEqual(await PlayerAccessNotice.filter(uid=str(existing_notice_player.nucleus_id)).count(), 1)
+
+        second_stats = await access_service.sync_legacy_access_records()
+
+        self.assertEqual(second_stats["ban_rules_created"], 0)
+        self.assertEqual(second_stats["kick_notices_created"], 0)
+
+    async def test_create_access_notice_reuses_pending_kick_notice(self) -> None:
+        player = await Player.create(
+            nucleus_id=1000000000105,
+            nucleus_hash=generate_hash("1000000000105"),
+            name="pending-kick-reuse",
+            status="kicked",
+        )
+        first_operation = await PlayerAccessOperation.create(
+            action="kick",
+            target_type="player",
+            target_value=str(player.nucleus_id),
+            normalized_target=str(player.nucleus_id),
+            server_scope="global",
+            reason="RULES",
+            player=player,
+        )
+        second_operation = await PlayerAccessOperation.create(
+            action="kick",
+            target_type="player",
+            target_value=str(player.nucleus_id),
+            normalized_target=str(player.nucleus_id),
+            server_scope="global",
+            reason="NO_COVER",
+            player=player,
+        )
+
+        first_notice = await access_service.create_access_notice(
+            player=player,
+            uid=player.nucleus_id,
+            action="kick",
+            reason="RULES",
+            message="first",
+            message_context={"remark": "first"},
+            server_scope="global",
+            server_id=None,
+            operation=first_operation,
+        )
+        second_notice = await access_service.create_access_notice(
+            player=player,
+            uid=player.nucleus_id,
+            action="kick",
+            reason="NO_COVER",
+            message="second",
+            message_context={"remark": "second"},
+            server_scope="global",
+            server_id=None,
+            operation=second_operation,
+        )
+
+        self.assertEqual(first_notice.id, second_notice.id)
+        self.assertEqual(await PlayerAccessNotice.filter(uid=str(player.nucleus_id), requires_ack=True).count(), 1)
+        self.assertEqual(second_notice.reason, "NO_COVER")
+        self.assertEqual(getattr(second_notice, "operation_id", None), second_operation.id)
+        self.assertEqual(second_notice.message_context["remark"], "second")
+        self.assertTrue(second_notice.message_context["pending_notice_reused"])
 
 
 if __name__ == "__main__":

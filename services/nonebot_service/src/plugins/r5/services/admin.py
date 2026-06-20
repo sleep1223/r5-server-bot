@@ -86,6 +86,26 @@ def _rcon_summary(data: dict) -> str:
     return f"🔄 RCON 成功: {success_count}/{total}"
 
 
+def _player_display(player: dict, fallback: str) -> str:
+    name = player.get("name") or fallback
+    uid = player.get("nucleus_id")
+    return f"{name} ({uid})" if uid else name
+
+
+def _kick_notice_summary(data: dict) -> str:
+    notice = data.get("notice") or {}
+    if not notice:
+        return ""
+
+    context = notice.get("message_context") or {}
+    reused = bool(context.get("pending_notice_reused"))
+    status = "已复用待确认记录" if reused else "已创建待确认记录"
+    return (
+        f"\n📩 Kick 确认: {status} #{notice.get('id')}\n"
+        "🔗 自助解除: https://r5.sleep0.de/bans"
+    )
+
+
 @cmd_ban.handle()
 @ban_service.patch_handler()
 async def handle_ban(bot: Bot, event: Event, args: Message = CommandArg()) -> None:
@@ -119,8 +139,7 @@ async def handle_ban(bot: Bot, event: Event, args: Message = CommandArg()) -> No
 
         data = res.get("data") or {}
         player = data.get("player") or {}
-        player_name = player.get("name") or target
-        await cmd_ban.finish(f"🔨 封禁已提交\n\n👤 玩家: {player_name}\n📌 原因: {reason_cn}\n{_rcon_summary(data)}")
+        await cmd_ban.finish(f"🔨 封禁已提交\n\n👤 玩家: {_player_display(player, target)}\n📌 原因: {reason_cn}\n{_rcon_summary(data)}")
 
     except FinishedException:
         raise
@@ -158,10 +177,16 @@ async def handle_kick(event: Event, args: Message = CommandArg()) -> None:
 
         data = res.get("data") or {}
         player = data.get("player") or {}
-        player_name = player.get("name") or target
         hit_server = data.get("hit_server") or {}
         server_line = f"\n🖥️ 服务器: {_get_server_name(hit_server)}" if hit_server else ""
-        await cmd_kick.finish(f"👢 踢出已提交\n\n👤 玩家: {player_name}\n📌 原因: {reason_cn}{server_line}\n{_rcon_summary(data)}")
+        await cmd_kick.finish(
+            f"👢 踢出已提交\n\n"
+            f"👤 玩家: {_player_display(player, target)}\n"
+            f"📌 原因: {reason_cn}"
+            f"{server_line}"
+            f"{_kick_notice_summary(data)}\n"
+            f"{_rcon_summary(data)}"
+        )
 
     except FinishedException:
         raise
@@ -192,9 +217,8 @@ async def handle_unban(bot: Bot, event: Event, args: Message = CommandArg()) -> 
 
         data = res.get("data") or {}
         player = data.get("player") or {}
-        player_name = player.get("name") or target
         released_count = len(data.get("released_rules") or [])
-        await cmd_unban.finish(f"🔓 解封已提交\n\n👤 玩家: {player_name}\n🧹 释放规则: {released_count}\n{_rcon_summary(data)}")
+        await cmd_unban.finish(f"🔓 解封已提交\n\n👤 玩家: {_player_display(player, target)}\n🧹 释放规则: {released_count}\n{_rcon_summary(data)}")
 
     except FinishedException:
         raise
