@@ -11,7 +11,6 @@ class R5ApiClient:
         self.config = get_plugin_config(Config)
         self.base_url = self.config.r5_api_base
         self.token = self.config.r5_api_token
-        self.admin_app_key = self.config.r5_admin_app_key
         self.headers = {
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
@@ -21,9 +20,6 @@ class R5ApiClient:
         request_headers = {**self.headers, **(headers or {})}
         async with httpx.AsyncClient() as client:
             return await client.request(method, f"{self.base_url}{endpoint}", headers=request_headers, **kwargs)
-
-    def _admin_headers(self) -> dict[str, str]:
-        return {"X-App-Key": self.admin_app_key}
 
     async def get_kd_leaderboard(
         self,
@@ -174,16 +170,17 @@ class R5ApiClient:
             params["cn_only"] = "true"
         return await self._request("GET", "/server", params=params, timeout=timeout)
 
-    async def ban_player(self, target: str, reason: str, timeout: float = 5.0) -> httpx.Response:
-        data = {"reason": reason}
-        return await self._request("POST", f"/admin/players/{target}/ban", json=data, headers=self._admin_headers(), timeout=timeout)
+    async def ban_player(self, operator_qq: str, target: str, reason: str, timeout: float = 5.0) -> httpx.Response:
+        data = {"operator_platform": "qq", "operator_uid": operator_qq, "target_type": "player", "target_value": target, "reason": reason}
+        return await self._request("POST", "/admin/bot/access-actions/ban", json=data, timeout=timeout)
 
-    async def kick_player(self, target: str, reason: str, timeout: float = 5.0) -> httpx.Response:
-        data = {"reason": reason}
-        return await self._request("POST", f"/admin/players/{target}/kick", json=data, headers=self._admin_headers(), timeout=timeout)
+    async def kick_player(self, operator_qq: str, target: str, reason: str, timeout: float = 5.0) -> httpx.Response:
+        data = {"operator_platform": "qq", "operator_uid": operator_qq, "target_type": "player", "target_value": target, "reason": reason}
+        return await self._request("POST", "/admin/bot/access-actions/kick", json=data, timeout=timeout)
 
-    async def unban_player(self, target: str, timeout: float = 12.0) -> httpx.Response:
-        return await self._request("POST", f"/admin/players/{target}/unban", json={}, headers=self._admin_headers(), timeout=timeout)
+    async def unban_player(self, operator_qq: str, target: str, timeout: float = 12.0) -> httpx.Response:
+        data = {"operator_platform": "qq", "operator_uid": operator_qq}
+        return await self._request("POST", f"/admin/bot/players/{target}/unban", json=data, timeout=timeout)
 
     async def query_player(self, query: str, page_no: int = 1, page_size: int = 20, timeout: float = 5.0) -> httpx.Response:
         params = {"q": query, "page_no": page_no, "page_size": page_size}

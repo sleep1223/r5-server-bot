@@ -52,6 +52,26 @@ def _error_msg(res: dict) -> str:
     return ERROR_CN.get(code, res.get("msg") or "未知错误")
 
 
+def _auth_failure_message(resp: httpx.Response, res: dict, *, action_label: str, endpoint: str, operator_qq: str, target: str, reason: str | None = None) -> str:
+    message = _error_msg(res)
+    if resp.status_code not in {401, 403}:
+        return f"❌ {action_label}失败: {message}"
+
+    reason_line = f"原因: {reason}\n" if reason else ""
+    return (
+        f"❌ {action_label}失败: {message}\n\n"
+        "🔎 请求信息\n"
+        f"接口: POST {api_client.base_url}{endpoint}\n"
+        f"HTTP: {resp.status_code}\n"
+        f"操作者QQ: {operator_qq}\n"
+        f"目标: {target}\n"
+        f"{reason_line}"
+        f"返回 code: {res.get('code') or '-'}\n"
+        f"返回 msg: {res.get('msg') or res.get('detail') or '-'}\n\n"
+        "请确认 r5_api_token 配置正确，并确认该 QQ 已绑定玩家且已同步管理员权限。"
+    )
+
+
 async def _is_superuser(bot: Bot, event: Event) -> bool:
     return await SUPERUSER(bot, event)
 
@@ -90,11 +110,12 @@ async def handle_ban(bot: Bot, event: Event, args: Message = CommandArg()) -> No
     await cmd_ban.send(f"⏳ 正在封禁 {target}...")
 
     try:
-        resp = await api_client.ban_player(target, reason, timeout=5.0)
+        operator_qq = event.get_user_id()
+        resp = await api_client.ban_player(operator_qq, target, reason, timeout=5.0)
         res = resp.json()
 
         if res.get("code") != "0000":
-            await cmd_ban.finish(f"❌ 封禁失败: {_error_msg(res)}")
+            await cmd_ban.finish(_auth_failure_message(resp, res, action_label="封禁", endpoint="/admin/bot/access-actions/ban", operator_qq=operator_qq, target=target, reason=reason))
 
         data = res.get("data") or {}
         player = data.get("player") or {}
@@ -110,7 +131,7 @@ async def handle_ban(bot: Bot, event: Event, args: Message = CommandArg()) -> No
 
 @cmd_kick.handle()
 @kick_service.patch_handler()
-async def handle_kick(args: Message = CommandArg()) -> None:
+async def handle_kick(event: Event, args: Message = CommandArg()) -> None:
     text = args.extract_plain_text().strip()
     parts = text.split()
 
@@ -128,11 +149,12 @@ async def handle_kick(args: Message = CommandArg()) -> None:
     reason_cn = REASON_CN.get(reason, reason)
 
     try:
-        resp = await api_client.kick_player(target, reason, timeout=5.0)
+        operator_qq = event.get_user_id()
+        resp = await api_client.kick_player(operator_qq, target, reason, timeout=5.0)
         res = resp.json()
 
         if res.get("code") != "0000":
-            await cmd_kick.finish(f"❌ 踢出失败: {_error_msg(res)}")
+            await cmd_kick.finish(_auth_failure_message(resp, res, action_label="踢出", endpoint="/admin/bot/access-actions/kick", operator_qq=operator_qq, target=target, reason=reason))
 
         data = res.get("data") or {}
         player = data.get("player") or {}
@@ -161,11 +183,12 @@ async def handle_unban(bot: Bot, event: Event, args: Message = CommandArg()) -> 
     await cmd_unban.send(f"⏳ 正在解封 {target}...")
 
     try:
-        resp = await api_client.unban_player(target, timeout=12.0)
+        operator_qq = event.get_user_id()
+        resp = await api_client.unban_player(operator_qq, target, timeout=12.0)
         res = resp.json()
 
         if res.get("code") != "0000":
-            await cmd_unban.finish(f"❌ 解封失败: {_error_msg(res)}")
+            await cmd_unban.finish(_auth_failure_message(resp, res, action_label="解封", endpoint=f"/admin/bot/players/{target}/unban", operator_qq=operator_qq, target=target))
 
         data = res.get("data") or {}
         player = data.get("player") or {}

@@ -39,9 +39,7 @@ def _normalize_qq(value: object) -> str:
 
 
 def _configured_admin_qqs() -> set[str]:
-    superusers = getattr(driver.config, "superusers", set()) or set()
-    configured = {_normalize_qq(item) for item in superusers}
-    configured.update(_normalize_qq(item) for item in plugin_config.r5_admin_group_grant_excluded_qqs)
+    configured = {_normalize_qq(item) for item in plugin_config.r5_admin_group_grant_excluded_qqs}
     configured.discard("")
     return configured
 
