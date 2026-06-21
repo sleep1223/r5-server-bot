@@ -46,6 +46,7 @@ class SdkMatchReportIngestTest(unittest.IsolatedAsyncioTestCase):
                     "uid": "1001",
                     "nucleusId": 1001,
                     "playerName": "attacker",
+                    "inputDevice": "controller",
                     "weaponStats": [
                         {
                             "weapon": "mp_weapon_r97",
@@ -64,6 +65,7 @@ class SdkMatchReportIngestTest(unittest.IsolatedAsyncioTestCase):
                     "uid": "1002",
                     "nucleusId": 1002,
                     "playerName": "victim",
+                    "inputDevice": "keyboard_mouse",
                 },
             ],
             "killEvents": [
@@ -99,11 +101,13 @@ class SdkMatchReportIngestTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await PlayerMatchWeaponStat.all().count(), 1)
 
         attacker = await Player.get(nucleus_id=1001)
+        self.assertEqual(attacker.input_device, "controller")
         weapon_stat = await PlayerMatchWeaponStat.get(player=attacker)
         self.assertEqual(weapon_stat.shots, 10)
         self.assertEqual(weapon_stat.hits, 5)
         self.assertEqual(weapon_stat.kills, 2)
         self.assertEqual(weapon_stat.accuracy_percent, 50.0)
+        self.assertEqual(weapon_stat.input_device, "controller")
 
         second_result = await match_service.process_match_end_report(report)
 
@@ -115,6 +119,8 @@ class SdkMatchReportIngestTest(unittest.IsolatedAsyncioTestCase):
     def test_daily_refresh_sql_includes_sdk_weapon_stats_without_opponent(self) -> None:
         self.assertIn("FROM player_match_weapon_stats pmws", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("NULL::int AS opponent_id", refresh_player_kill_daily_stats._INSERT_SQL)
+        self.assertIn("pmws.input_device", refresh_player_kill_daily_stats._INSERT_SQL)
+        self.assertIn("'unknown'::text AS input_device", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("NOT EXISTS", refresh_player_kill_daily_stats._INSERT_SQL)
 
 

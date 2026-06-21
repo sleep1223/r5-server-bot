@@ -153,6 +153,7 @@ class PlayerMatchWeaponStat(models.Model):
     kills = fields.IntField(default=0)
     accuracy = fields.FloatField(default=0)
     accuracy_percent = fields.FloatField(default=0)
+    input_device = fields.CharField(max_length=50, default="unknown", db_index=True)
     source = fields.CharField(max_length=30, default="sdk_match_end", db_index=True)
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)
@@ -164,6 +165,7 @@ class PlayerMatchWeaponStat(models.Model):
             ("match_id", "player_id"),
             ("player_id", "weapon"),
             ("server_id", "weapon"),
+            ("input_device", "weapon"),
         )
 
 
@@ -177,17 +179,19 @@ class PlayerKillDailyWeaponOpponentStat(models.Model):
     kills = fields.IntField(default=0)
     deaths = fields.IntField(default=0)
     awarded_kills = fields.IntField(default=0)
+    input_device = fields.CharField(max_length=50, default="unknown", db_index=True)
     refreshed_at = fields.DatetimeField(auto_now=True)
 
     class Meta:
         table = "player_kill_daily_weapon_opponent_stats"
-        unique_together = (("stat_date", "server", "player", "opponent", "weapon"),)
+        unique_together = (("stat_date", "server", "player", "opponent", "weapon", "input_device"),)
         indexes = (
             ("stat_date", "server_id", "player_id"),
             ("player_id", "stat_date"),
             ("player_id", "stat_date", "opponent_id"),
             ("player_id", "stat_date", "weapon"),
             ("stat_date", "weapon", "player_id"),
+            ("stat_date", "input_device", "kills"),
             ("stat_date", "kills"),
         )
 
@@ -195,7 +199,7 @@ class PlayerKillDailyWeaponOpponentStat(models.Model):
 class Server(models.Model):
     id = fields.IntField(pk=True)
     server_id = fields.CharField(max_length=128, null=True, unique=True)
-    host = fields.CharField(max_length=64, unique=True)  # 公网 IP，唯一
+    host = fields.CharField(max_length=64)  # 公网 IP；实际服务器身份使用 host + port
     port = fields.IntField(default=37015)
     region = fields.CharField(max_length=50, null=True)
     netkey = fields.CharField(max_length=255, null=True)
@@ -217,6 +221,7 @@ class Server(models.Model):
 
     class Meta:
         table = "servers"
+        unique_together = (("host", "port"),)
 
 
 class Match(models.Model):

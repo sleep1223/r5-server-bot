@@ -86,7 +86,7 @@ class MatchKillEvent(BaseModel):
 class MatchEndReport(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    serverId: str
+    serverName: str | None = None
     serverIp: str
     serverPort: int
     map: str
@@ -195,6 +195,7 @@ async def get_player_matches(
         "nucleus_id": player.nucleus_id,
         "country": player.country,
         "region": player.region,
+        "input_device": player.input_device or "unknown",
     }
     extra: dict = {"player": player_info, "limit": effective_limit, "sort": sort}
     if server_obj:

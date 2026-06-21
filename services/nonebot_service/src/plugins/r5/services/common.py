@@ -24,6 +24,22 @@ def range_label(range_type: str) -> str:
     return RANGE_LABELS.get(range_type, range_type)
 
 
+def format_input_device(input_device: object | None) -> str:
+    text = str(input_device or "").strip().lower().replace("-", "_").replace(" ", "_")
+    labels = {
+        "keyboard_mouse": "键鼠",
+        "keyboard": "键鼠",
+        "mouse": "键鼠",
+        "kbm": "键鼠",
+        "mnk": "键鼠",
+        "controller": "手柄",
+        "gamepad": "手柄",
+        "pad": "手柄",
+        "unknown": "未知设备",
+    }
+    return labels.get(text, text or "未知设备")
+
+
 def _case_variants(name: CommandName) -> set[CommandName]:
     """生成指令名的大小写变体（中文字符不受影响）。"""
     if isinstance(name, tuple):

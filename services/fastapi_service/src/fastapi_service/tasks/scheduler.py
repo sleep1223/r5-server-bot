@@ -8,7 +8,6 @@ from .fetch_servers import fetch_server_list_raw_once, fetch_server_list_raw_tas
 from .reconcile_matches import reconcile_matches_task
 from .refresh_player_kill_daily_stats import player_kill_daily_stats_refresh_task
 from .resolve_ips import ip_resolution_task
-from .sync_players import sync_players_task
 from .sync_legacy_access import sync_legacy_access_records_once
 
 
@@ -19,16 +18,15 @@ class TaskScheduler:
         self._tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
-        logger.info("启动玩家同步任务前先拉取初始服务器列表")
+        logger.info("启动后台任务前先拉取初始服务器列表")
         initial_server_count = await fetch_server_list_raw_once()
         if initial_server_count is None:
-            logger.warning("初始服务器列表拉取失败，玩家同步将等待周期性拉取任务")
+            logger.warning("初始服务器列表拉取失败，将等待周期性拉取任务")
 
         await sync_legacy_access_records_once()
 
         self._tasks = [
             asyncio.create_task(fetch_server_list_raw_task(delay_first=initial_server_count is not None)),
-            asyncio.create_task(sync_players_task()),
             asyncio.create_task(ip_resolution_task()),
             asyncio.create_task(close_stale_matches_task()),
             asyncio.create_task(reconcile_matches_task()),

@@ -19,7 +19,7 @@ class PlayerAccessRequest(BaseModel):
     playerName: str
     ip: str
     port: int
-    serverId: str
+    serverName: str | None = None
     serverIp: str | None = None
     serverPort: int | None = None
 
@@ -38,11 +38,11 @@ class OnlinePlayer(BaseModel):
     uid: str
     nucleusId: int
     playerName: str
-    ip: str
-    port: int
-    userId: int
-    handle: int
-    signonState: int
+    ip: str | None = None
+    port: int | None = None
+    userId: int | None = None
+    handle: int | None = None
+    signonState: int | None = None
     country: str | None = None
     region: str | None = None
     inputDevice: str | None = None
@@ -52,7 +52,7 @@ class OnlinePlayer(BaseModel):
 
 
 class OnlinePlayersRequest(BaseModel):
-    serverId: str
+    serverName: str | None = None
     serverIp: str | None = None
     serverPort: int | None = None
     map: str | None = None
@@ -97,9 +97,10 @@ async def check_player_access(
         player_name=payload.playerName,
         ip=payload.ip,
         port=payload.port,
-        server_id=payload.serverId,
+        server_id=None,
         server_ip=payload.serverIp,
         server_port=payload.serverPort,
+        server_name=payload.serverName,
     )
     return PlayerAccessResponse(
         allow=bool(decision["allow"]),
@@ -117,7 +118,7 @@ async def report_online_players(
 ) -> OnlinePlayersResponse:
     _verify_optional_access_token(credentials)
     result = await player_access_service.process_online_players_report(
-        server_id=payload.serverId,
+        server_id=None,
         report=payload.model_dump(),
     )
     return OnlinePlayersResponse(

@@ -1,7 +1,7 @@
 import traceback
 
 import httpx
-from .common import BINDING_GUIDE, on_command, range_label
+from .common import BINDING_GUIDE, format_input_device, on_command, range_label
 from nonebot.adapters.onebot.v11 import Event, Message
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
@@ -130,6 +130,7 @@ async def handle_check_weapons(event: Event, args: Message = CommandArg()) -> No
             country = player_info.get("country") or "未知"
             region = player_info.get("region") or "未知"
             msg += f"📍 地区: {country} / {region}\n"
+            msg += f"🎮 输入设备: {format_input_device(player_info.get('input_device'))}\n"
 
         summary = req.get("summary") or {}
         tk = summary.get("total_kills", 0)
@@ -145,10 +146,11 @@ async def handle_check_weapons(event: Event, args: Message = CommandArg()) -> No
         for w in display:
             weapon_key = w.get("weapon", "unknown")
             weapon = weapon_map.get(weapon_key.lower(), weapon_key)
+            device = format_input_device(w.get("input_device"))
             kd = w.get("kd", 0)
             k = w.get("kills", 0)
             d = w.get("deaths", 0)
-            msg += f"{weapon}: {kd} ({k}/{d})\n"
+            msg += f"{weapon} [{device}]: {kd} ({k}/{d})\n"
 
         if len(data) > 10:
             msg += f"\n... 以及其他 {len(data) - 10} 个武器"
@@ -234,10 +236,11 @@ async def handle_weapon_leaderboard(args: Message = CommandArg()) -> None:
             weapon_key = w.get("weapon", "unknown")
             weapon_name = weapon_map.get(weapon_key.lower(), weapon_key)
             name = w.get("name") or "未知"
+            device = format_input_device(w.get("input_device"))
             k = w.get("kills", 0)
             d = w.get("deaths", 0)
             kd = w.get("kd", 0)
-            msg += f"{weapon_name}: {name} KD {kd} ({k}/{d})\n"
+            msg += f"{weapon_name}: {name} [{device}] KD {kd} ({k}/{d})\n"
         if total > len(display):
             msg += f"\n... 以及其他 {total - len(display)} 个武器"
 

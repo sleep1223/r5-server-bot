@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime
 from typing import Literal
 
-from shared_lib.models import Player
+from shared_lib.models import Player, Server
 from tortoise.expressions import Q
 
 from fastapi_service.core.cache import server_cache
@@ -11,6 +12,49 @@ from fastapi_service.core.errors import ErrorCode
 from fastapi_service.core.response import error
 from fastapi_service.core.utils import CN_TZ, parse_short_name
 from fastapi_service.services import player_access_service
+
+
+def _looks_like_server_address(value: object | None) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+
+    host = text
+    if text.startswith("[") and "]" in text:
+        host = text[1:text.index("]")]
+    elif ":" in text:
+        host_part, _, port_part = text.rpartition(":")
+        if port_part.isdigit():
+            host = host_part
+
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return True
+    except ValueError:
+        return False
+
+
+async def _resolve_server_display_by_address(
+    server_host: object | None,
+    server_port: object | None,
+) -> tuple[str | None, str | None]:
+    host = str(server_host or "").strip()
+    if not host:
+        return None, None
+    try:
+        port = int(str(server_port or 0))
+    except ValueError:
+        return None, None
+    if port <= 0:
+        return None, None
+
+    server = await Server.filter(host=host, port=port).first()
+    if server is None:
+        return None, None
+
+    full_name = server.name or server.short_name
+    short_name = server.short_name or parse_short_name(full_name or "")
+    return full_name, short_name
 
 
 async def get_player_by_identifier(identifier: int | str, require_nucleus_id: bool = True) -> tuple[Player, None] | tuple[None, dict]:
@@ -54,7 +98,22 @@ async def list_players(
     offset: int = 0,
 ) -> tuple[list, int]:
     query = Player.all()
-    if status:
+    online_nucleus_ids: list[int] = []
+    if status in {"online", "offline"}:
+        online_nucleus_ids = [
+            int(uid)
+            for uid in server_cache.get_online_nucleus_ids()
+            if uid.isdigit()
+        ]
+        if status == "online" and not online_nucleus_ids:
+            return [], 0
+        if status == "online":
+            query = query.filter(nucleus_id__in=online_nucleus_ids)
+        else:
+            query = query.filter(status="offline")
+            if online_nucleus_ids:
+                query = query.exclude(nucleus_id__in=online_nucleus_ids)
+    elif status:
         query = query.filter(status=status)
     if name:
         query = query.filter(name__icontains=name)
@@ -67,6 +126,18 @@ async def list_players(
 
     total = await query.count()
     players = await query.limit(page_size).offset(offset).values()
+    if status == "online":
+        for player in players:
+            nucleus_id = player.get("nucleus_id")
+            loc = server_cache.get_online_location(nucleus_id) if nucleus_id else None
+            if not loc:
+                continue
+            player["status"] = "online"
+            player["online_at"] = loc.get("online_at")
+            player["ip"] = loc.get("player_ip") or player.get("ip")
+            player["country"] = loc.get("player_country") or player.get("country")
+            player["region"] = loc.get("player_region") or player.get("region")
+            player["input_device"] = loc.get("input_device") or player.get("input_device") or "unknown"
     return players, total
 
 
@@ -106,15 +177,21 @@ async def query_players(q: str, *, page_size: int = 20, offset: int = 0) -> list
             is_online = target_loc_source == "live"
             server_full_name = target_loc.get("server_name")
             short_name = target_loc.get("short_name")
+            server_host = target_loc.get("server_host")
+            server_port = target_loc.get("server_port")
+            if not server_full_name or _looks_like_server_address(server_full_name) or _looks_like_server_address(short_name):
+                resolved_full_name, resolved_short_name = await _resolve_server_display_by_address(server_host, server_port)
+                server_full_name = resolved_full_name or server_full_name
+                short_name = resolved_short_name or short_name
             if not short_name:
                 short_name = parse_short_name(server_full_name or "")
 
             server_info = {
                 "name": server_full_name,
                 "short_name": short_name,
-                "host": target_loc.get("server_host"),
-                "port": target_loc.get("server_port"),
-                "ip": target_loc.get("server_host"),
+                "host": server_host,
+                "port": server_port,
+                "ip": server_host,
                 "country": target_loc.get("country"),
                 "region": target_loc.get("region"),
                 "ping": target_loc.get("server_ping"),
@@ -137,6 +214,7 @@ async def query_players(q: str, *, page_size: int = 20, offset: int = 0) -> list
         if target_loc:
             player_country = target_loc.get("player_country") or player_country
             player_region = target_loc.get("player_region") or player_region
+        player_input_device = (target_loc or {}).get("input_device") or player.input_device or "unknown"
 
         total_playtime = player.total_playtime_seconds
         if is_online and duration is not None:
@@ -160,6 +238,7 @@ async def query_players(q: str, *, page_size: int = 20, offset: int = 0) -> list
                 "kick_count": player.kick_count,
                 "country": player_country,
                 "region": player_region,
+                "input_device": player_input_device,
             },
         })
 

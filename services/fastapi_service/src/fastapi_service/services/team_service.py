@@ -30,6 +30,7 @@ async def _binding_to_dict(binding: UserBinding, include_kd: bool = True, includ
         "binding_id": binding.id,
         "player_id": player.id,
         "player_name": player.name,
+        "input_device": player.input_device or "unknown",
     }
     if include_private_fields:
         result["platform"] = binding.platform
@@ -180,6 +181,7 @@ async def get_full_team_members(team_id: int) -> list[dict]:
             "platform": binding.platform,
             "platform_uid": binding.platform_uid,
             "player_name": binding.player.name,
+            "input_device": binding.player.input_device or "unknown",
             "kd": await _get_player_kd(binding.player.id),
             "role": m.role,
         })

@@ -3,16 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from shared_lib.models import BanRecord, Player, PlayerAccessOperation, PlayerAccessRule, UserBinding
+from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, UserBinding
 from tortoise.expressions import Q
 
-from fastapi_service.core.cache import server_cache
-from fastapi_service.core.constants import ALLOWED_REASONS, is_no_cover_allowed_server
+from fastapi_service.core.constants import ALLOWED_REASONS
 from fastapi_service.core.errors import ErrorCode
 from fastapi_service.core.response import error
 from fastapi_service.core.utils import CN_TZ
 from fastapi_service.services import admin_service, player_access_service, player_service
-from fastapi_service.services.rcon import require_rcon_config
 
 
 def _server_key(host: str | None, port: int | None) -> str | None:
@@ -38,72 +36,10 @@ def _rule_server_id(
 ) -> str | None:
     if server_scope == "global":
         return None
-    resolved = (server_id or "").strip() or (server_key or "").strip() or _server_key(server_host, server_port)
+    resolved = (server_key or "").strip() or _server_key(server_host, server_port) or (server_id or "").strip()
     if not resolved:
         raise ValueError("server_scope=server 时必须提供 server_id、server_key 或 server_host/server_port")
     return resolved
-
-
-def _server_matches(
-    server: dict,
-    *,
-    server_id: str | None = None,
-    server_key: str | None = None,
-    server_host: str | None = None,
-    server_port: int | None = None,
-) -> bool:
-    if server_key and server.get("server_key") == server_key:
-        return True
-
-    if server_host and server_port:
-        if server.get("server_host") == server_host and int(server.get("server_port") or 0) == server_port:
-            return True
-
-    if server_id:
-        candidates = {
-            str(server.get("server_key") or ""),
-            str(server.get("server_name") or ""),
-            _server_key(server.get("server_host"), server.get("server_port")) or "",
-        }
-        return server_id in candidates
-
-    return False
-
-
-def _select_rcon_servers(
-    *,
-    server_scope: str,
-    server_id: str | None = None,
-    server_key: str | None = None,
-    server_host: str | None = None,
-    server_port: int | None = None,
-) -> list[dict]:
-    online_servers = server_cache.get_online_servers()
-    if server_scope == "global":
-        return online_servers
-
-    return [
-        server
-        for server in online_servers
-        if _server_matches(
-            server,
-            server_id=server_id,
-            server_key=server_key,
-            server_host=server_host,
-            server_port=server_port,
-        )
-    ]
-
-
-def _server_payload(server: dict | None) -> dict | None:
-    if not server:
-        return None
-    return {
-        "name": server.get("server_name"),
-        "host": server.get("server_host"),
-        "port": server.get("server_port"),
-        "key": server.get("server_key") or _server_key(server.get("server_host"), server.get("server_port")),
-    }
 
 
 def _access_denied_action(access: dict[str, Any] | None) -> str | None:
@@ -174,23 +110,16 @@ def _operation_result_payload(result: dict[str, Any]) -> dict[str, Any]:
         "server_scope",
         "server_id",
         "remark",
+        "execution_mode",
         "sync_player_ip",
         "ip_synced",
         "ip_sync_reason",
         "expires_at",
-        "rcon_skipped",
-        "rcon_failed",
-        "broadcast_total",
-        "broadcast_success_count",
         "linked_ip_released_count",
     ):
         if key in result:
             payload[key] = _json_safe_value(result[key])
 
-    if result.get("hit_servers") is not None:
-        payload["hit_servers"] = result["hit_servers"]
-    if result.get("hit_server") is not None:
-        payload["hit_server"] = result["hit_server"]
     if result.get("synced_ip_rule"):
         payload["synced_ip_rule_id"] = result["synced_ip_rule"].get("rule_id")
     player = result.get("player") or {}
@@ -282,6 +211,62 @@ async def _uid_rules(player: Player) -> list[dict[str, Any]]:
 async def _player_qq(player: Player) -> str | None:
     binding = await UserBinding.filter(player_id=player.id, platform="qq").order_by("id").first()
     return binding.platform_uid if binding else None
+
+
+async def _pending_kick_notice_for_player(
+    *,
+    player: Player,
+    server_scope: str,
+    server_id: str | None,
+) -> PlayerAccessNotice | None:
+    if not player.nucleus_id:
+        return None
+
+    uid = player_access_service.normalize_uid(player.nucleus_id)
+    if not uid:
+        return None
+
+    return await (
+        PlayerAccessNotice.filter(
+            uid=uid,
+            action="kick",
+            server_scope=server_scope,
+            server_id=server_id,
+            requires_ack=True,
+            acknowledged_at__isnull=True,
+        )
+        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=datetime.now(CN_TZ)))
+        .order_by("-created_at", "-id")
+        .first()
+    )
+
+
+async def _pending_kick_result(
+    *,
+    player: Player,
+    notice: PlayerAccessNotice,
+    server_scope: str,
+    server_id: str | None,
+    remark: str | None,
+) -> dict[str, Any]:
+    operation_id = getattr(notice, "operation_id", None)
+    operation = await PlayerAccessOperation.get_or_none(id=operation_id) if operation_id else None
+    notice_payload = player_access_service.serialize_access_notice(notice)
+    context = dict(notice_payload.get("message_context") or {})
+    context["pending_notice_reused"] = True
+    notice_payload["message_context"] = context
+
+    return {
+        "player": await serialize_player_detail(player, access_server_id=server_id, include_history=False),
+        "server_scope": server_scope,
+        "server_id": server_id,
+        "operation": player_access_service.serialize_access_operation(operation) if operation else None,
+        "remark": remark,
+        "execution_mode": "sdk_access",
+        "notice": notice_payload,
+        "pending_notice_reused": True,
+        "expires_at": notice.expires_at,
+    }
 
 
 async def _qq_player_ids(query: str) -> list[int]:
@@ -468,13 +453,6 @@ async def ban_player(
         server_host=server_host,
         server_port=server_port,
     )
-    targets = _select_rcon_servers(
-        server_scope=scope,
-        server_id=access_server_id,
-        server_key=server_key,
-        server_host=server_host,
-        server_port=server_port,
-    )
     online_loc, _ = player_service.get_online_location(player)
     expires_at = _expires_at(duration_seconds)
     operation = await player_access_service.create_access_operation(
@@ -489,31 +467,6 @@ async def ban_player(
         operator=operator_name,
         player=player,
     )
-
-    if reason == "NO_COVER":
-        targets = [server for server in targets if not is_no_cover_allowed_server(server.get("server_host"), server.get("server_name"))]
-
-    success_count = 0
-    hits: list[dict] = []
-    rcon_skipped = not targets
-    rcon_failed = False
-    if targets:
-        rcon_key, rcon_pwd = require_rcon_config()
-        online_server_key = None
-        if scope == "global" and online_loc:
-            online_server_key = _server_key(online_loc["server_host"], online_loc["server_port"])
-        elif scope == "server" and len(targets) == 1:
-            online_server_key = targets[0].get("server_key")
-
-        success_count, hits = await admin_service.broadcast_bann_player(
-            player.nucleus_id,
-            reason,
-            targets,
-            rcon_key,
-            rcon_pwd,
-            online_server_key=online_server_key,
-        )
-        rcon_failed = success_count == 0
 
     uid_rule = None
     if scope == "global":
@@ -568,16 +521,12 @@ async def ban_player(
         "server_id": access_server_id,
         "operation": player_access_service.serialize_access_operation(operation),
         "remark": remark,
+        "execution_mode": "sdk_access",
         "sync_player_ip": sync_player_ip,
         "ip_synced": synced_ip_rule is not None,
         "ip_sync_reason": ip_sync_reason,
         "synced_ip_rule": synced_ip_rule,
         "expires_at": expires_at,
-        "rcon_skipped": rcon_skipped,
-        "rcon_failed": rcon_failed,
-        "broadcast_total": len(targets),
-        "broadcast_success_count": success_count,
-        "hit_servers": [_server_payload(server) for server in hits],
     }
     operation = await player_access_service.update_access_operation_result(
         operation,
@@ -611,13 +560,6 @@ async def unban_player(
         server_host=server_host,
         server_port=server_port,
     )
-    targets = _select_rcon_servers(
-        server_scope=scope,
-        server_id=access_server_id,
-        server_key=server_key,
-        server_host=server_host,
-        server_port=server_port,
-    )
     operation = await player_access_service.create_access_operation(
         action="unban",
         target_type="player",
@@ -629,21 +571,6 @@ async def unban_player(
         operator=operator_name,
         player=player,
     )
-
-    success_count = 0
-    if targets:
-        rcon_key, rcon_pwd = require_rcon_config()
-        for server in targets:
-            ok = await admin_service.unban_player_on_server(
-                player.nucleus_id,
-                server["server_host"],
-                server["server_port"],
-                rcon_key,
-                rcon_pwd,
-                timeout=3.0,
-            )
-            if ok:
-                success_count += 1
 
     released_rules = await player_access_service.release_linked_rules_for_uid(
         player.nucleus_id,
@@ -663,11 +590,9 @@ async def unban_player(
         "server_id": access_server_id,
         "operation": player_access_service.serialize_access_operation(operation),
         "remark": remark,
+        "execution_mode": "sdk_access",
         "released_rules": released_rules,
         "linked_ip_released_count": len([rule for rule in released_rules if rule.get("rule_type") == "ip"]),
-        "rcon_skipped": not targets,
-        "broadcast_total": len(targets),
-        "broadcast_success_count": success_count,
     }
     operation = await player_access_service.update_access_operation_result(
         operation,
@@ -707,13 +632,20 @@ async def kick_player(
         server_host=server_host,
         server_port=server_port,
     )
-    targets = _select_rcon_servers(
+    existing_notice = await _pending_kick_notice_for_player(
+        player=player,
         server_scope=scope,
         server_id=access_server_id,
-        server_key=server_key,
-        server_host=server_host,
-        server_port=server_port,
     )
+    if existing_notice:
+        return await _pending_kick_result(
+            player=player,
+            notice=existing_notice,
+            server_scope=scope,
+            server_id=access_server_id,
+            remark=remark,
+        ), None
+
     online_loc, _ = player_service.get_online_location(player)
     expires_at = _expires_at(duration_seconds)
     operation = await player_access_service.create_access_operation(
@@ -729,24 +661,7 @@ async def kick_player(
         player=player,
     )
 
-    if reason == "NO_COVER":
-        targets = [server for server in targets if not is_no_cover_allowed_server(server.get("server_host"), server.get("server_name"))]
-
     await admin_service.record_kick_offline(player)
-    success_count = 0
-    hit_server = None
-    if targets:
-        rcon_key, rcon_pwd = require_rcon_config()
-        success_count, hit_server = await admin_service.broadcast_kick_player(
-            player.nucleus_id,
-            reason,
-            targets,
-            rcon_key,
-            rcon_pwd,
-        )
-        if hit_server:
-            await admin_service.mark_status_kicked(player)
-            player.status = "kicked"  # type: ignore[assignment]
 
     notice = await player_access_service.create_access_notice(
         player=player,
@@ -792,16 +707,13 @@ async def kick_player(
         "server_id": access_server_id,
         "operation": player_access_service.serialize_access_operation(operation),
         "remark": remark,
+        "execution_mode": "sdk_access",
         "sync_player_ip": sync_player_ip,
         "ip_synced": synced_ip_rule is not None,
         "ip_sync_reason": ip_sync_reason,
         "synced_ip_rule": synced_ip_rule,
         "notice": player_access_service.serialize_access_notice(notice),
         "expires_at": expires_at,
-        "rcon_skipped": not targets,
-        "broadcast_total": len(targets),
-        "broadcast_success_count": success_count,
-        "hit_server": _server_payload(hit_server),
     }
     operation = await player_access_service.update_access_operation_result(
         operation,
@@ -829,13 +741,24 @@ async def apply_access_action(
     duration_seconds: int | None = None,
 ) -> tuple[dict | None, dict | None]:
     normalized_action = action.strip().lower()
-    if normalized_action not in {"ban", "kick"}:
-        return None, error(ErrorCode.INVALID_REASON, "action 必须是 ban 或 kick")
-    if reason not in ALLOWED_REASONS:
+    if normalized_action not in {"ban", "kick", "unban"}:
+        return None, error(ErrorCode.INVALID_REASON, "action 必须是 ban、kick 或 unban")
+    if normalized_action != "unban" and reason not in ALLOWED_REASONS:
         return None, error(ErrorCode.INVALID_REASON, f"无效原因。允许值: {ALLOWED_REASONS}")
 
     normalized_target_type = target_type.strip().lower()
     if normalized_target_type == "player":
+        if normalized_action == "unban":
+            return await unban_player(
+                identifier=target_value,
+                operator_name=operator_name,
+                server_scope=server_scope,
+                server_id=server_id,
+                server_key=server_key,
+                server_host=server_host,
+                server_port=server_port,
+                remark=remark,
+            )
         if normalized_action == "ban":
             return await ban_player(
                 identifier=target_value,
@@ -863,6 +786,9 @@ async def apply_access_action(
             remark=remark,
             duration_seconds=duration_seconds,
         )
+
+    if normalized_action == "unban":
+        return None, error(ErrorCode.INVALID_REASON, "unban 仅支持 target_type=player")
 
     rule_type_by_target = {
         "uid": "uid",
@@ -900,6 +826,21 @@ async def apply_access_action(
         uid_text = normalized_rule["value"]
         if uid_text.isdigit():
             player = await Player.get_or_none(nucleus_id=int(uid_text))
+
+    if normalized_action == "kick" and player:
+        existing_notice = await _pending_kick_notice_for_player(
+            player=player,
+            server_scope=scope,
+            server_id=access_server_id,
+        )
+        if existing_notice:
+            return await _pending_kick_result(
+                player=player,
+                notice=existing_notice,
+                server_scope=scope,
+                server_id=access_server_id,
+                remark=remark,
+            ), None
 
     expires_at = _expires_at(duration_seconds)
     operation = await player_access_service.create_access_operation(
@@ -967,6 +908,7 @@ async def apply_access_action(
         "server_scope": scope,
         "server_id": access_server_id,
         "remark": remark,
+        "execution_mode": "sdk_access",
         "expires_at": expires_at,
         "target_type": normalized_target_type,
         "target_value": normalized_rule["value"],

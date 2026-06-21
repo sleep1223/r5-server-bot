@@ -4,7 +4,7 @@ import traceback
 from pathlib import Path
 
 import httpx
-from .common import BINDING_GUIDE, on_command
+from .common import BINDING_GUIDE, format_input_device, on_command
 from nonebot.adapters.onebot.v11 import Event, Message, MessageSegment
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
@@ -56,6 +56,7 @@ def _member_snapshot(member: dict) -> dict:
         "platform": member.get("platform"),
         "platform_uid": member.get("platform_uid"),
         "player_name": member.get("player_name"),
+        "input_device": member.get("input_device"),
         "kd": member.get("kd"),
         "role": member.get("role"),
     }
@@ -75,6 +76,7 @@ def _team_snapshot(team_data: dict | None) -> dict:
         "creator": {
             "player_name": creator.get("player_name"),
             "platform_uid": creator.get("platform_uid"),
+            "input_device": creator.get("input_device"),
             "kd": creator.get("kd"),
         },
         "members": [_member_snapshot(member) for member in members],
@@ -87,7 +89,8 @@ def _log_team_event(event: str, **payload) -> None:
 
 def _format_member_line(member: dict) -> str:
     role_str = "队长" if member.get("role") == "creator" else "队员"
-    return f"  · [{role_str}] {member.get('player_name', '未知')} (QQ: {member.get('platform_uid', '?')}) KD: {member.get('kd', '?')}"
+    device = format_input_device(member.get("input_device"))
+    return f"  · [{role_str}] {member.get('player_name', '未知')} [{device}] (QQ: {member.get('platform_uid', '?')}) KD: {member.get('kd', '?')}"
 
 
 def _format_team_overview(team_id: int, team_info: dict, title: str) -> str:
@@ -207,7 +210,9 @@ async def handle_list_teams() -> None:
 
         for t in data:
             creator = t.get("creator", {})
+            creator_device = format_input_device(creator.get("input_device"))
             msg += f"#{t['id']} {creator.get('player_name', '?')} "
+            msg += f"[{creator_device}] "
             msg += f"KD:{creator.get('kd', '?')} "
             msg += f"缺{t.get('slots_remaining', '?')}人\n"
 
@@ -267,7 +272,7 @@ async def handle_join_team(event: Event, args: Message = CommandArg()) -> None:
         if creator and joined_member and str(creator.get("platform_uid")) != str(user_id) and creator.get("platform") == "qq":
             notify_msg = (
                 MessageSegment.at(int(creator["platform_uid"])) + f" 🎮 你的队伍有新队员加入\n"
-                f"加入玩家: {joined_member.get('player_name', '未知')}\n"
+                f"加入玩家: {joined_member.get('player_name', '未知')} [{format_input_device(joined_member.get('input_device'))}]\n"
                 f"加入玩家KD: {joined_member.get('kd', '?')}\n\n"
                 f"{_format_team_overview(team_id, team_info, '当前队伍信息')}"
             )
@@ -392,7 +397,7 @@ async def handle_leave_team(event: Event, args: Message = CommandArg()) -> None:
             }
             notify_msg = (
                 MessageSegment.at(int(creator_before_leave["platform_uid"])) + f" 🎮 你的队伍有队员离开\n"
-                f"离开玩家: {leaving_member_before_leave.get('player_name', '未知')}\n"
+                f"离开玩家: {leaving_member_before_leave.get('player_name', '未知')} [{format_input_device(leaving_member_before_leave.get('input_device'))}]\n"
                 f"离开玩家KD: {leaving_member_before_leave.get('kd', '?')}\n\n"
                 f"{_format_team_overview(team_id, updated_team_info, '当前队伍信息')}"
             )
@@ -447,6 +452,7 @@ async def handle_invite(event: Event, args: Message = CommandArg()) -> None:
         data = req.get("data", {})
         target_uid = data.get("platform_uid")
         target_player = data.get("player_name", target_name)
+        target_device = format_input_device(data.get("input_device"))
         kd = data.get("kd", "?")
 
         _log_team_event(
@@ -463,7 +469,7 @@ async def handle_invite(event: Event, args: Message = CommandArg()) -> None:
             at_msg = MessageSegment.at(int(target_uid)) + f" 🎮 玩家邀请你加入队伍 #{team_id}\n回复: /接受 {team_id}"
             await invite_cmd.send(at_msg)
 
-        await invite_cmd.finish(f"✅ 已向 {target_player}(KD:{kd}) 发送邀请")
+        await invite_cmd.finish(f"✅ 已向 {target_player}[{target_device}](KD:{kd}) 发送邀请")
 
     except FinishedException:
         raise
@@ -519,7 +525,7 @@ async def handle_accept(event: Event, args: Message = CommandArg()) -> None:
         if creator and joined_member and str(creator.get("platform_uid")) != str(user_id) and creator.get("platform") == "qq":
             notify_msg = (
                 MessageSegment.at(int(creator["platform_uid"])) + f" 🎮 你的队伍有新队员加入\n"
-                f"加入玩家: {joined_member.get('player_name', '未知')}\n"
+                f"加入玩家: {joined_member.get('player_name', '未知')} [{format_input_device(joined_member.get('input_device'))}]\n"
                 f"加入玩家KD: {joined_member.get('kd', '?')}\n\n"
                 f"{_format_team_overview(team_id, team_info, '当前队伍信息')}"
             )

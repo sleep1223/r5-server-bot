@@ -118,6 +118,19 @@ def _normalize_ip(ip: object | None) -> str:
         return text
 
 
+def _normalize_server_identity_ip(ip: object | None) -> str:
+    host = _normalize_ip(ip)
+    if not host:
+        return ""
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    if address.is_link_local or address.is_unspecified:
+        return ""
+    return host
+
+
 def _safe_int(value: object | None, default: int = 0) -> int:
     try:
         return int(value)  # type: ignore[arg-type]
@@ -132,7 +145,7 @@ def _append_unique_text(items: list[str], value: object | None) -> None:
 
 
 def _server_address_key(server_ip: object | None, server_port: object | None) -> str | None:
-    host = _normalize_ip(server_ip) or None
+    host = _normalize_server_identity_ip(server_ip) or None
     port = _safe_int(server_port, 0)
     if not host or not port:
         return None
@@ -258,30 +271,29 @@ async def upsert_sdk_server_snapshot(
     server_id: object | None,
     server_ip: object | None = None,
     server_port: object | None = None,
+    server_name: object | None = None,
     map_name: object | None = None,
     num_players: object | None = None,
     max_players: object | None = None,
     has_status: bool = False,
 ) -> Server | None:
-    server_identifier = str(server_id or "").strip() or None
-    host = _normalize_ip(server_ip) or None
+    host = _normalize_server_identity_ip(server_ip) or None
     port = _safe_int(server_port, 0) or 37015
+    reported_name = str(server_name or "").strip() or None
+    fallback_name = f"{host}:{port}" if host and port else None
 
-    if not server_identifier and not host:
+    if not host and not reported_name:
         return None
 
-    server = await Server.get_or_none(server_id=server_identifier) if server_identifier else None
-    host_server = await Server.get_or_none(host=host) if host else None
-    if server is not None and host_server is not None and server.id != host_server.id:
-        if host_server.server_id not in (None, server_identifier):
-            logger.warning(f"SDK 服务器上报 host={host} 已绑定其它 server_id={host_server.server_id}, 忽略本次 server_id={server_identifier}")
-            server = host_server
-            server_identifier = None
-        else:
-            await Server.filter(id=server.id).update(server_id=None, has_status=False)
-            server = host_server
-    elif server is None:
-        server = host_server
+    server = await Server.filter(host=host, port=port).first() if host else None
+    if server is None and host:
+        host_matches = await Server.filter(host=host).limit(2).all()
+        if len(host_matches) == 1:
+            server = host_matches[0]
+    if server is None and reported_name:
+        name_matches = await Server.filter(name__iexact=reported_name).limit(2).all()
+        if len(name_matches) == 1:
+            server = name_matches[0]
 
     now = datetime.now(timezone.utc)
     if server is None:
@@ -289,10 +301,10 @@ async def upsert_sdk_server_snapshot(
             return None
         try:
             server = await Server.create(
-                server_id=server_identifier,
+                server_id=None,
                 host=host,
                 port=port,
-                name=f"server-{server_identifier or host}",
+                name=reported_name or fallback_name or f"server-{host}",
                 map=str(map_name or "") or None,
                 player_count=_safe_int(num_players, 0),
                 max_players=_safe_int(max_players, 0),
@@ -302,9 +314,10 @@ async def upsert_sdk_server_snapshot(
             )
         except IntegrityError:
             return await upsert_sdk_server_snapshot(
-                server_id=server_identifier,
+                server_id=None,
                 server_ip=host,
                 server_port=port,
+                server_name=reported_name,
                 map_name=map_name,
                 num_players=num_players,
                 max_players=max_players,
@@ -313,12 +326,13 @@ async def upsert_sdk_server_snapshot(
         return server
 
     updates: dict[str, Any] = {"last_seen_at": now}
-    if server_identifier and server.server_id != server_identifier:
-        updates["server_id"] = server_identifier
     if host and server.host != host:
         updates["host"] = host
     if port and server.port != port:
         updates["port"] = port
+    display_name = reported_name or fallback_name
+    if display_name and server.name != display_name:
+        updates["name"] = display_name
     if map_name is not None:
         updates["map"] = str(map_name or "") or None
     if num_players is not None:
@@ -341,6 +355,7 @@ async def resolve_access_server_identity(
     server_id: object | None,
     server_ip: object | None = None,
     server_port: object | None = None,
+    server_name: object | None = None,
     map_name: object | None = None,
     num_players: object | None = None,
     max_players: object | None = None,
@@ -350,34 +365,33 @@ async def resolve_access_server_identity(
         server_id=server_id,
         server_ip=server_ip,
         server_port=server_port,
+        server_name=server_name,
         map_name=map_name,
         num_players=num_players,
         max_players=max_players,
         has_status=has_status,
     )
 
-    requested_server_id = str(server_id or "").strip() or None
-    reported_host = _normalize_ip(server_ip) or None
+    reported_host = _normalize_server_identity_ip(server_ip) or None
     reported_port = _safe_int(server_port, 0) or None
     reported_address_key = _server_address_key(reported_host, reported_port)
+    reported_name = str(server_name or "").strip() or None
+    reported_name_key = f"name:{reported_name.casefold()}" if reported_name else None
 
     keys: list[str] = []
-    _append_unique_text(keys, requested_server_id)
     _append_unique_text(keys, reported_address_key)
     _append_unique_text(keys, reported_host)
+    _append_unique_text(keys, reported_name_key)
 
     if server is not None:
-        _append_unique_text(keys, server.server_id)
-        _append_unique_text(keys, server.netkey)
         _append_unique_text(keys, _server_address_key(server.host, server.port))
         _append_unique_text(keys, server.host)
 
-    canonical_key = _server_address_key(server.host, server.port) if server is not None else reported_address_key
+    canonical_key = _server_address_key(server.host, server.port) if server is not None else reported_address_key or reported_name_key
     return {
         "server": server,
         "server_keys": keys,
-        "canonical_key": canonical_key or requested_server_id,
-        "requested_server_id": requested_server_id,
+        "canonical_key": canonical_key,
     }
 
 
@@ -620,7 +634,7 @@ async def _resolve_geo(ip: str) -> tuple[str | None, str | None]:
 
 async def _resolve_server_geo(identity: dict[str, Any], server_ip: object | None = None) -> tuple[str | None, str | None]:
     server = identity.get("server")
-    candidate_ip = _normalize_ip(server_ip) or _normalize_ip(getattr(server, "host", None))
+    candidate_ip = _normalize_server_identity_ip(server_ip) or _normalize_server_identity_ip(getattr(server, "host", None))
     if candidate_ip:
         country, region = await _resolve_geo(candidate_ip)
         if country or region:
@@ -1075,14 +1089,17 @@ async def check_player_access(
     server_id: str | None = None,
     server_ip: object | None = None,
     server_port: object | None = None,
+    server_name: object | None = None,
 ) -> dict[str, Any]:
     identity = await resolve_access_server_identity(
         server_id=server_id,
         server_ip=server_ip,
         server_port=server_port,
+        server_name=server_name,
         has_status=False,
     )
     server_keys = identity["server_keys"]
+    scoped_server_id = identity["canonical_key"]
     player = await upsert_access_player_snapshot(
         uid=uid,
         nucleus_id=nucleus_id,
@@ -1097,7 +1114,7 @@ async def check_player_access(
     decision = await evaluate_player_access(
         uid=normalized_uid,
         ip=ip,
-        server_id=server_id,
+        server_id=scoped_server_id,
         server_keys=server_keys,
         player=player,
         country=country,
@@ -1115,6 +1132,7 @@ async def check_player_access(
         f"ip={_normalize_ip(ip) or '-'}, "
         f"port={port or '-'}, "
         f"server_id={server_id or '-'}, "
+        f"scope_server_id={scoped_server_id or '-'}, "
         f"server_keys={server_keys or '-'}, "
         f"player_geo={country or '-'}/{region or '-'}, "
         f"server_geo={server_country or '-'}/{server_region or '-'}, "
@@ -1149,37 +1167,53 @@ async def process_online_players_report(
         server_id=server_id,
         server_ip=report.get("serverIp"),
         server_port=report.get("serverPort"),
+        server_name=report.get("serverName") or report.get("hostname"),
         map_name=report.get("map"),
         num_players=report.get("numPlayers"),
         max_players=report.get("maxPlayers"),
         has_status=True,
     )
     server_keys = identity["server_keys"]
-    cache_server_id = identity["canonical_key"] or server_id
-    server_cache.update_access_report(cache_server_id, report)
+    cache_server_id = identity["canonical_key"] or "unknown"
+    scoped_server_id = identity["canonical_key"]
     server_country, server_region = await _resolve_server_geo(identity, report.get("serverIp"))
 
     reported_players = report.get("players") or []
     actions: list[dict[str, Any]] = []
+    enriched_players: list[dict[str, Any]] = []
     for player_payload in reported_players:
+        if not isinstance(player_payload, dict):
+            continue
+
         uid_text = normalize_uid(player_payload.get("uid"), player_payload.get("nucleusId"))
         if not uid_text:
             continue
 
+        raw_ip = player_payload.get("ip")
         player = await upsert_access_player_snapshot(
             uid=uid_text,
             nucleus_id=player_payload.get("nucleusId"),
             player_name=player_payload.get("playerName"),
-            ip=player_payload.get("ip"),
+            ip=raw_ip,
             input_device=_input_device_from_payload(player_payload),
         )
         country = player.country if player else player_payload.get("country")
         region = player.region if player else player_payload.get("region")
+        normalized_ip = _normalize_ip(raw_ip) or (player.ip if player else None)
+        enriched_payload = dict(player_payload)
+        if normalized_ip:
+            enriched_payload["ip"] = normalized_ip
+        if country:
+            enriched_payload["country"] = country
+        if region:
+            enriched_payload["region"] = region
+        enriched_players.append(enriched_payload)
+
         reason_locale = reason_locale_from_geo(country, region)
         decision = await evaluate_player_access(
             uid=uid_text,
-            ip=player_payload.get("ip"),
-            server_id=server_id,
+            ip=normalized_ip or raw_ip,
+            server_id=scoped_server_id,
             server_keys=server_keys,
             player=player,
             country=country,
@@ -1203,9 +1237,13 @@ async def process_online_players_report(
             action_payload["nucleusId"] = nucleus_id
         actions.append(action_payload)
 
+    enriched_report = dict(report)
+    enriched_report["players"] = enriched_players
+    server_cache.update_access_report(cache_server_id, enriched_report)
+
     logger.info(
         "在线玩家上报: "
-        f"server_id={server_id}, players={len(reported_players)}, "
+        f"scope_server_id={scoped_server_id or '-'}, players={len(reported_players)}, "
         f"server_keys={server_keys or '-'}, "
         f"server_geo={server_country or '-'}/{server_region or '-'}, "
         f"actions={len(actions)}, map={report.get('map') or '-'}, "
@@ -1627,15 +1665,11 @@ async def create_access_notice(
             .first()
         )
         if existing_notice:
-            next_context = dict(message_context or {})
+            next_context = dict(existing_notice.message_context or {})
             next_context["pending_notice_reused"] = True
             updates = {
                 "player_id": player.id,
-                "reason": (reason or "").strip() or None,
-                "message": (message or "").strip() or None,
                 "message_context": next_context,
-                "operation_id": operation.id if operation else None,
-                "expires_at": expires_at,
                 "updated_at": _now(),
             }
             await PlayerAccessNotice.filter(id=existing_notice.id).update(**updates)
@@ -1911,17 +1945,17 @@ async def build_online_player_info(player_data: dict, *, is_admin: bool = False,
         reason_locale=reason_locale_from_geo(country, region),
     )
 
+    uid_int = _uid_to_int(uid)
     info: dict[str, Any] = {
         "name": player_data.get("name", "Unknown"),
         "country": player_data.get("country"),
+        "nucleus_id": uid_int if uid_int is not None else (uid or None),
+        "input_device": _input_device_from_payload(player_data) or (player.input_device if player else None) or "unknown",
     }
     if is_admin:
-        uid_int = _uid_to_int(uid)
         info.update({
             "region": player_data.get("region"),
-            "nucleus_id": uid_int if uid_int is not None else (uid or None),
             "ip": player_data.get("ip"),
-            "input_device": _input_device_from_payload(player_data) or (player.input_device if player else None),
             "ping": player_data.get("ping", 0),
             "loss": player_data.get("loss", 0),
             "access": access,

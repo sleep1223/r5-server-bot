@@ -53,7 +53,7 @@ async def get_player_vs_all_stats(
     if not results and total == 0:
         return success(data=[], msg=f"玩家 {nucleus_id_or_player_name} 在 {range} 范围内没有对手记录")
 
-    player_info = {"name": player.name, "nucleus_id": player.nucleus_id, "country": player.country, "region": player.region}
+    player_info = {"name": player.name, "nucleus_id": player.nucleus_id, "country": player.country, "region": player.region, "input_device": player.input_device or "unknown"}
     extra: dict = {"summary": summary, "player": player_info}
     if server_obj:
         extra["server"] = _server_info(server_obj)
@@ -92,7 +92,7 @@ async def get_player_weapon_stats(
     if not results and total == 0:
         return success(data=[], msg=f"玩家 {nucleus_id_or_player_name} 在 {range} 范围内没有武器统计")
 
-    player_info = {"name": player.name, "nucleus_id": player.nucleus_id, "country": player.country, "region": player.region}
+    player_info = {"name": player.name, "nucleus_id": player.nucleus_id, "country": player.country, "region": player.region, "input_device": player.input_device or "unknown"}
     extra: dict = {"summary": summary, "player": player_info}
     if server_obj:
         extra["server"] = _server_info(server_obj)

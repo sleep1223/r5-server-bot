@@ -14,6 +14,19 @@ from fastapi_service.core.utils import CN_TZ, calc_kd, get_date_range
 _DAILY_STATS_TABLE = "player_kill_daily_weapon_opponent_stats"
 
 
+def _normalize_input_device(value: str | None) -> str | None:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not text:
+        return None
+    if text in {"controller", "gamepad", "pad", "joystick", "xinput"}:
+        return "controller"
+    if text in {"keyboard_mouse", "keyboard", "mouse", "kbm", "mnk", "keyboardmouse", "keyboard_and_mouse"}:
+        return "keyboard_mouse"
+    if text in {"unknown", "none", "null"}:
+        return "unknown"
+    return text[:50]
+
+
 async def _get_excluded_server_ids() -> list[int]:
     """解析 settings.kd_excluded_server_hosts 配置为服务器 id 列表，用于统计时排除。"""
     hosts = settings.kd_excluded_server_hosts
@@ -85,6 +98,7 @@ def _daily_stats_filter_sql(
     start_day: date | None,
     end_day: date | None,
     server_id: int | None = None,
+    input_device: str | None = None,
     excluded_server_ids: list[int] | None = None,
     alias: str = "s",
 ) -> tuple[str, list[object]]:
@@ -100,6 +114,9 @@ def _daily_stats_filter_sql(
         clauses.append(f"{prefix}server_id = {_append_param(params, server_id)}")
     elif excluded_server_ids:
         clauses.append(f"{prefix}server_id <> ALL({_append_param(params, excluded_server_ids)}::int[])")
+    normalized_input_device = _normalize_input_device(input_device)
+    if normalized_input_device is not None:
+        clauses.append(f"{prefix}input_device = {_append_param(params, normalized_input_device)}")
 
     return ("WHERE " + " AND ".join(clauses)) if clauses else "", params
 
@@ -109,12 +126,14 @@ async def _aggregate_kills_deaths_from_daily_stats(
     end_day: date | None,
     *,
     server_id: int | None = None,
+    input_device: str | None = None,
     excluded_server_ids: list[int] | None = None,
 ) -> dict[int, dict[str, int]]:
     where_sql, params = _daily_stats_filter_sql(
         start_day=start_day,
         end_day=end_day,
         server_id=server_id,
+        input_device=input_device,
         excluded_server_ids=excluded_server_ids,
     )
 
@@ -136,7 +155,7 @@ async def _aggregate_kills_deaths_from_daily_stats(
 async def _enrich_with_player_names(stats: dict[int, dict], player_ids: list[int] | None = None) -> dict[int, dict]:
     """为 stats dict 中的 player_id 添加 name 和 nucleus_id"""
     ids = player_ids or list(stats.keys())
-    players = await Player.filter(id__in=ids).values("id", "name", "nucleus_id", "status")
+    players = await Player.filter(id__in=ids).values("id", "name", "nucleus_id", "status", "input_device")
     return {p["id"]: p for p in players}
 
 
@@ -175,6 +194,74 @@ async def get_kd_ranking(
         results.append({
             "name": p_info["name"] if p_info else f"Unknown ({pid})",
             "nucleus_id": p_info["nucleus_id"] if p_info else None,
+            "input_device": (p_info or {}).get("input_device") or "unknown",
+            "kills": kills,
+            "deaths": deaths,
+            "kd": calc_kd(kills, deaths),
+        })
+
+    _sort_results(results, sort)
+    return _paginate(results, offset=offset, page_size=page_size)
+
+
+async def get_input_device_kill_ranking(
+    *,
+    range_type: str,
+    sort: str,
+    min_kills: int,
+    min_deaths: int,
+    offset: int,
+    page_size: int,
+    input_device: str | None = None,
+    server_id: int | None = None,
+) -> tuple[list[dict], int]:
+    start_time, end_time = get_date_range(range_type)
+    start_day, end_day = _stat_date_window(start_time, end_time)
+    excluded_ids = None if server_id is not None else await _get_excluded_server_ids()
+    where_sql, params = _daily_stats_filter_sql(
+        start_day=start_day,
+        end_day=end_day,
+        server_id=server_id,
+        input_device=input_device,
+        excluded_server_ids=excluded_ids,
+    )
+
+    rows = await connections.get("default").execute_query_dict(
+        f"""
+        SELECT
+            s.input_device,
+            s.player_id,
+            SUM(s.kills)::int AS kills,
+            SUM(s.deaths)::int AS deaths
+        FROM {_DAILY_STATS_TABLE} s
+        {where_sql}
+        GROUP BY s.input_device, s.player_id
+        HAVING SUM(s.kills) > 0 OR SUM(s.deaths) > 0
+        """,
+        params,
+    )
+
+    if not rows:
+        return [], 0
+
+    player_ids = [row["player_id"] for row in rows if row["player_id"] is not None]
+    p_map = await _enrich_with_player_names({}, player_ids)
+
+    results = []
+    for row in rows:
+        pid = row["player_id"]
+        if pid is None:
+            continue
+        kills, deaths = row["kills"] or 0, row["deaths"] or 0
+        if kills < min_kills or deaths < min_deaths:
+            continue
+        p_info = p_map.get(pid)
+        if p_info and p_info.get("status") == "banned":
+            continue
+        results.append({
+            "name": p_info["name"] if p_info else f"Unknown ({pid})",
+            "nucleus_id": p_info["nucleus_id"] if p_info else None,
+            "input_device": row.get("input_device") or "unknown",
             "kills": kills,
             "deaths": deaths,
             "kd": calc_kd(kills, deaths),
@@ -216,19 +303,20 @@ async def get_weapon_ranking(
     )
     where_sql = _extend_where_sql(where_sql, f"s.weapon = ANY({_append_param(params, internal_weapons)}::text[])")
 
-    # Aggregate by (weapon, player)
-    stats_by_weapon: dict[str, dict[int, dict[str, int]]] = {iw: {} for iw in internal_weapons}
+    # Aggregate by (weapon, player, input device)
+    stats_by_weapon: dict[str, dict[tuple[int, str], dict[str, int]]] = {iw: {} for iw in internal_weapons}
 
     rows = await connections.get("default").execute_query_dict(
         f"""
         SELECT
             s.weapon,
             s.player_id,
+            s.input_device,
             SUM(s.kills)::int AS kills,
             SUM(s.deaths)::int AS deaths
         FROM {_DAILY_STATS_TABLE} s
         {where_sql}
-        GROUP BY s.weapon, s.player_id
+        GROUP BY s.weapon, s.player_id, s.input_device
         HAVING SUM(s.kills) > 0 OR SUM(s.deaths) > 0
         """,
         params,
@@ -238,10 +326,10 @@ async def get_weapon_ranking(
         weapon_stats = stats_by_weapon.get(row["weapon"])
         if weapon_stats is None:
             continue
-        weapon_stats[row["player_id"]] = {"kills": row["kills"] or 0, "deaths": row["deaths"] or 0}
+        weapon_stats[(row["player_id"], row.get("input_device") or "unknown")] = {"kills": row["kills"] or 0, "deaths": row["deaths"] or 0}
 
     # Collect all player IDs involved, then exclude banned
-    all_pids = {pid for ws in stats_by_weapon.values() for pid in ws}
+    all_pids = {pid for ws in stats_by_weapon.values() for pid, _device in ws}
     banned_ids = set()
     if all_pids:
         banned_players = await Player.filter(id__in=list(all_pids), status="banned").values_list("id", flat=True)
@@ -255,7 +343,7 @@ async def get_weapon_ranking(
             continue
         best = None
         best_key: tuple[float, ...] | None = None
-        for pid, data in weapon_stats.items():
+        for (pid, input_device), data in weapon_stats.items():
             kills, deaths = data["kills"], data["deaths"]
             kd = calc_kd(kills, deaths)
             if kills < min_kills or deaths < min_deaths:
@@ -269,7 +357,7 @@ async def get_weapon_ranking(
             else:
                 key = (deaths,)
             if best_key is None or key > best_key:
-                best = {"pid": pid, "kills": kills, "deaths": deaths, "kd": kd, "weapon": iw}
+                best = {"pid": pid, "input_device": input_device, "kills": kills, "deaths": deaths, "kd": kd, "weapon": iw}
                 best_key = key
         if best:
             winners.append(best)
@@ -287,6 +375,7 @@ async def get_weapon_ranking(
             "weapon": to_display_weapon(w["weapon"]),
             "name": p_info["name"] if p_info else f"Unknown ({w['pid']})",
             "nucleus_id": p_info["nucleus_id"] if p_info else None,
+            "input_device": w["input_device"],
             "kills": w["kills"],
             "deaths": w["deaths"],
             "kd": w["kd"],
@@ -365,6 +454,7 @@ async def get_player_vs_all(
         results.append({
             "opponent_name": op_info["name"] if op_info else f"Unknown ({oid})",
             "opponent_id": op_info["nucleus_id"] if op_info else None,
+            "input_device": (op_info or {}).get("input_device") or "unknown",
             "kills": k,
             "deaths": d,
             "kd": calc_kd(k, d),
@@ -449,31 +539,33 @@ async def get_player_weapon_stats(
         f"""
         SELECT
             s.weapon,
+            s.input_device,
             SUM(s.kills)::int AS kills,
             SUM(s.deaths)::int AS deaths
         FROM {_DAILY_STATS_TABLE} s
         {where_sql}
-        GROUP BY s.weapon
+        GROUP BY s.weapon, s.input_device
         HAVING SUM(s.kills) > 0 OR SUM(s.deaths) > 0
         """,
         params,
     )
 
-    weapon_stats: dict[str, dict[str, int]] = {}
+    weapon_stats: dict[tuple[str, str], dict[str, int]] = {}
 
     for row in rows:
         w = _normalize_weapon(row.get("weapon"))
         if not w:
             continue
-        weapon_stats[w] = {"kills": row["kills"] or 0, "deaths": row["deaths"] or 0}
+        input_device = row.get("input_device") or "unknown"
+        weapon_stats[(w, input_device)] = {"kills": row["kills"] or 0, "deaths": row["deaths"] or 0}
 
     if not weapon_stats:
         return [], 0, {"total_kills": 0, "total_deaths": 0, "kd": 0.0}
 
     results = []
-    for w, data in weapon_stats.items():
+    for (w, input_device), data in weapon_stats.items():
         k, d = data["kills"], data["deaths"]
-        results.append({"weapon": WEAPON_NAME_MAP.get(w, w), "kills": k, "deaths": d, "kd": calc_kd(k, d)})
+        results.append({"weapon": WEAPON_NAME_MAP.get(w, w), "input_device": input_device, "kills": k, "deaths": d, "kd": calc_kd(k, d)})
 
     _sort_results(results, sort)
 

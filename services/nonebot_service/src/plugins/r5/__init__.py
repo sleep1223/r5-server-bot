@@ -16,6 +16,9 @@ __plugin_meta__ = PluginMetadata(
        范围: 今日/today(默认), 昨日/yesterday, 本周/week, 本月/month
        示例: kd榜 今日
 
+    1.1 设备榜 [手柄|键鼠] [范围]
+       查询不同输入设备的击杀排行榜
+
     2. 查kd <玩家名/ID>
        查询指定玩家对阵所有人的KD数据
        示例: 查kd 10086

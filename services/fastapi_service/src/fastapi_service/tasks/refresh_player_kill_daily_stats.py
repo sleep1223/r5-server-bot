@@ -28,6 +28,7 @@ events AS (
         pk.attacker_id AS player_id,
         pk.victim_id AS opponent_id,
         COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
+        'unknown'::text AS input_device,
         1 AS kills,
         0 AS deaths,
         0 AS awarded_kills
@@ -47,6 +48,7 @@ events AS (
         pk.victim_id AS player_id,
         pk.attacker_id AS opponent_id,
         COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
+        'unknown'::text AS input_device,
         0 AS kills,
         1 AS deaths,
         0 AS awarded_kills
@@ -66,6 +68,7 @@ events AS (
         pk.awarded_to_id AS player_id,
         pk.victim_id AS opponent_id,
         COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
+        'unknown'::text AS input_device,
         0 AS kills,
         0 AS deaths,
         1 AS awarded_kills
@@ -86,6 +89,7 @@ events AS (
         pmws.player_id,
         NULL::int AS opponent_id,
         COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown') AS weapon,
+        COALESCE(NULLIF(lower(trim(pmws.input_device)), ''), 'unknown') AS input_device,
         pmws.kills AS kills,
         0 AS deaths,
         0 AS awarded_kills
@@ -112,6 +116,7 @@ INSERT INTO player_kill_daily_weapon_opponent_stats (
     player_id,
     opponent_id,
     weapon,
+    input_device,
     kills,
     deaths,
     awarded_kills,
@@ -123,12 +128,13 @@ SELECT
     player_id,
     opponent_id,
     weapon,
+    input_device,
     SUM(kills)::int,
     SUM(deaths)::int,
     SUM(awarded_kills)::int,
     now()
 FROM events
-GROUP BY stat_date, server_id, player_id, opponent_id, weapon
+GROUP BY stat_date, server_id, player_id, opponent_id, weapon, input_device
 """
 
 

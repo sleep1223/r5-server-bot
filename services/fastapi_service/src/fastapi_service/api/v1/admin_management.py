@@ -101,17 +101,6 @@ class ScopedServerBody(BaseModel):
     server_port: int | None = None
 
 
-class PlayerActionBody(ScopedServerBody):
-    reason: str = "RULES"
-    sync_player_ip: bool = False
-    remark: str | None = None
-    duration_seconds: int | None = Field(default=None, gt=0)
-
-
-class UnbanBody(ScopedServerBody):
-    remark: str | None = None
-
-
 class PlayerAdminBody(BaseModel):
     is_admin: bool
     remark: str | None = None
@@ -127,11 +116,6 @@ class AccessActionBody(ScopedServerBody):
 
 
 class BotAccessActionBody(AccessActionBody):
-    operator_platform: Literal["qq"] = "qq"
-    operator_uid: str
-
-
-class BotUnbanBody(UnbanBody):
     operator_platform: Literal["qq"] = "qq"
     operator_uid: str
 
@@ -264,68 +248,8 @@ async def admin_set_player_admin(identifier: int | str, body: PlayerAdminBody):
     return success(data=data, msg="玩家管理员标记已更新")
 
 
-@router.post("/players/{identifier}/ban", dependencies=[Depends(verify_super_admin_app_key)])
-async def admin_ban_player(identifier: int | str, body: PlayerActionBody):
-    data, err = await admin_management_service.ban_player(
-        identifier=identifier,
-        reason=body.reason,
-        operator_name="admin",
-        server_scope=body.server_scope,
-        server_id=body.server_id,
-        server_key=body.server_key,
-        server_host=body.server_host,
-        server_port=body.server_port,
-        sync_player_ip=body.sync_player_ip,
-        remark=body.remark,
-        duration_seconds=body.duration_seconds,
-    )
-    if err:
-        return err
-    return success(data=data, msg="管理员封禁已提交")
-
-
-@router.post("/players/{identifier}/unban", dependencies=[Depends(verify_super_admin_app_key)])
-async def admin_unban_player(identifier: int | str, body: UnbanBody):
-    data, err = await admin_management_service.unban_player(
-        identifier=identifier,
-        operator_name="admin",
-        server_scope=body.server_scope,
-        server_id=body.server_id,
-        server_key=body.server_key,
-        server_host=body.server_host,
-        server_port=body.server_port,
-        remark=body.remark,
-    )
-    if err:
-        return err
-    return success(data=data, msg="管理员解封已提交")
-
-
-@router.post("/players/{identifier}/kick")
-async def admin_kick_player(identifier: int | str, body: PlayerActionBody, binding: UserBinding = Depends(verify_admin_app_key)):
-    if body.sync_player_ip:
-        _require_super_admin(binding, "普通管理员不能同步玩家 IP 黑名单")
-
-    data, err = await admin_management_service.kick_player(
-        identifier=identifier,
-        reason=body.reason,
-        operator_name="admin",
-        server_scope=body.server_scope,
-        server_id=body.server_id,
-        server_key=body.server_key,
-        server_host=body.server_host,
-        server_port=body.server_port,
-        sync_player_ip=body.sync_player_ip,
-        remark=body.remark,
-        duration_seconds=body.duration_seconds,
-    )
-    if err:
-        return err
-    return success(data=data, msg="管理员踢出已提交")
-
-
 @router.post("/access-actions/{action}")
-async def admin_apply_access_action(action: Literal["ban", "kick"], body: AccessActionBody, binding: UserBinding = Depends(verify_admin_app_key)):
+async def admin_apply_access_action(action: Literal["ban", "kick", "unban"], body: AccessActionBody, binding: UserBinding = Depends(verify_admin_app_key)):
     if not is_super_admin_binding(binding) and (action != "kick" or body.target_type != "player" or body.sync_player_ip):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="普通管理员只能踢出玩家")
 
@@ -346,12 +270,12 @@ async def admin_apply_access_action(action: Literal["ban", "kick"], body: Access
     )
     if err:
         return err
-    action_label = {"ban": "封禁", "kick": "踢出"}.get(action, action)
+    action_label = {"ban": "封禁", "kick": "踢出", "unban": "解封"}.get(action, action)
     return success(data=data, msg=f"管理员{action_label}操作已提交")
 
 
 @bot_router.post("/access-actions/{action}")
-async def admin_bot_apply_access_action(action: Literal["ban", "kick"], body: BotAccessActionBody):
+async def admin_bot_apply_access_action(action: Literal["ban", "kick", "unban"], body: BotAccessActionBody):
     binding = await _verify_bot_operator(body.operator_platform, body.operator_uid)
     if not is_super_admin_binding(binding) and (action != "kick" or body.target_type != "player" or body.sync_player_ip):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="普通管理员只能踢出玩家")
@@ -373,28 +297,8 @@ async def admin_bot_apply_access_action(action: Literal["ban", "kick"], body: Bo
     )
     if err:
         return err
-    action_label = {"ban": "封禁", "kick": "踢出"}.get(action, action)
+    action_label = {"ban": "封禁", "kick": "踢出", "unban": "解封"}.get(action, action)
     return success(data=data, msg=f"Bot {action_label}操作已提交")
-
-
-@bot_router.post("/players/{identifier}/unban")
-async def admin_bot_unban_player(identifier: int | str, body: BotUnbanBody):
-    binding = await _verify_bot_operator(body.operator_platform, body.operator_uid)
-    _require_super_admin(binding)
-
-    data, err = await admin_management_service.unban_player(
-        identifier=identifier,
-        operator_name=_bot_operator_name(binding),
-        server_scope=body.server_scope,
-        server_id=body.server_id,
-        server_key=body.server_key,
-        server_host=body.server_host,
-        server_port=body.server_port,
-        remark=body.remark,
-    )
-    if err:
-        return err
-    return success(data=data, msg="Bot 解封已提交")
 
 
 @router.get("/access-rules")

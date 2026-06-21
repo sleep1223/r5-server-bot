@@ -26,7 +26,6 @@ REASON_CN = {
 ERROR_CN = {
     "2001": "未找到该玩家",
     "2002": "该玩家无 Nucleus ID",
-    "3002": "RCON 操作失败",
     "3003": "当前没有在线服务器",
 }
 
@@ -36,11 +35,6 @@ cmd_kick = on_command("kick", priority=5, block=True)
 cmd_unban = on_command("unban", priority=5, block=True)
 cmd_set_alias = on_command("设置别名", aliases={"server_alias", "服务器别名"}, priority=5, block=True)
 cmd_clear_alias = on_command("清除别名", aliases={"server_alias_clear"}, priority=5, block=True)
-
-
-def _get_server_name(server: dict) -> str:
-    """从服务器字典中提取可读名称"""
-    return server.get("name") or f"{server.get('host', '?')}:{server.get('port', '?')}"
 
 
 def _error_msg(res: dict) -> str:
@@ -76,16 +70,6 @@ async def _is_superuser(bot: Bot, event: Event) -> bool:
     return await SUPERUSER(bot, event)
 
 
-def _rcon_summary(data: dict) -> str:
-    total = int(data.get("broadcast_total") or 0)
-    success_count = int(data.get("broadcast_success_count") or 0)
-    if data.get("rcon_skipped"):
-        return "⚠️ RCON 未执行：当前没有可执行的在线服务器"
-    if data.get("rcon_failed"):
-        return f"⚠️ RCON 已广播 {total} 台服务器但未成功"
-    return f"🔄 RCON 成功: {success_count}/{total}"
-
-
 def _player_display(player: dict, fallback: str) -> str:
     name = player.get("name") or fallback
     uid = player.get("nucleus_id")
@@ -104,6 +88,13 @@ def _kick_notice_summary(data: dict) -> str:
         f"\n📩 Kick 确认: {status} #{notice.get('id')}\n"
         "🔗 自助解除: https://r5.sleep0.de/bans"
     )
+
+
+def _access_submit_summary(data: dict, action_label: str) -> str:
+    execution_mode = data.get("execution_mode") or "sdk_access"
+    if execution_mode == "sdk_access":
+        return f"🧭 执行方式: SDK 准入上报生效，已写入{action_label}规则"
+    return f"🧭 执行方式: {execution_mode}"
 
 
 @cmd_ban.handle()
@@ -139,7 +130,12 @@ async def handle_ban(bot: Bot, event: Event, args: Message = CommandArg()) -> No
 
         data = res.get("data") or {}
         player = data.get("player") or {}
-        await cmd_ban.finish(f"🔨 封禁已提交\n\n👤 玩家: {_player_display(player, target)}\n📌 原因: {reason_cn}\n{_rcon_summary(data)}")
+        await cmd_ban.finish(
+            f"🔨 封禁已提交\n\n"
+            f"👤 玩家: {_player_display(player, target)}\n"
+            f"📌 原因: {reason_cn}\n"
+            f"{_access_submit_summary(data, '封禁')}"
+        )
 
     except FinishedException:
         raise
@@ -177,15 +173,12 @@ async def handle_kick(event: Event, args: Message = CommandArg()) -> None:
 
         data = res.get("data") or {}
         player = data.get("player") or {}
-        hit_server = data.get("hit_server") or {}
-        server_line = f"\n🖥️ 服务器: {_get_server_name(hit_server)}" if hit_server else ""
         await cmd_kick.finish(
             f"👢 踢出已提交\n\n"
             f"👤 玩家: {_player_display(player, target)}\n"
             f"📌 原因: {reason_cn}"
-            f"{server_line}"
             f"{_kick_notice_summary(data)}\n"
-            f"{_rcon_summary(data)}"
+            f"{_access_submit_summary(data, '踢出')}"
         )
 
     except FinishedException:
@@ -213,18 +206,23 @@ async def handle_unban(bot: Bot, event: Event, args: Message = CommandArg()) -> 
         res = resp.json()
 
         if res.get("code") != "0000":
-            await cmd_unban.finish(_auth_failure_message(resp, res, action_label="解封", endpoint=f"/admin/bot/players/{target}/unban", operator_qq=operator_qq, target=target))
+            await cmd_unban.finish(_auth_failure_message(resp, res, action_label="解封", endpoint="/admin/bot/access-actions/unban", operator_qq=operator_qq, target=target))
 
         data = res.get("data") or {}
         player = data.get("player") or {}
         released_count = len(data.get("released_rules") or [])
-        await cmd_unban.finish(f"🔓 解封已提交\n\n👤 玩家: {_player_display(player, target)}\n🧹 释放规则: {released_count}\n{_rcon_summary(data)}")
+        await cmd_unban.finish(
+            f"🔓 解封已提交\n\n"
+            f"👤 玩家: {_player_display(player, target)}\n"
+            f"🧹 释放规则: {released_count}\n"
+            "🧭 执行方式: SDK 准入规则已释放"
+        )
 
     except FinishedException:
         raise
     except httpx.ReadTimeout:
         traceback.print_exc()
-        await cmd_unban.finish("⏳ 解封请求超时\n\n服务器可能仍在后台执行\n请稍后查询玩家状态确认")
+        await cmd_unban.finish("⏳ 解封请求超时\n\n请稍后查询玩家状态确认")
     except Exception as e:
         traceback.print_exc()
         await cmd_unban.finish(f"❌ 执行出错: {e}")

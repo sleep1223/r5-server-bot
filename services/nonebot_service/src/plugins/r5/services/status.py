@@ -1,6 +1,6 @@
 import traceback
 
-from .common import on_command
+from .common import format_input_device, on_command
 from nonebot.adapters.onebot.v11 import Message
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
@@ -26,10 +26,10 @@ async def handle_server_status(args: Message = CommandArg()) -> None:
         params["server_name"] = content
 
     try:
-        # 只查询已经 RCON 同步的中国服，并使用 simple 模式减少返回体积
+        # 只查询已经 SDK 在线上报同步的中国服，并使用 simple 模式减少返回体积
         resp = await api_client.get_servers(
             server_name=params.get("server_name"),
-            simple=True,
+            simple=not bool(content),
             cn_only=True,
             timeout=5.0,
         )
@@ -52,6 +52,12 @@ async def handle_server_status(args: Message = CommandArg()) -> None:
             max_players = s.get("max_players", 0)
             ping = s.get("ping", 0)
             msg += f"{name} 👥 在线: {count}/{max_players} | 📶 Ping: {ping}\n"
+            players = s.get("players") or []
+            if content and players:
+                for p in players[:12]:
+                    msg += f"  - {p.get('name', 'Unknown')} [{format_input_device(p.get('input_device'))}]\n"
+                if len(players) > 12:
+                    msg += f"  ... 以及其他 {len(players) - 12} 名玩家\n"
 
         await server_status.finish(msg.strip())
 

@@ -1,8 +1,10 @@
 import unittest
 
+from fastapi_service.core.cache import server_cache
 from fastapi_service.core.utils import generate_hash
+from fastapi_service.services import player_service, server_service
 from fastapi_service.services import player_access_service as access_service
-from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule
+from shared_lib.models import BanRecord, IpInfo, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server
 from tortoise import Tortoise
 
 TORTOISE_TEST_CONFIG = {
@@ -19,6 +21,9 @@ TORTOISE_TEST_CONFIG = {
 
 
 class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
+    CN_SERVER_KEY = "119.188.164.105:37015"
+    HK_SERVER_KEY = "122.10.126.55:37015"
+
     GEO_BY_IP = {
         "1.2.3.4": ("中国", "山东"),
         "2.2.2.2": ("中国", "香港"),
@@ -36,9 +41,17 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         await Tortoise.generate_schemas()
         self._original_resolve_geo = access_service._resolve_geo
         access_service._resolve_geo = self._fake_resolve_geo
+        server_cache.servers.clear()
+        server_cache.raw_response.clear()
+        server_cache.ban_locations.clear()
+        server_cache._access_reports.clear()
 
     async def asyncTearDown(self) -> None:
         access_service._resolve_geo = self._original_resolve_geo
+        server_cache.servers.clear()
+        server_cache.raw_response.clear()
+        server_cache.ban_locations.clear()
+        server_cache._access_reports.clear()
         await Tortoise.close_connections()
 
     async def _fake_resolve_geo(self, ip: str) -> tuple[str | None, str | None]:
@@ -51,7 +64,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         value: str,
         reason: str,
         source_action: str = "ban",
-        server_id: str = "cn-server",
+        server_id: str = CN_SERVER_KEY,
         rule_id: str | None = None,
     ) -> PlayerAccessRule:
         return await PlayerAccessRule.create(
@@ -238,8 +251,8 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
             action="deny",
             value=access_service.GEO_POLICY_RULE_VALUE,
             server_scope="server",
-            server_id="cn-server",
-            rule_id="server_geo_policy:cn-server:disabled",
+            server_id=self.CN_SERVER_KEY,
+            rule_id="server_geo_policy:cn-address:disabled",
             reason=access_service.REGION_LOCK_REASON,
             source_action="kick",
             enabled=False,
@@ -271,8 +284,8 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
             action="deny",
             value=access_service.GEO_POLICY_RULE_VALUE,
             server_scope="server",
-            server_id="cn-server",
-            rule_id="server_geo_policy:cn-server:enabled",
+            server_id=self.CN_SERVER_KEY,
+            rule_id="server_geo_policy:cn-address:enabled",
             reason=access_service.REGION_LOCK_REASON,
             source_action="kick",
             enabled=True,
@@ -286,7 +299,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertFalse(decision["allow"])
-        self.assertEqual(decision["rule_id"], "server_geo_policy:cn-server:enabled")
+        self.assertEqual(decision["rule_id"], "server_geo_policy:cn-address:enabled")
         self.assertEqual(decision["rule"]["matched_policy"], "domestic_server_foreign_player")
 
     async def test_mainland_ip_is_allowed_on_mainland_server_by_default_policy(self) -> None:
@@ -330,13 +343,479 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["actions"][0]["ruleId"], access_service.GEO_POLICY_GLOBAL_RULE_ID)
         self.assertEqual(result["actions"][0]["reason"], "キック: 通信遅延が高すぎます。香港サーバーでプレイしてください")
 
+    async def test_online_report_populates_sdk_memory_cache_without_legacy_status(self) -> None:
+        result = await access_service.process_online_players_report(
+            server_id="cn-server",
+            report={
+                "serverId": "cn-server",
+                "serverIp": "::ffff:77bc:a469",
+                "serverPort": 37015,
+                "map": "mp_rr_arena_phase_runner",
+                "numPlayers": 1,
+                "maxPlayers": 46,
+                "players": [
+                    {
+                        "uid": "1000000000020",
+                        "nucleusId": 1000000000020,
+                        "playerName": "cache-player",
+                        "ip": "::ffff:85cf:3e0",
+                        "port": 0,
+                        "userId": 1,
+                        "handle": 1,
+                        "signonState": 6,
+                        "inputDevice": "keyboard_mouse",
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(result["actions"], [])
+        self.assertEqual(server_cache.servers, {})
+
+        online_location = server_cache.get_online_location(1000000000020)
+        self.assertIsNotNone(online_location)
+        assert online_location is not None
+        self.assertEqual(online_location["server_name"], "119.188.164.105:37015")
+        self.assertEqual(online_location["server_host"], "119.188.164.105")
+        self.assertEqual(online_location["server_port"], 37015)
+        self.assertEqual(online_location["player_ip"], "133.207.3.224")
+        self.assertTrue(online_location["_from_access_report"])
+
+        online_servers = server_cache.get_online_servers()
+        self.assertEqual(len(online_servers), 1)
+        self.assertEqual(online_servers[0]["server_name"], "119.188.164.105:37015")
+        self.assertEqual(online_servers[0]["server_host"], "119.188.164.105")
+
+        players, total = await player_service.list_players(status="online")
+        self.assertEqual(total, 1)
+        self.assertEqual(players[0]["nucleus_id"], 1000000000020)
+        self.assertEqual(players[0]["status"], "online")
+        self.assertEqual(players[0]["ip"], "133.207.3.224")
+        self.assertEqual(players[0]["country"], "日本")
+        self.assertEqual(players[0]["region"], "东京")
+
+        servers = await server_service.list_servers(cn_only=True, is_admin=True)
+        self.assertEqual(len(servers), 1)
+        self.assertEqual(servers[0]["name"], "119.188.164.105:37015")
+        self.assertEqual(servers[0]["player_count"], 1)
+        self.assertEqual(servers[0]["players"][0]["nucleus_id"], 1000000000020)
+        self.assertEqual(servers[0]["players"][0]["name"], "cache-player")
+        self.assertEqual(servers[0]["players"][0]["country"], "日本")
+        self.assertEqual(servers[0]["players"][0]["region"], "东京")
+
+    async def test_query_players_resolves_address_only_online_cache_to_server_name(self) -> None:
+        uid = 1000000000021
+        await Server.create(
+            host="119.188.164.105",
+            port=37015,
+            name="[CN(Jinan)] PWLA 1v1 Telecom",
+            short_name="[CN(Jinan)]",
+            has_status=True,
+        )
+        await Player.create(
+            nucleus_id=uid,
+            nucleus_hash=generate_hash(str(uid)),
+            name="named-server-player",
+            status="offline",
+        )
+
+        server_cache.update_access_report(
+            "119.188.164.105:37015",
+            {
+                "serverIp": "119.188.164.105",
+                "serverPort": 37015,
+                "players": [
+                    {
+                        "uid": str(uid),
+                        "nucleusId": uid,
+                        "playerName": "named-server-player",
+                        "inputDevice": "keyboard_mouse",
+                    }
+                ],
+            },
+        )
+
+        rows = await player_service.query_players(str(uid), page_size=20, offset=0)
+
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["is_online"])
+        self.assertEqual(rows[0]["server"]["name"], "[CN(Jinan)] PWLA 1v1 Telecom")
+        self.assertEqual(rows[0]["server"]["short_name"], "[CN(Jinan)]")
+        self.assertEqual(rows[0]["server"]["host"], "119.188.164.105")
+        self.assertEqual(rows[0]["server"]["port"], 37015)
+
+    async def test_sdk_reports_with_shared_config_server_id_are_scoped_by_address(self) -> None:
+        shared_server_id = "shared-sdk-config-id"
+
+        await access_service.process_online_players_report(
+            server_id=shared_server_id,
+            report={
+                "serverId": shared_server_id,
+                "serverIp": "1.2.3.4",
+                "serverPort": 37015,
+                "serverName": "[CN(A)] Alpha",
+                "players": [],
+            },
+        )
+        await access_service.process_online_players_report(
+            server_id=shared_server_id,
+            report={
+                "serverId": shared_server_id,
+                "serverIp": "2.2.2.2",
+                "serverPort": 37016,
+                "serverName": "[CN(B)] Beta",
+                "players": [],
+            },
+        )
+
+        rows = await Server.all().order_by("host", "port")
+        self.assertEqual([(row.host, row.port) for row in rows], [("1.2.3.4", 37015), ("2.2.2.2", 37016)])
+        self.assertTrue(all(row.server_id is None for row in rows))
+
+        statuses = server_cache.get_online_server_statuses()
+        self.assertEqual({status["_server"] for status in statuses}, {"1.2.3.4:37015", "2.2.2.2:37016"})
+
+        listed = await server_service.list_servers(cn_only=True, is_admin=True)
+        self.assertEqual({server["name"] for server in listed}, {"[CN(A)] Alpha", "[CN(B)] Beta"})
+        self.assertEqual({server["short_name"] for server in listed}, {"[CN(A)]", "[CN(B)]"})
+
+    async def test_sdk_report_matches_existing_server_by_unique_name_ignoring_case(self) -> None:
+        await Server.create(
+            server_id="raw-server-id",
+            host="8.8.8.8",
+            port=37015,
+            name="[CN(Name)] Exact",
+            has_status=True,
+        )
+
+        await access_service.process_online_players_report(
+            server_id="shared-sdk-config-id",
+            report={
+                "serverId": "shared-sdk-config-id",
+                "serverIp": "1.2.3.4",
+                "serverPort": 37016,
+                "serverName": "[cn(name)] exact",
+                "players": [],
+            },
+        )
+
+        rows = await Server.all()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].server_id, "raw-server-id")
+        self.assertEqual(rows[0].host, "1.2.3.4")
+        self.assertEqual(rows[0].port, 37016)
+
+    async def test_sdk_report_updates_server_name_by_address(self) -> None:
+        await Server.create(
+            server_id="raw-server-id",
+            host="1.2.3.4",
+            port=37015,
+            name="[CN(Old)] Old Name",
+            has_status=True,
+        )
+
+        await access_service.process_online_players_report(
+            server_id="ignored-sdk-config-id",
+            report={
+                "serverId": "ignored-sdk-config-id",
+                "serverIp": "1.2.3.4",
+                "serverPort": 37015,
+                "serverName": "[CN(New)] New Name",
+                "players": [],
+            },
+        )
+
+        rows = await Server.all()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].server_id, "raw-server-id")
+        self.assertEqual(rows[0].name, "[CN(New)] New Name")
+
+    async def test_sdk_report_updates_server_port_by_unique_ip(self) -> None:
+        await Server.create(
+            server_id="raw-server-id",
+            host="1.2.3.4",
+            port=37015,
+            name="[CN(Test)] Same Host",
+            has_status=True,
+        )
+
+        await access_service.process_online_players_report(
+            server_id="ignored-sdk-config-id",
+            report={
+                "serverId": "ignored-sdk-config-id",
+                "serverIp": "1.2.3.4",
+                "serverPort": 37016,
+                "serverName": "[CN(Test)] Same Host",
+                "players": [],
+            },
+        )
+
+        rows = await Server.all()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].host, "1.2.3.4")
+        self.assertEqual(rows[0].port, 37016)
+
+    async def test_sdk_report_updates_server_address_by_unique_name(self) -> None:
+        await Server.create(
+            server_id="raw-server-id",
+            host="1.2.3.4",
+            port=37015,
+            name="[CN(Test)] Stable Name",
+            has_status=True,
+        )
+
+        await access_service.process_online_players_report(
+            server_id="ignored-sdk-config-id",
+            report={
+                "serverId": "ignored-sdk-config-id",
+                "serverIp": "2.2.2.2",
+                "serverPort": 37016,
+                "serverName": "[cn(test)] stable name",
+                "players": [],
+            },
+        )
+
+        rows = await Server.all()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].host, "2.2.2.2")
+        self.assertEqual(rows[0].port, 37016)
+
+    async def test_sdk_link_local_server_ip_matches_by_name_without_overwriting_host(self) -> None:
+        await Server.create(
+            server_id="raw-server-id",
+            host="27.150.128.85",
+            port=37015,
+            name="[CN(Quanzhou2)] PWLA 1v1 Unicom 0.25AA",
+            has_status=True,
+        )
+
+        await access_service.process_online_players_report(
+            server_id="shared-sdk-config-id",
+            report={
+                "serverId": "shared-sdk-config-id",
+                "serverIp": "fe80::f2ea:54c1:647e:98bd",
+                "serverPort": 37015,
+                "serverName": "[cn(quanzhou2)] pwla 1v1 unicom 0.25aa",
+                "players": [],
+            },
+        )
+
+        rows = await Server.all()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].host, "27.150.128.85")
+        self.assertEqual(rows[0].port, 37015)
+
+        statuses = server_cache.get_online_server_statuses()
+        self.assertEqual(len(statuses), 1)
+        self.assertEqual(statuses[0]["_server"], "27.150.128.85:37015")
+        self.assertEqual(statuses[0]["ip"], "27.150.128.85")
+
+    async def test_server_list_matches_link_local_sdk_status_by_unique_name(self) -> None:
+        await access_service.process_online_players_report(
+            server_id="shared-sdk-config-id",
+            report={
+                "serverId": "shared-sdk-config-id",
+                "serverIp": "fe80::f2ea:54c1:647e:98bd",
+                "serverPort": 37015,
+                "serverName": "[CN(Quanzhou2)] PWLA 1v1 Unicom 0.25AA",
+                "players": [],
+            },
+        )
+        server_cache.update_raw_response({
+            "servers": [
+                {
+                    "serverId": "raw-quanzhou-id",
+                    "ip": "27.150.128.85",
+                    "port": 37015,
+                    "name": "[CN(Quanzhou2)] PWLA 1v1 Unicom 0.25AA",
+                    "region": "CN",
+                    "playerCount": 6,
+                    "maxPlayers": 34,
+                }
+            ]
+        })
+
+        rows = await Server.all()
+        self.assertEqual(rows, [])
+
+        listed = await server_service.list_servers(cn_only=True, is_admin=True)
+
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["name"], "[CN(Quanzhou2)] PWLA 1v1 Unicom 0.25AA")
+        self.assertEqual(listed[0]["short_name"], "[CN(Quanzhou2)]")
+
+    async def test_sdk_reports_without_usable_ip_are_scoped_by_server_name(self) -> None:
+        shared_server_id = "shared-sdk-config-id"
+
+        await access_service.process_online_players_report(
+            server_id=shared_server_id,
+            report={
+                "serverId": shared_server_id,
+                "serverIp": "",
+                "serverPort": 37015,
+                "serverName": "[CN(A)] Alpha",
+                "players": [],
+            },
+        )
+        await access_service.process_online_players_report(
+            server_id=shared_server_id,
+            report={
+                "serverId": shared_server_id,
+                "serverIp": "",
+                "serverPort": 37015,
+                "serverName": "[CN(B)] Beta",
+                "players": [],
+            },
+        )
+
+        statuses = server_cache.get_online_server_statuses()
+        self.assertEqual({status["_server"] for status in statuses}, {"name:[cn(a)] alpha", "name:[cn(b)] beta"})
+        self.assertEqual({status["hostname"] for status in statuses}, {"[CN(A)] Alpha", "[CN(B)] Beta"})
+
+    async def test_server_list_filters_link_local_raw_server_rows(self) -> None:
+        server_cache.update_raw_response({
+            "servers": [
+                {
+                    "serverId": "bad-raw-id",
+                    "ip": "fe80::e970:de6e:2c07:24c8",
+                    "port": 37015,
+                    "name": "[fe80::e970:de6e:2c07:24c8]:0:37015",
+                    "region": "CN",
+                    "playerCount": 0,
+                    "maxPlayers": 34,
+                },
+                {
+                    "serverId": "good-raw-id",
+                    "ip": "106.75.246.225",
+                    "port": 37015,
+                    "name": "[CN(Shanghai)] PWLA 1v1 Telecom 0.3AA",
+                    "region": "CN",
+                    "playerCount": 1,
+                    "maxPlayers": 26,
+                },
+            ]
+        })
+
+        listed = await server_service.list_servers(cn_only=True, is_admin=True)
+
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["name"], "[CN(Shanghai)] PWLA 1v1 Telecom 0.3AA")
+
+    async def test_server_list_matches_sdk_status_by_unique_name_ignoring_case(self) -> None:
+        await access_service.process_online_players_report(
+            server_id="shared-sdk-config-id",
+            report={
+                "serverId": "shared-sdk-config-id",
+                "serverIp": "2.2.2.2",
+                "serverPort": 37016,
+                "serverName": "[cn(test)] real server",
+                "players": [
+                    {
+                        "uid": "1000000000022",
+                        "nucleusId": 1000000000022,
+                        "playerName": "name-match-player",
+                    }
+                ],
+            },
+        )
+        server_cache.update_raw_response({
+            "servers": [
+                {
+                    "serverId": "raw-server-id",
+                    "ip": "1.2.3.4",
+                    "port": 37015,
+                    "name": "[CN(Test)] Real Server",
+                    "region": "CN",
+                    "playerCount": 6,
+                    "maxPlayers": 65,
+                }
+            ]
+        })
+
+        listed = await server_service.list_servers(cn_only=True, is_admin=True)
+
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["name"], "[CN(Test)] Real Server")
+        self.assertEqual(listed[0]["short_name"], "[CN(Test)]")
+        self.assertEqual(listed[0]["player_count"], 1)
+        self.assertEqual(listed[0]["players"][0]["name"], "name-match-player")
+
+    async def test_server_list_uses_address_ping_and_raw_short_name_before_sdk_config_id(self) -> None:
+        await IpInfo.create(ip="1.2.3.4", country="中国", region="山东", ping=42, is_resolved=True)
+        await access_service.process_online_players_report(
+            server_id="shared-sdk-config-id",
+            report={
+                "serverId": "shared-sdk-config-id",
+                "serverIp": "1.2.3.4",
+                "serverPort": 37015,
+                "players": [],
+            },
+        )
+        server_cache.update_raw_response({
+            "servers": [
+                {
+                    "serverId": "raw-server-id",
+                    "ip": "1.2.3.4",
+                    "port": 37015,
+                    "name": "[CN(Test)] Real Server",
+                    "region": "CN",
+                    "playerCount": 3,
+                    "maxPlayers": 65,
+                }
+            ]
+        })
+
+        listed = await server_service.list_servers(cn_only=True, is_admin=True)
+
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["name"], "[CN(Test)] Real Server")
+        self.assertEqual(listed[0]["short_name"], "[CN(Test)]")
+        self.assertEqual(listed[0]["ping"], 42)
+
+    async def test_online_report_accepts_player_without_ip(self) -> None:
+        result = await access_service.process_online_players_report(
+            server_id="cn-server",
+            report={
+                "serverId": "cn-server",
+                "serverIp": "::ffff:77bc:a469",
+                "serverPort": 37015,
+                "map": "mp_rr_arena_phase_runner",
+                "numPlayers": 1,
+                "maxPlayers": 46,
+                "players": [
+                    {
+                        "uid": "1000000000021",
+                        "nucleusId": 1000000000021,
+                        "playerName": "no-ip-player",
+                        "userId": 1,
+                        "handle": 1,
+                        "signonState": 6,
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(result["actions"], [])
+
+        online_location = server_cache.get_online_location(1000000000021)
+        self.assertIsNotNone(online_location)
+        assert online_location is not None
+        self.assertIsNone(online_location["player_ip"])
+        self.assertIsNone(online_location["player_country"])
+        self.assertIsNone(online_location["player_region"])
+
+        servers = await server_service.list_servers(cn_only=True, is_admin=True)
+        self.assertEqual(servers[0]["players"][0]["name"], "no-ip-player")
+        self.assertIsNone(servers[0]["players"][0]["country"])
+        self.assertIsNone(servers[0]["players"][0]["region"])
+
     async def test_domestic_ip_blocked_from_hong_kong_server_returns_chinese_reason(self) -> None:
         await self._deny_rule(
             rule_type="country",
             value="中国",
             reason="NO_COVER",
             source_action="ban",
-            server_id="hk-server",
+            server_id=self.HK_SERVER_KEY,
             rule_id="deny-cn-hk",
         )
 
@@ -404,7 +883,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
             value="香港",
             reason="RULES",
             source_action="kick",
-            server_id="hk-server",
+            server_id=self.HK_SERVER_KEY,
             rule_id="deny-hk-region",
         )
 
@@ -553,9 +1032,9 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(first_notice.id, second_notice.id)
         self.assertEqual(await PlayerAccessNotice.filter(uid=str(player.nucleus_id), requires_ack=True).count(), 1)
-        self.assertEqual(second_notice.reason, "NO_COVER")
-        self.assertEqual(getattr(second_notice, "operation_id", None), second_operation.id)
-        self.assertEqual(second_notice.message_context["remark"], "second")
+        self.assertEqual(second_notice.reason, "RULES")
+        self.assertEqual(getattr(second_notice, "operation_id", None), first_operation.id)
+        self.assertEqual(second_notice.message_context["remark"], "first")
         self.assertTrue(second_notice.message_context["pending_notice_reused"])
 
 

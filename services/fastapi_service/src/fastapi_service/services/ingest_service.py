@@ -88,31 +88,16 @@ async def _resolve_server(ref: ServerRef) -> Server:
         "port": ref.port,
         "name": ref.name or f"server-{ref.host}",
         "is_self_hosted": True,
-        "server_id": server_identifier,
     }
 
-    server = await Server.get_or_none(server_id=server_identifier) if server_identifier else None
-    host_server = await Server.get_or_none(host=ref.host)
-    if server is not None and host_server is not None and server.id != host_server.id:
-        if host_server.server_id not in (None, server_identifier):
-            logger.warning(f"Server {ref.host} 已绑定其它 server_id={host_server.server_id}, 忽略本次 server_id={server_identifier}")
-            server = host_server
-            server_identifier = None
-        else:
-            await Server.filter(id=server.id).update(server_id=None, has_status=False)
-            server = host_server
-    elif server is None:
-        server = host_server
+    server = await Server.filter(host=ref.host, port=ref.port).first()
 
     if server is None:
         server = await Server.create(host=ref.host, **defaults)
-        logger.info(f"Server 创建: id={server.id}, host={ref.host}, server_id={server_identifier}")
+        logger.info(f"Server 创建: id={server.id}, host={ref.host}, port={ref.port}, reported_server_id={server_identifier or '-'}")
         return server
 
     update_fields: list[str] = []
-    if server_identifier and server.server_id != server_identifier:
-        server.server_id = server_identifier
-        update_fields.append("server_id")
     if server.host != ref.host:
         server.host = ref.host
         update_fields.append("host")

@@ -28,7 +28,7 @@ async def get_server_list(
     参数：
     - ``server_name``: 按服务器名模糊过滤（不区分大小写）。
     - ``simple``: 精简字段，省略在线玩家列表等重字段。
-    - ``cn_only``: 只返回已通过 RCON 同步到本地的服务器（通常是中国服）。
+    - ``cn_only``: 只返回已通过 SDK 在线上报同步到本地的服务器（通常是中国服）。
     """
     is_admin = check_is_admin(credentials, settings.fastapi_access_tokens)
     results = await server_service.list_servers(
@@ -52,6 +52,8 @@ async def set_server_alias(host: str, body: ServerAliasBody):
     result, err = await server_service.set_server_alias(host, body.short_name)
     if err == "not_found":
         return error(ErrorCode.SERVER_NOT_FOUND, f"未找到服务器: {host}")
+    if err == "ambiguous_host":
+        return error(ErrorCode.SERVER_NOT_FOUND, f"服务器地址不唯一，请使用 IP:端口: {host}")
     if err == "alias_conflict":
         conflict_host = result["host"] if result else ""
         return error(ErrorCode.SERVER_NOT_FOUND, f"别名已被主机 {conflict_host} 使用")

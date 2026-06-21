@@ -44,6 +44,32 @@ class R5ApiClient:
             params["server"] = server
         return await self._request("GET", "/leaderboard/kd", params=params, timeout=timeout)
 
+    async def get_input_device_leaderboard(
+        self,
+        range_type: str = "today",
+        page_no: int = 1,
+        page_size: int = 20,
+        sort: str = "kills",
+        min_kills: int = 1,
+        min_deaths: int = 0,
+        input_device: str | None = None,
+        server: str | None = None,
+        timeout: float = 3.0,
+    ) -> httpx.Response:
+        params: dict[str, Any] = {
+            "range": range_type,
+            "page_no": page_no,
+            "page_size": page_size,
+            "sort": sort,
+            "min_kills": min_kills,
+            "min_deaths": min_deaths,
+        }
+        if input_device:
+            params["input_device"] = input_device
+        if server:
+            params["server"] = server
+        return await self._request("GET", "/leaderboard/input-device", params=params, timeout=timeout)
+
     async def get_player_vs_all(
         self,
         target: str,
@@ -179,8 +205,8 @@ class R5ApiClient:
         return await self._request("POST", "/admin/bot/access-actions/kick", json=data, timeout=timeout)
 
     async def unban_player(self, operator_qq: str, target: str, timeout: float = 12.0) -> httpx.Response:
-        data = {"operator_platform": "qq", "operator_uid": operator_qq}
-        return await self._request("POST", f"/admin/bot/players/{target}/unban", json=data, timeout=timeout)
+        data = {"operator_platform": "qq", "operator_uid": operator_qq, "target_type": "player", "target_value": target}
+        return await self._request("POST", "/admin/bot/access-actions/unban", json=data, timeout=timeout)
 
     async def query_player(self, query: str, page_no: int = 1, page_size: int = 20, timeout: float = 5.0) -> httpx.Response:
         params = {"q": query, "page_no": page_no, "page_size": page_size}

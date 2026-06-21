@@ -1,17 +1,4 @@
-from shared_lib.config import settings
-
 ALLOWED_REASONS = ["NO_COVER", "BE_POLITE", "CHEAT", "RULES"]
-
-
-def is_no_cover_allowed_server(server_host: str | None, server_name: str | None) -> bool:
-    """判断该服务器是否为无规则服务器(允许撤回掩体): 命中则跳过 NO_COVER 的 kick/ban 后台执行。"""
-    if server_host and server_host in settings.no_cover_allowed_server_hosts:
-        return True
-    if server_name:
-        for marker in settings.no_cover_allowed_server_name_markers:
-            if marker in server_name:
-                return True
-    return False
 
 
 WEAPON_MAP: dict[str, str] = {

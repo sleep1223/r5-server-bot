@@ -12,10 +12,12 @@ async def ip_resolution_task() -> None:
         try:
             server_ips = set()
             ips_to_process = set()
-            for server_data in server_cache.servers.values():
+            for server_data in server_cache.get_online_server_statuses():
+                ip = server_data.get("ip")
                 host_str = server_data.get("_server")
-                if host_str:
+                if not ip and host_str and ":" in host_str:
                     ip = host_str.split(":")[0]
+                if ip:
                     server_ips.add(ip)
                     ips_to_process.add(ip)
             players = await Player.filter(ip__isnull=False).all()

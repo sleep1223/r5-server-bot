@@ -1,6 +1,6 @@
 import traceback
 
-from .common import on_command
+from .common import format_input_device, on_command
 from nonebot.adapters.onebot.v11 import Message
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
@@ -70,6 +70,7 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
             msg += f"\n{status_icon} {p.get('name')}\n"
             msg += f"🆔 {p.get('nucleus_id')}\n"
             msg += f"📋 {status_text}\n"
+            msg += f"🎮 {format_input_device(p.get('input_device'))}\n"
             if ban_count or kick_count:
                 msg += f"🚫 封禁 {ban_count} 次 / ⚠️ 踢出 {kick_count} 次\n"
             country = p.get("country") or "未知"

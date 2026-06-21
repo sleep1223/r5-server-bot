@@ -4,7 +4,7 @@ import traceback
 from datetime import datetime
 
 import httpx
-from .common import FRIEND_HINT, on_command
+from .common import FRIEND_HINT, format_input_device, on_command
 from nonebot.adapters.onebot.v11 import Event, Message
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
@@ -67,13 +67,14 @@ async def handle_recent_matches(args: Message = CommandArg()) -> None:
             top_kills = top.get("kills", 0)
             top_deaths = top.get("deaths", 0)
             top_kd = top.get("kd", 0)
+            top_device = format_input_device(top.get("input_device"))
             map_name = m.get("map_name") or "?"
             ended = _fmt_time(m.get("ended_at"))
             srv = m.get("server") or {}
             srv_tag = srv.get("short_name") or srv.get("name") or srv.get("host") or ""
             srv_prefix = f"@{srv_tag} " if srv_tag and not scope else ""
             msg += f"#{i} [{ended}] {srv_prefix}{map_name}\n"
-            msg += f"    👑 {top_name}: {top_kills}击杀/{top_deaths}死亡 (KD {top_kd})\n"
+            msg += f"    👑 {top_name} [{top_device}]: {top_kills}击杀/{top_deaths}死亡 (KD {top_kd})\n"
 
         msg += "\n🖥️ 面板: https://r5.sleep0.de"
         await recent_matches.finish(msg.strip())
@@ -242,9 +243,10 @@ async def handle_competitive(args: Message = CommandArg()) -> None:
         rank_base = (page_no - 1) * 20
         for i, p in enumerate(data, 1):
             name = p.get("name", "Unknown")
+            device = format_input_device(p.get("input_device"))
             total_kills = p.get("total_kills", 0)
             counted = p.get("counted_matches", 0)
-            msg += f"#{rank_base + i} {name}: {total_kills} 击杀 ({counted} 场)\n"
+            msg += f"#{rank_base + i} {name} [{device}]: {total_kills} 击杀 ({counted} 场)\n"
 
         msg += "\n🖥️ 面板: https://r5.sleep0.de"
         await competitive_rank.finish(msg.strip())

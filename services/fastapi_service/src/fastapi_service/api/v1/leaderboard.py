@@ -52,6 +52,40 @@ async def get_kd_leaderboard(
     return paginated(data=results, total=total, msg=f"{range} 范围 KD 排行榜", **extra)
 
 
+@router.get("/leaderboard/input-device")
+async def get_input_device_leaderboard(
+    range: Literal["today", "yesterday", "week", "month"] = "today",
+    pg: Pagination = Depends(get_pagination),
+    sort: Literal["kills", "deaths", "kd"] = "kills",
+    min_kills: int = 1,
+    min_deaths: int = 0,
+    input_device: Literal["controller", "keyboard_mouse", "unknown"] | None = None,
+    server: str | None = None,
+):
+    """获取按输入设备维度聚合的击杀排行榜。"""
+    server_obj = None
+    if server:
+        server_obj = await resolve_server(server)
+        if not server_obj:
+            return error(ErrorCode.SERVER_NOT_FOUND, f"未找到服务器: {server}")
+
+    results, total = await leaderboard_service.get_input_device_kill_ranking(
+        range_type=range,
+        sort=sort,
+        min_kills=min_kills,
+        min_deaths=min_deaths,
+        offset=pg.offset,
+        page_size=pg.page_size,
+        input_device=input_device,
+        server_id=server_obj.id if server_obj else None,
+    )
+    extra: dict = {}
+    if server_obj:
+        extra["server"] = _server_info(server_obj)
+    device_msg = f" ({input_device})" if input_device else ""
+    return paginated(data=results, total=total, msg=f"{range} 范围输入设备击杀排行榜{device_msg}", **extra)
+
+
 @router.get("/leaderboard/weapon")
 async def get_weapon_leaderboard(
     weapon: list[str] = Query(

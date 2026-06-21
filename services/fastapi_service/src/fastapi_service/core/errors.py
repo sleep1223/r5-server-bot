@@ -13,9 +13,7 @@ class ErrorCode:
     PLAYER_NO_NUCLEUS_ID = "2002"
     PLAYER_NOT_ONLINE = "2003"
 
-    # 3xxx — RCON / 服务器操作
-    RCON_CONFIG_MISSING = "3001"
-    RCON_OPERATION_FAILED = "3002"
+    # 3xxx — 服务器状态
     NO_ONLINE_SERVERS = "3003"
 
     # 4xxx — 资源未找到

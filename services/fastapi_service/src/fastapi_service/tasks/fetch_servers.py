@@ -43,7 +43,7 @@ async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
     if not raw_list:
         return
 
-    seen_hosts: set[str] = set()
+    seen_addresses: set[str] = set()
     seen_server_ids: set[str] = set()
     now = datetime.now(timezone.utc)
 
@@ -77,8 +77,9 @@ async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
                 logger.debug(f"跳过缺少 host 的原始服务器: server_id={server_identifier}")
                 continue
 
-            if ip:
-                seen_hosts.add(ip)
+            address_key = f"{ip}:{port}" if ip and port else ""
+            if address_key:
+                seen_addresses.add(address_key)
             if server_identifier:
                 seen_server_ids.add(server_identifier)
 
@@ -99,23 +100,22 @@ async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
             if server_identifier:
                 defaults["server_id"] = server_identifier
 
-            if server is None and ip:
-                server = await Server.get_or_none(host=ip)
+            address_server = await Server.filter(host=ip, port=port).first() if ip else None
+            if server is None and address_server is not None:
+                server = address_server
+            elif server is not None and address_server is not None and server.id != address_server.id:
+                if address_server.server_id not in (None, server_identifier):
+                    logger.warning(f"合并原始服务器行时地址冲突: server_id={server_identifier}, address={address_key}, conflict_id={address_server.id}")
+                    continue
+                await Server.filter(id=server.id).update(server_id=None, has_status=False)
+                server = address_server
 
             created = False
             if server is None:
                 server = await Server.create(host=ip, **defaults)
                 created = True
             elif ip and server.host != ip:
-                conflict = await Server.get_or_none(host=ip)
-                if conflict and conflict.id != server.id:
-                    if server_identifier and conflict.server_id not in (None, server_identifier):
-                        logger.warning(f"合并原始服务器行时 server_id 冲突: server_id={server_identifier}, host={ip}, conflict_id={conflict.id}")
-                        continue
-                    await Server.filter(id=server.id).update(server_id=None, has_status=False)
-                    server = conflict
-                else:
-                    server.host = ip
+                server.host = ip
 
             if created:
                 # 新行顺手补一个默认 short_name，避免用户必须手工设置后才能搜中文
@@ -135,18 +135,19 @@ async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
             logger.warning(f"写入 Server 行失败(ip={raw.get('ip')!r}, server_id={raw.get('serverId')!r}): {e}")
             continue
 
-    if seen_hosts or seen_server_ids:
+    if seen_addresses or seen_server_ids:
         # 未在本次列表出现的活跃行翻 False
-        query = Server.filter(has_status=True)
-        if seen_server_ids and not seen_hosts:
-            query = query.filter(server_id__isnull=False)
-        elif seen_hosts and not seen_server_ids:
-            query = query.filter(host__isnull=False)
-        if seen_hosts:
-            query = query.exclude(host__in=seen_hosts)
-        if seen_server_ids:
-            query = query.exclude(server_id__in=seen_server_ids)
-        await query.update(has_status=False)
+        active_rows = await Server.filter(has_status=True).all()
+        stale_ids: list[int] = []
+        for row in active_rows:
+            row_address = f"{row.host}:{row.port}" if row.host and row.port else ""
+            if row_address and row_address in seen_addresses:
+                continue
+            if row.server_id and row.server_id in seen_server_ids:
+                continue
+            stale_ids.append(row.id)
+        if stale_ids:
+            await Server.filter(id__in=stale_ids).update(has_status=False)
 
 
 async def fetch_server_list_raw_once() -> int | None:

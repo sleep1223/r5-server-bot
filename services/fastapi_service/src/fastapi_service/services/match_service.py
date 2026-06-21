@@ -48,6 +48,29 @@ def _safe_float(value: object | None, default: float = 0.0) -> float:
         return default
 
 
+def _normalize_input_device(value: object | None) -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not text:
+        return "unknown"
+    if text in {"controller", "gamepad", "pad", "joystick", "xinput"}:
+        return "controller"
+    if text in {"keyboard_mouse", "keyboard", "mouse", "kbm", "mnk", "keyboardmouse", "keyboard_and_mouse"}:
+        return "keyboard_mouse"
+    if text in {"unknown", "none", "null"}:
+        return "unknown"
+    return text[:50]
+
+
+def _input_device_from_payload(payload: dict[str, Any]) -> str | None:
+    for key in ("inputDevice", "input_device", "input", "device"):
+        if key not in payload:
+            continue
+        text = str(payload.get(key) or "").strip()
+        if text:
+            return _normalize_input_device(text)
+    return None
+
+
 def _timestamp_to_dt(value: object) -> datetime:
     timestamp = _safe_int(value, 0)
     if timestamp <= 0:
@@ -56,7 +79,8 @@ def _timestamp_to_dt(value: object) -> datetime:
 
 
 def _sdk_full_match_id(server: Server, ended_at: datetime) -> str:
-    server_key = str(server.server_id or server.host or server.id).replace(":", "-")
+    server_key = f"{server.host}:{server.port}" if server.host else str(server.id)
+    server_key = server_key.replace(":", "-")
     return f"{server_key}-{ended_at:%Y%m%d-%H%M%S}-sdk"
 
 
@@ -105,6 +129,7 @@ async def _upsert_report_players(players: list[dict[str, Any]]) -> tuple[int, di
             uid=uid,
             nucleus_id=nucleus_id,
             player_name=player.get("playerName"),
+            input_device=_input_device_from_payload(player),
         )
         if saved:
             count += 1
@@ -195,6 +220,8 @@ async def _save_sdk_weapon_stats(
         if player is None:
             continue
 
+        input_device = _input_device_from_payload(player_payload) or "unknown"
+
         for stat in _weapon_stats_from_payload(player_payload):
             weapon = str(stat.get("weapon") or "").strip() or "unknown"
             shots = max(_safe_int(stat.get("shots"), 0), 0)
@@ -225,6 +252,7 @@ async def _save_sdk_weapon_stats(
                     kills=kills,
                     accuracy=accuracy,
                     accuracy_percent=accuracy_percent,
+                    input_device=input_device,
                     source=_SDK_MATCH_END_CATEGORY,
                 )
             )
@@ -235,14 +263,14 @@ async def _save_sdk_weapon_stats(
 
 
 async def process_match_end_report(report: dict[str, Any]) -> dict[str, Any]:
-    server_identifier = str(report.get("serverId") or "").strip()
     ended_at = _timestamp_to_dt(report.get("endedAt"))
     players = [player for player in report.get("players") or [] if isinstance(player, dict)]
 
     server = await player_access_service.upsert_sdk_server_snapshot(
-        server_id=server_identifier,
+        server_id=None,
         server_ip=report.get("serverIp"),
         server_port=report.get("serverPort"),
+        server_name=report.get("serverName") or report.get("hostname"),
         map_name=report.get("map"),
         num_players=report.get("numPlayers"),
         max_players=report.get("maxPlayers"),
@@ -251,6 +279,7 @@ async def process_match_end_report(report: dict[str, Any]) -> dict[str, Any]:
     if server is None:
         raise ValueError("serverIp/serverPort 无效，无法创建或关联服务器")
 
+    server_identifier = f"{server.host}:{server.port}" if server.host and server.port else str(report.get("serverName") or report.get("hostname") or "")
     player_count, player_map = await _upsert_report_players(players)
     kill_events = [event for event in report.get("killEvents") or [] if isinstance(event, dict)]
     match, created_match = await _find_or_create_sdk_match(server, report, ended_at)
@@ -272,7 +301,7 @@ async def process_match_end_report(report: dict[str, Any]) -> dict[str, Any]:
         "payload": report,
     }
     existing_report = await SdkMatchEndReport.filter(
-        server_identifier=server_identifier,
+        server_id=server.id,
         ended_at=ended_at,
         tick=report_values["tick"],
     ).first()
@@ -417,13 +446,14 @@ async def get_recent_matches(
 
     # 富化 top1 玩家名 + server 信息
     if top_player_ids:
-        players = await Player.filter(id__in=list(top_player_ids)).values("id", "name", "nucleus_id")
+        players = await Player.filter(id__in=list(top_player_ids)).values("id", "name", "nucleus_id", "input_device")
         p_map = {p["id"]: p for p in players}
         for r in results:
             pid = r["top"]["player_id"]
             p_info = p_map.get(pid)
             r["top"]["name"] = p_info["name"] if p_info else f"Unknown ({pid})"
             r["top"]["nucleus_id"] = p_info["nucleus_id"] if p_info else None
+            r["top"]["input_device"] = (p_info or {}).get("input_device") or "unknown"
 
     if involved_server_ids:
         servers = await Server.filter(id__in=list(involved_server_ids)).values("id", "host", "name", "short_name")
@@ -618,7 +648,7 @@ async def get_competitive_ranking(
 
     # 富化 + 剔除 banned（跟 leaderboard_service 风格一致）
     player_ids = [r["attacker_id"] for r in rows]
-    players = await Player.filter(id__in=player_ids).values("id", "name", "nucleus_id", "status")
+    players = await Player.filter(id__in=player_ids).values("id", "name", "nucleus_id", "status", "input_device")
     p_map = {p["id"]: p for p in players}
 
     results: list[dict] = []
@@ -630,6 +660,7 @@ async def get_competitive_ranking(
         results.append({
             "name": p_info["name"] if p_info else f"Unknown ({pid})",
             "nucleus_id": p_info["nucleus_id"] if p_info else None,
+            "input_device": (p_info or {}).get("input_device") or "unknown",
             "total_kills": r["total_kills"],
             "counted_matches": r["counted_matches"],
         })

@@ -23,8 +23,8 @@ def main() -> None:
         respawn_failed_workers=True,
         respawn_interval=3.5,
         workers_kill_timeout=30,
-        workers_lifetime=3600 * 4,
-        workers_max_rss=512,
+        # workers_lifetime=3600 * 4,
+        # workers_max_rss=512,
         backpressure=settings.fastapi_backpressure,
         backlog=settings.fastapi_backlog,
     )
