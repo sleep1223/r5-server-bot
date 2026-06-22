@@ -2,8 +2,8 @@ import unittest
 
 from fastapi_service.core.cache import server_cache
 from fastapi_service.core.utils import generate_hash
+from fastapi_service.services import admin_management_service, player_service, server_service
 from fastapi_service.services import player_access_service as access_service
-from fastapi_service.services import player_service, server_service
 from shared_lib.models import BanRecord, IpInfo, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server
 from tortoise import Tortoise
 
@@ -30,6 +30,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         "8.8.8.8": ("美国", "加利福尼亚"),
         "8.8.4.4": ("美国", "加利福尼亚"),
         "203.0.113.8": ("日本", "东京"),
+        "203.0.113.9": ("韩国", "首尔"),
         "119.188.164.105": ("中国", "山东"),
         "133.207.3.224": ("日本", "东京"),
         "5.6.7.8": ("德国", "柏林"),
@@ -343,9 +344,10 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["actions"]), 1)
         self.assertEqual(result["actions"][0]["action"], "kick")
         self.assertEqual(result["actions"][0]["ruleId"], access_service.GEO_POLICY_GLOBAL_RULE_ID)
-        self.assertEqual(result["actions"][0]["reason"], "Kicked by server policy")
+        decision = await self._check(uid="1000000000016", ip="::ffff:85cf:3e0")
+        self.assertEqual(result["actions"][0]["reason"], decision["reason"])
 
-    async def test_online_report_uses_sdk_safe_reason_for_pending_kick_notice(self) -> None:
+    async def test_online_report_uses_same_localized_reason_for_pending_kick_notice(self) -> None:
         uid = "1000000000024"
         notice = await PlayerAccessNotice.create(uid=uid, action="kick", reason="NO_COVER", server_scope="global", requires_ack=True)
 
@@ -373,7 +375,60 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["actions"]), 1)
         self.assertEqual(result["actions"][0]["action"], "kick")
         self.assertEqual(result["actions"][0]["ruleId"], f"kick_notice:{notice.id}")
-        self.assertEqual(result["actions"][0]["reason"], "Kicked by server policy")
+        decision = await self._check(uid=uid, ip="1.2.3.4")
+        self.assertEqual(result["actions"][0]["reason"], decision["reason"])
+
+    async def test_admin_kick_notice_reason_matches_online_and_reconnect_reason(self) -> None:
+        uid = "1000000000025"
+        player = await Player.create(
+            nucleus_id=int(uid),
+            nucleus_hash=generate_hash(uid),
+            name="admin-kick-player",
+            ip="8.8.8.8",
+            country="美国",
+            region="加利福尼亚",
+        )
+
+        data, err = await admin_management_service.apply_access_action(
+            action="kick",
+            target_type="player",
+            target_value=player.nucleus_id,
+            reason="NO_COVER",
+            operator_name="unit-test",
+        )
+
+        self.assertIsNone(err)
+        assert data is not None
+        notice = await PlayerAccessNotice.get(uid=uid)
+        self.assertEqual(notice.reason, "NO_COVER")
+        self.assertIsNone(notice.message)
+
+        result = await access_service.process_online_players_report(
+            server_id="cn-server",
+            report={
+                "serverId": "cn-server",
+                "serverIp": "::ffff:77bc:a469",
+                "serverPort": 37015,
+                "players": [
+                    {
+                        "uid": uid,
+                        "nucleusId": int(uid),
+                        "playerName": "admin-kick-player",
+                        "ip": "8.8.8.8",
+                        "port": 0,
+                        "userId": 1,
+                        "handle": 1,
+                        "signonState": 6,
+                    }
+                ],
+            },
+        )
+        decision = await self._check(uid=uid, ip="8.8.8.8")
+
+        self.assertEqual(len(result["actions"]), 1)
+        self.assertEqual(result["actions"][0]["action"], "kick")
+        self.assertEqual(result["actions"][0]["reason"], decision["reason"])
+        self.assertEqual(result["actions"][0]["reason"], f"Kicked: No-cover rule violation. Visit {access_service.SELF_UNBAN_URL} to self-unban")
 
     async def test_online_report_populates_sdk_memory_cache_without_legacy_status(self) -> None:
         result = await access_service.process_online_players_report(
@@ -988,6 +1043,16 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(decision["allow"])
         self.assertEqual(decision["reason_locale"], "en")
         self.assertEqual(decision["reason"], "Banned: Cheating")
+        self.assertEqual(decision["rule"]["rule_type"], "cidr")
+
+    async def test_cidr_rule_returns_korean_reason_for_korean_ip(self) -> None:
+        await self._deny_rule(rule_type="cidr", value="203.0.113.0/24", reason="CHEAT", source_action="ban", rule_id="deny-cidr-kr")
+
+        decision = await self._check(uid="1000000000026", ip="203.0.113.9")
+
+        self.assertFalse(decision["allow"])
+        self.assertEqual(decision["reason_locale"], "ko")
+        self.assertEqual(decision["reason"], "차단됨: 부정행위")
         self.assertEqual(decision["rule"]["rule_type"], "cidr")
 
     async def test_region_rule_returns_chinese_reason_for_hong_kong_ip(self) -> None:

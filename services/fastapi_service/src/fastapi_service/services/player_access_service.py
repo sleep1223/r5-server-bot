@@ -52,6 +52,15 @@ REASON_TEXTS = {
         GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "通信遅延が高すぎます。香港サーバーでプレイしてください",
         GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "通信遅延が高すぎます。中国国内サーバーでプレイしてください",
     },
+    "ko": {
+        "NO_COVER": "엄폐물 제거 규칙 위반",
+        "BE_POLITE": "부적절한 언행",
+        "CHEAT": "부정행위",
+        "RULES": "규칙 위반",
+        REGION_LOCK_REASON: "네트워크 지연 시간이 너무 높습니다. 지연 시간이 더 낮은 서버를 선택해 주세요",
+        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "네트워크 지연 시간이 너무 높습니다. 홍콩 서버에서 플레이해 주세요",
+        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "네트워크 지연 시간이 너무 높습니다. 중국 본토 서버를 선택해 주세요",
+    },
 }
 ACTION_REASON_PREFIXES = {
     "zh": {
@@ -65,6 +74,10 @@ ACTION_REASON_PREFIXES = {
     "ja": {
         "ban": "参加禁止",
         "kick": "キック",
+    },
+    "ko": {
+        "ban": "차단됨",
+        "kick": "퇴장됨",
     },
 }
 ACTION_DEFAULT_REASONS = {
@@ -80,11 +93,16 @@ ACTION_DEFAULT_REASONS = {
         "ban": "このサーバーへの参加は禁止されています",
         "kick": "参加する前にウェブサイトで確認してください",
     },
+    "ko": {
+        "ban": "이 서버에 참가할 수 없습니다",
+        "kick": "서버에 참가하기 전에 웹사이트에서 확인해 주세요",
+    },
 }
 SELF_UNBAN_GUIDES = {
     "zh": f"请前往 {SELF_UNBAN_URL} 自助解封",
     "en": f"Visit {SELF_UNBAN_URL} to self-unban",
     "ja": f"セルフ解除は {SELF_UNBAN_URL} にアクセスしてください",
+    "ko": f"셀프 해제는 {SELF_UNBAN_URL} 에서 할 수 있습니다",
 }
 SDK_ONLINE_ACTION_DEFAULT_REASONS = {
     "ban": "Banned by server policy",
@@ -201,6 +219,8 @@ def _normalize_reason_locale(locale: str | None) -> str:
         return "zh"
     if normalized.startswith("ja") or normalized.startswith("jp"):
         return "ja"
+    if normalized.startswith("ko") or normalized.startswith("kr"):
+        return "ko"
     if normalized.startswith("en"):
         return "en"
     return DEFAULT_REASON_LOCALE
@@ -213,6 +233,8 @@ def reason_locale_from_geo(country: str | None, region: str | None = None) -> st
 
     if any(marker in geo_text for marker in ("日本", "japan", " jp")) or country_text == "jp":
         return "ja"
+    if any(marker in geo_text for marker in ("韩国", "韓國", "한국", "대한민국", "korea", "south korea")) or country_text == "kr":
+        return "ko"
     if any(marker in geo_text for marker in ("中国", "china", "hong kong", "macau", "taiwan", "香港", "澳门", "澳門", "台湾", "台灣")):
         return "zh"
     if country_text in {"cn", "hk", "mo", "tw"}:
@@ -266,14 +288,14 @@ def _with_self_unban_guide(reason: str, *, locale: str = DEFAULT_REASON_LOCALE) 
         return reason
     reason_locale = _normalize_reason_locale(locale)
     guide = SELF_UNBAN_GUIDES[reason_locale]
-    separator = ". " if reason_locale in {"en", "ja"} else "。"
+    separator = ". " if reason_locale in {"en", "ja", "ko"} else "。"
     return f"{reason}{separator}{guide}"
 
 
 def _sdk_online_action_reason(action: str | None, reason: object | None) -> str:
     normalized_action = str(action or "").strip().lower()
     text = str(reason or "").strip()
-    if text and len(text) <= 192 and text.isascii() and all(char.isprintable() for char in text):
+    if text and all(char.isprintable() for char in text):
         return text
     return SDK_ONLINE_ACTION_DEFAULT_REASONS.get(normalized_action, "Access denied by server policy")
 
@@ -520,7 +542,7 @@ def _legacy_ban_decision(uid: str, reason: str | None, operator: str | None, *, 
 
 def _notice_decision(notice: PlayerAccessNotice, *, locale: str = DEFAULT_REASON_LOCALE) -> dict[str, Any]:
     reason_locale = _normalize_reason_locale(locale)
-    reason = action_reason_text(notice.action, notice.message or notice.reason, locale=reason_locale)
+    reason = action_reason_text(notice.action, notice.reason or notice.message, locale=reason_locale)
     if str(notice.action or "").strip().lower() == "kick" and notice.requires_ack:
         reason = _with_self_unban_guide(reason, locale=reason_locale)
     return {
@@ -1289,7 +1311,7 @@ async def ensure_uid_blacklist_rule(
             "value": uid,
             "server_scope": scope,
             "server_id": normalized_server_id,
-            "reason": _ban_reason(reason),
+            "reason": (reason or "").strip() or None,
             "remark": (remark or "").strip() or None,
             "operator": operator_name,
             "source_action": source_action,

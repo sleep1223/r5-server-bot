@@ -86,12 +86,6 @@ def _normalize_display_status(status: str | None) -> str | None:
     return normalized
 
 
-def _action_reason(action: str, reason: str | None) -> str | None:
-    if not reason:
-        return None
-    return player_access_service.action_reason_text(action, reason)
-
-
 def _expires_at(duration_seconds: int | None) -> datetime | None:
     if not duration_seconds:
         return None
@@ -164,7 +158,7 @@ async def _create_synced_ip_rule(
             value=ip,
             server_scope=server_scope,
             server_id=server_id,
-            reason=_action_reason(action, reason),
+            reason=reason,
             remark=remark,
             rule_id=f"{action}:linked_ip:{operation.id}",
             operator=operator_name,
@@ -668,7 +662,7 @@ async def kick_player(
         uid=player.nucleus_id,
         action="kick",
         reason=reason,
-        message=_action_reason("kick", reason),
+        message=None,
         message_context={
             "remark": remark,
             "server_scope": scope,
@@ -863,7 +857,7 @@ async def apply_access_action(
             value=target_value,
             server_scope=scope,
             server_id=access_server_id,
-            reason=_action_reason(normalized_action, reason),
+            reason=reason,
             remark=remark,
             rule_id=f"{normalized_action}:{rule_type}:{operation.id}",
             operator=operator_name,
@@ -883,7 +877,7 @@ async def apply_access_action(
             uid=player.nucleus_id,
             action="kick",
             reason=reason,
-            message=_action_reason("kick", reason),
+            message=None,
             message_context={
                 "remark": remark,
                 "server_scope": scope,
