@@ -30,33 +30,43 @@ REASON_TEXTS = {
         "BE_POLITE": "言行不当",
         "CHEAT": "作弊",
         "RULES": "违反规则",
-        REGION_LOCK_REASON: "您的网络延迟过高，请选择延迟更低的服务器",
-        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "您的网络延迟过高，请前往香港服务器游玩",
-        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "您的网络延迟过高，请选择国内服务器游玩",
     },
     "en": {
         "NO_COVER": "No-cover rule violation",
         "BE_POLITE": "Inappropriate behavior",
         "CHEAT": "Cheating",
         "RULES": "Rule violation",
-        REGION_LOCK_REASON: "Your latency is too high. Please choose a lower-latency server",
-        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "Your latency is too high. Please play on a Hong Kong server",
-        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "Your latency is too high. Please play on a mainland China server",
     },
     "ja": {
         "NO_COVER": "遮蔽物の撤去違反",
         "BE_POLITE": "不適切な言動",
         "CHEAT": "チート行為",
         "RULES": "ルール違反",
-        REGION_LOCK_REASON: "通信遅延が高すぎます。より低遅延のサーバーを選択してください",
-        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "通信遅延が高すぎます。香港サーバーでプレイしてください",
-        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "通信遅延が高すぎます。中国国内サーバーでプレイしてください",
     },
     "ko": {
         "NO_COVER": "엄폐물 제거 규칙 위반",
         "BE_POLITE": "부적절한 언행",
         "CHEAT": "부정행위",
         "RULES": "규칙 위반",
+    },
+}
+GEO_POLICY_REASON_TEXTS = {
+    "zh": {
+        REGION_LOCK_REASON: "您的网络延迟过高，请选择延迟更低的服务器",
+        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "您的网络延迟过高，请前往香港服务器游玩",
+        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "您的网络延迟过高，请选择国内服务器游玩",
+    },
+    "en": {
+        REGION_LOCK_REASON: "Your latency is too high. Please choose a lower-latency server",
+        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "Your latency is too high. Please play on a Hong Kong server",
+        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "Your latency is too high. Please play on a mainland China server",
+    },
+    "ja": {
+        REGION_LOCK_REASON: "通信遅延が高すぎます。より低遅延のサーバーを選択してください",
+        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "通信遅延が高すぎます。香港サーバーでプレイしてください",
+        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "通信遅延が高すぎます。中国国内サーバーでプレイしてください",
+    },
+    "ko": {
         REGION_LOCK_REASON: "네트워크 지연 시간이 너무 높습니다. 지연 시간이 더 낮은 서버를 선택해 주세요",
         GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "네트워크 지연 시간이 너무 높습니다. 홍콩 서버에서 플레이해 주세요",
         GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "네트워크 지연 시간이 너무 높습니다. 중국 본토 서버를 선택해 주세요",
@@ -275,12 +285,20 @@ def action_reason_text(action: str | None, reason: str | None, *, locale: str = 
         text = token_reason
     elif text.lower() == "banned" and normalized_action == "ban":
         return default_reasons["ban"]
+    elif text in GEO_POLICY_REASON_TEXTS[reason_locale]:
+        return geo_policy_reason_text(text, locale=reason_locale)
     elif text not in REASON_TEXTS[reason_locale]:
         return text
 
     reason_text = REASON_TEXTS[reason_locale].get(text, text)
     prefix = ACTION_REASON_PREFIXES[reason_locale].get(normalized_action)
     return f"{prefix}: {reason_text}" if prefix else reason_text
+
+
+def geo_policy_reason_text(reason: str | None, *, locale: str = DEFAULT_REASON_LOCALE) -> str:
+    reason_locale = _normalize_reason_locale(locale)
+    text = str(reason or "").strip() or REGION_LOCK_REASON
+    return GEO_POLICY_REASON_TEXTS[reason_locale].get(text, text)
 
 
 def _with_self_unban_guide(reason: str, *, locale: str = DEFAULT_REASON_LOCALE) -> str:
@@ -784,7 +802,7 @@ def _server_geo_policy_decision(
     })
     return {
         "allow": False,
-        "reason": action_reason_text(source_action, reason, locale=reason_locale),
+        "reason": geo_policy_reason_text(reason, locale=reason_locale),
         "reason_locale": reason_locale,
         "rule_id": config_rule.rule_id or f"access_rule:{config_rule.id}",
         "rule_type": config_rule.rule_type,
