@@ -146,6 +146,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
 
         global_rule = await PlayerAccessRule.get_or_none(rule_id=access_service.GEO_POLICY_GLOBAL_RULE_ID)
         self.assertIsNotNone(global_rule)
+        assert global_rule is not None
         self.assertFalse(global_rule.enabled)
         self.assertEqual(global_rule.server_scope, "global")
 
@@ -170,6 +171,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
 
         global_rule = await PlayerAccessRule.get_or_none(rule_id=access_service.GEO_POLICY_GLOBAL_RULE_ID)
         self.assertIsNotNone(global_rule)
+        assert global_rule is not None
         self.assertTrue(global_rule.enabled)
         self.assertEqual(global_rule.server_scope, "global")
 
@@ -341,7 +343,37 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["actions"]), 1)
         self.assertEqual(result["actions"][0]["action"], "kick")
         self.assertEqual(result["actions"][0]["ruleId"], access_service.GEO_POLICY_GLOBAL_RULE_ID)
-        self.assertEqual(result["actions"][0]["reason"], "キック: 通信遅延が高すぎます。香港サーバーでプレイしてください")
+        self.assertEqual(result["actions"][0]["reason"], "Kicked by server policy")
+
+    async def test_online_report_uses_sdk_safe_reason_for_pending_kick_notice(self) -> None:
+        uid = "1000000000024"
+        notice = await PlayerAccessNotice.create(uid=uid, action="kick", reason="NO_COVER", server_scope="global", requires_ack=True)
+
+        result = await access_service.process_online_players_report(
+            server_id="cn-server",
+            report={
+                "serverId": "cn-server",
+                "serverIp": "::ffff:77bc:a469",
+                "serverPort": 37015,
+                "players": [
+                    {
+                        "uid": uid,
+                        "nucleusId": int(uid),
+                        "playerName": "pending-kick-player",
+                        "ip": "1.2.3.4",
+                        "port": 0,
+                        "userId": 1,
+                        "handle": 1,
+                        "signonState": 6,
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(len(result["actions"]), 1)
+        self.assertEqual(result["actions"][0]["action"], "kick")
+        self.assertEqual(result["actions"][0]["ruleId"], f"kick_notice:{notice.id}")
+        self.assertEqual(result["actions"][0]["reason"], "Kicked by server policy")
 
     async def test_online_report_populates_sdk_memory_cache_without_legacy_status(self) -> None:
         result = await access_service.process_online_players_report(

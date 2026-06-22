@@ -3,7 +3,7 @@ from __future__ import annotations
 import ipaddress
 import json
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 
 from loguru import logger
 from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server
@@ -85,6 +85,10 @@ SELF_UNBAN_GUIDES = {
     "zh": f"请前往 {SELF_UNBAN_URL} 自助解封",
     "en": f"Visit {SELF_UNBAN_URL} to self-unban",
     "ja": f"セルフ解除は {SELF_UNBAN_URL} にアクセスしてください",
+}
+SDK_ONLINE_ACTION_DEFAULT_REASONS = {
+    "ban": "Banned by server policy",
+    "kick": "Kicked by server policy",
 }
 
 
@@ -264,6 +268,14 @@ def _with_self_unban_guide(reason: str, *, locale: str = DEFAULT_REASON_LOCALE) 
     guide = SELF_UNBAN_GUIDES[reason_locale]
     separator = ". " if reason_locale in {"en", "ja"} else "。"
     return f"{reason}{separator}{guide}"
+
+
+def _sdk_online_action_reason(action: str | None, reason: object | None) -> str:
+    normalized_action = str(action or "").strip().lower()
+    text = str(reason or "").strip()
+    if text and len(text) <= 192 and text.isascii() and all(char.isprintable() for char in text):
+        return text
+    return SDK_ONLINE_ACTION_DEFAULT_REASONS.get(normalized_action, "Access denied by server policy")
 
 
 async def upsert_sdk_server_snapshot(
@@ -1229,7 +1241,7 @@ async def process_online_players_report(
         action_payload: dict[str, Any] = {
             "uid": uid_text,
             "action": action,
-            "reason": decision.get("reason"),
+            "reason": _sdk_online_action_reason(action, decision.get("reason")),
             "ruleId": decision.get("rule_id"),
         }
         nucleus_id = _uid_to_int(uid_text)
@@ -1724,16 +1736,15 @@ async def sync_legacy_access_records(*, batch_size: int = 5000) -> dict[str, int
             for player in banned_players
             if (uid := normalize_uid(player.nucleus_id))
         }
-        existing_rule_values = set()
+        existing_rule_values: set[str] = set()
         if uid_by_player_id:
-            existing_rule_values = set(
-                await PlayerAccessRule.filter(
-                    rule_type="uid",
-                    action="deny",
-                    value__in=list(set(uid_by_player_id.values())),
-                    enabled=True,
-                ).values_list("value", flat=True)
-            )
+            existing_rule_value_rows = await PlayerAccessRule.filter(
+                rule_type="uid",
+                action="deny",
+                value__in=list(set(uid_by_player_id.values())),
+                enabled=True,
+            ).values_list("value", flat=True)
+            existing_rule_values = set(cast(Iterable[str], existing_rule_value_rows))
 
         for player in banned_players:
             uid = uid_by_player_id.get(player.id)
