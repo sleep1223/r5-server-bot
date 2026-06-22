@@ -7,7 +7,7 @@ from loguru import logger
 from shared_lib.models import Match, Player, PlayerKilled, PlayerMatchWeaponStat, SdkMatchEndReport, Server
 from tortoise import connections
 from tortoise.expressions import Q
-from tortoise.functions import Count
+from tortoise.functions import Count, Sum
 
 from fastapi_service.core.utils import calc_kd, get_date_range
 from fastapi_service.services import player_access_service
@@ -17,6 +17,25 @@ from fastapi_service.services import player_access_service
 _PARTITION_PRUNE_LEAD = timedelta(hours=2)  # match started_at 之前写入的事件容差
 _PARTITION_PRUNE_TAIL = timedelta(minutes=30)  # ended_at 之后仍可能写入的尾巴
 _SDK_MATCH_END_CATEGORY = "sdk_match_end"
+
+
+def _normalized_weapon_key(value: object) -> str:
+    return str(value or "").strip().lower() or "unknown"
+
+
+def _add_match_player_count(target: dict[int, dict[int, int]], match_id: object, player_id: object, count: object) -> None:
+    if match_id is None or player_id is None:
+        return
+    parsed_count = _safe_int(count, 0)
+    if parsed_count <= 0:
+        return
+    match_bucket = target.setdefault(int(match_id), {})
+    player_key = int(player_id)
+    match_bucket[player_key] = match_bucket.get(player_key, 0) + parsed_count
+
+
+def _player_killed_countable_q() -> Q:
+    return Q(category__isnull=True) | ~Q(category=_SDK_MATCH_END_CATEGORY)
 
 
 def _pk_created_at_bounds(matches: list[dict]) -> dict:
@@ -32,6 +51,81 @@ def _pk_created_at_bounds(matches: list[dict]) -> dict:
     if ended:
         bounds["created_at__lte"] = max(ended) + _PARTITION_PRUNE_TAIL
     return bounds
+
+
+async def _aggregate_match_player_kills_deaths(
+    match_ids: list[int],
+    *,
+    pk_bounds: dict | None = None,
+) -> tuple[dict[int, dict[int, int]], dict[int, dict[int, int]]]:
+    kills_by_match: dict[int, dict[int, int]] = {}
+    deaths_by_match: dict[int, dict[int, int]] = {}
+    if not match_ids:
+        return kills_by_match, deaths_by_match
+
+    player_killed_filters = {"match_id__in": match_ids, **(pk_bounds or {})}
+    kill_rows = (
+        await PlayerKilled.filter(_player_killed_countable_q(), attacker_id__isnull=False, **player_killed_filters)
+        .group_by("match_id", "attacker_id")
+        .annotate(k_count=Count("id"))
+        .values("match_id", "attacker_id", "k_count")
+    )
+    death_rows = (
+        await PlayerKilled.filter(_player_killed_countable_q(), victim_id__isnull=False, **player_killed_filters)
+        .group_by("match_id", "victim_id")
+        .annotate(d_count=Count("id"))
+        .values("match_id", "victim_id", "d_count")
+    )
+    pk_kill_player_keys: set[tuple[int, int]] = set()
+    for row in kill_rows:
+        if row["match_id"] is not None and row["attacker_id"] is not None:
+            pk_kill_player_keys.add((int(row["match_id"]), int(row["attacker_id"])))
+        _add_match_player_count(kills_by_match, row["match_id"], row["attacker_id"], row["k_count"])
+    for row in death_rows:
+        _add_match_player_count(deaths_by_match, row["match_id"], row["victim_id"], row["d_count"])
+
+    detail_kill_rows = (
+        await PlayerMatchWeaponStat.filter(match_id__in=match_ids, player_id__isnull=False, opponent_id__isnull=False, kills__gt=0)
+        .group_by("match_id", "player_id")
+        .annotate(k_sum=Sum("kills"))
+        .values("match_id", "player_id", "k_sum")
+    )
+    detail_death_rows = (
+        await PlayerMatchWeaponStat.filter(match_id__in=match_ids, opponent_id__isnull=False, kills__gt=0)
+        .group_by("match_id", "opponent_id")
+        .annotate(d_sum=Sum("kills"))
+        .values("match_id", "opponent_id", "d_sum")
+    )
+    for row in detail_kill_rows:
+        _add_match_player_count(kills_by_match, row["match_id"], row["player_id"], row["k_sum"])
+    for row in detail_death_rows:
+        _add_match_player_count(deaths_by_match, row["match_id"], row["opponent_id"], row["d_sum"])
+
+    detail_key_rows = await PlayerMatchWeaponStat.filter(match_id__in=match_ids, player_id__isnull=False, opponent_id__isnull=False, kills__gt=0).values(
+        "match_id",
+        "player_id",
+        "weapon",
+        "source",
+    )
+    detail_keys = {
+        (row["match_id"], row["player_id"], _normalized_weapon_key(row["weapon"]), row.get("source") or "")
+        for row in detail_key_rows
+    }
+    summary_rows = await PlayerMatchWeaponStat.filter(match_id__in=match_ids, player_id__isnull=False, opponent_id__isnull=True, kills__gt=0).values(
+        "match_id",
+        "player_id",
+        "weapon",
+        "source",
+        "kills",
+    )
+    for row in summary_rows:
+        key = (row["match_id"], row["player_id"], _normalized_weapon_key(row["weapon"]), row.get("source") or "")
+        player_key = (int(row["match_id"]), int(row["player_id"]))
+        if key in detail_keys or player_key in pk_kill_player_keys:
+            continue
+        _add_match_player_count(kills_by_match, row["match_id"], row["player_id"], row["kills"])
+
+    return kills_by_match, deaths_by_match
 
 
 def _safe_int(value: object | None, default: int = 0) -> int:
@@ -468,30 +562,7 @@ async def get_recent_matches(
     match_ids = [m["id"] for m in matches]
     pk_bounds = _pk_created_at_bounds(matches)
 
-    # 批量聚合击杀 / 死亡。单 SQL 搞定所有 match。
-    kill_rows = (
-        await PlayerKilled
-        .filter(match_id__in=match_ids, attacker_id__isnull=False, **pk_bounds)
-        .group_by("match_id", "attacker_id")
-        .annotate(k_count=Count("id"))
-        .values("match_id", "attacker_id", "k_count")
-    )
-    death_rows = (
-        await PlayerKilled
-        .filter(match_id__in=match_ids, victim_id__isnull=False, **pk_bounds)
-        .group_by("match_id", "victim_id")
-        .annotate(d_count=Count("id"))
-        .values("match_id", "victim_id", "d_count")
-    )
-
-    # match_id -> attacker_id -> kills
-    kills_by_match: dict[int, dict[int, int]] = {}
-    for row in kill_rows:
-        kills_by_match.setdefault(row["match_id"], {})[row["attacker_id"]] = row["k_count"]
-    # match_id -> victim_id -> deaths（用于 top 玩家的 deaths 数据）
-    deaths_by_match: dict[int, dict[int, int]] = {}
-    for row in death_rows:
-        deaths_by_match.setdefault(row["match_id"], {})[row["victim_id"]] = row["d_count"]
+    kills_by_match, deaths_by_match = await _aggregate_match_player_kills_deaths(match_ids, pk_bounds=pk_bounds)
 
     # 每场选 top1（击杀最多，同值时按更少死亡 tiebreak）
     results: list[dict] = []
@@ -572,18 +643,25 @@ async def get_player_matches(
     if server_id is not None:
         participation_filters["server_id"] = server_id
 
-    match_id_rows = (
+    pk_match_id_rows = (
         await PlayerKilled
         .filter(
-            Q(attacker_id=player_id) | Q(victim_id=player_id),
+            _player_killed_countable_q() & (Q(attacker_id=player_id) | Q(victim_id=player_id)),
             **participation_filters,
         )
         .distinct()
         .values_list("match_id", flat=True)
     )
-    if not match_id_rows:
-        return []
-    match_ids = [mid for mid in match_id_rows if mid is not None]
+    pmws_match_id_rows = (
+        await PlayerMatchWeaponStat
+        .filter(
+            Q(player_id=player_id) | Q(opponent_id=player_id),
+            **participation_filters,
+        )
+        .distinct()
+        .values_list("match_id", flat=True)
+    )
+    match_ids = [mid for mid in {*pk_match_id_rows, *pmws_match_id_rows} if mid is not None]
     if not match_ids:
         return []
 
@@ -611,10 +689,9 @@ async def get_player_matches(
     pk_bounds = _pk_created_at_bounds(matches)
 
     # 3) 批量聚合本人在这些场次的击杀 / 死亡
-    kill_rows = await PlayerKilled.filter(match_id__in=scoped_match_ids, attacker_id=player_id, **pk_bounds).group_by("match_id").annotate(k_count=Count("id")).values("match_id", "k_count")
-    death_rows = await PlayerKilled.filter(match_id__in=scoped_match_ids, victim_id=player_id, **pk_bounds).group_by("match_id").annotate(d_count=Count("id")).values("match_id", "d_count")
-    kills_by_match = {r["match_id"]: r["k_count"] for r in kill_rows}
-    deaths_by_match = {r["match_id"]: r["d_count"] for r in death_rows}
+    kills_by_all, deaths_by_all = await _aggregate_match_player_kills_deaths(scoped_match_ids, pk_bounds=pk_bounds)
+    kills_by_match = {match_id: player_counts.get(player_id, 0) for match_id, player_counts in kills_by_all.items()}
+    deaths_by_match = {match_id: player_counts.get(player_id, 0) for match_id, player_counts in deaths_by_all.items()}
 
     # 4) 富化 server
     involved_server_ids = {m["server_id"] for m in matches}
@@ -687,19 +764,79 @@ async def get_competitive_ranking(
     # pk.created_at 边界用于 PG 分区裁剪：match 可持续数小时，留 2h lead / 30min tail
     # 覆盖首杀早于 ended_at 窗口和末尾事件晚于 ended_at 的情形
     sql = f"""
-    WITH player_match_kills AS (
-        SELECT pk.attacker_id,
+    WITH player_match_kill_events AS (
+        SELECT pk.attacker_id AS player_id,
                pk.match_id,
                (m.started_at AT TIME ZONE 'Asia/Shanghai')::date AS day,
-               COUNT(*) AS kills
+               COUNT(*)::int AS kills
         FROM player_killed pk
         JOIN matches m ON pk.match_id = m.id
         WHERE m.ended_at BETWEEN $1 AND $2
           AND pk.created_at BETWEEN $1 - interval '2 hours' AND $2 + interval '30 minutes'
           AND m.status = 'completed'
           AND pk.attacker_id IS NOT NULL
+          AND COALESCE(pk.category, '') <> 'sdk_match_end'
           {server_clause}
         GROUP BY pk.attacker_id, pk.match_id, day
+
+        UNION ALL
+
+        SELECT pmws.player_id,
+               pmws.match_id,
+               (m.started_at AT TIME ZONE 'Asia/Shanghai')::date AS day,
+               SUM(pmws.kills)::int AS kills
+        FROM player_match_weapon_stats pmws
+        JOIN matches m ON pmws.match_id = m.id
+        WHERE m.ended_at BETWEEN $1 AND $2
+          AND m.status = 'completed'
+          AND pmws.player_id IS NOT NULL
+          AND pmws.opponent_id IS NOT NULL
+          AND pmws.player_id <> pmws.opponent_id
+          AND pmws.kills > 0
+          {server_clause}
+        GROUP BY pmws.player_id, pmws.match_id, day
+
+        UNION ALL
+
+        SELECT pmws.player_id,
+               pmws.match_id,
+               (m.started_at AT TIME ZONE 'Asia/Shanghai')::date AS day,
+               SUM(pmws.kills)::int AS kills
+        FROM player_match_weapon_stats pmws
+        JOIN matches m ON pmws.match_id = m.id
+        WHERE m.ended_at BETWEEN $1 AND $2
+          AND m.status = 'completed'
+          AND pmws.player_id IS NOT NULL
+          AND pmws.opponent_id IS NULL
+          AND pmws.kills > 0
+          {server_clause}
+          AND NOT EXISTS (
+              SELECT 1
+              FROM player_killed pk_existing
+              WHERE pk_existing.match_id = pmws.match_id
+                AND pk_existing.created_at BETWEEN $1 - interval '2 hours' AND $2 + interval '30 minutes'
+                AND pk_existing.attacker_id = pmws.player_id
+                AND COALESCE(pk_existing.category, '') <> 'sdk_match_end'
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM player_match_weapon_stats pmws_detail
+              WHERE pmws_detail.match_id = pmws.match_id
+                AND pmws_detail.player_id = pmws.player_id
+                AND pmws_detail.opponent_id IS NOT NULL
+                AND pmws_detail.kills > 0
+                AND COALESCE(NULLIF(lower(trim(pmws_detail.weapon)), ''), 'unknown') = COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown')
+                AND COALESCE(pmws_detail.source, '') = COALESCE(pmws.source, '')
+          )
+        GROUP BY pmws.player_id, pmws.match_id, day
+    ),
+    player_match_kills AS (
+        SELECT player_id AS attacker_id,
+               match_id,
+               day,
+               SUM(kills)::int AS kills
+        FROM player_match_kill_events
+        GROUP BY player_id, match_id, day
     ),
     ranked AS (
         SELECT attacker_id,
