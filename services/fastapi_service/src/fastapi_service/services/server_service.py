@@ -110,10 +110,10 @@ async def list_servers(
 ) -> list[dict]:
     """统一的服务器列表查询接口。
 
-    - 默认返回远程服务器列表（raw）与 SDK 在线上报状态合并后的结果。
+    - 默认以远程服务器列表（raw）为准，合并命中 raw 行的 SDK 在线上报状态。
     - ``simple=True`` 返回精简字段，去除在线玩家列表等重字段。
-    - ``cn_only=True`` 只返回已经通过 SDK 在线上报命中过的本地服务器
-      （即 r5_target_keys 配置命中的中国服），附带玩家详情与延迟。
+    - ``cn_only=True`` 只返回 raw 中识别为 CN/HK/TW 的服务器，或已由 SDK 在线上报命中的本地服务器，
+      附带玩家详情与延迟。
     - ``server_name`` 对服务器名做不区分大小写的模糊过滤。
     """
 
@@ -173,20 +173,12 @@ async def list_servers(
     db_by_identifier = {s.server_id: s for s in online_server_rows if s.server_id}
     db_by_address = {_address_key(s.host, s.port): s for s in online_server_rows if _address_key(s.host, s.port)}
     db_by_host_candidates: dict[str, list[Server]] = {}
-    db_by_name_candidates: dict[str, list[Server]] = {}
     for server_row in online_server_rows:
         if server_row.host:
             db_by_host_candidates.setdefault(server_row.host, []).append(server_row)
-        name_key = _name_key(server_row.name)
-        if name_key:
-            db_by_name_candidates.setdefault(name_key, []).append(server_row)
 
     def _unique_db_by_host(host: str) -> Server | None:
         candidates = db_by_host_candidates.get(host) or []
-        return candidates[0] if len(candidates) == 1 else None
-
-    def _unique_db_by_name(name: object | None) -> Server | None:
-        candidates = db_by_name_candidates.get(_name_key(name)) or []
         return candidates[0] if len(candidates) == 1 else None
 
     def _unique_status_by_name(name: object | None) -> dict | None:
@@ -198,15 +190,13 @@ async def list_servers(
     ping_hosts.update(str(s.host or "").strip() for s in online_server_rows if str(s.host or "").strip())
     ip_info_by_ip = {info.ip: info for info in await IpInfo.filter(ip__in=list(ping_hosts)).all()} if ping_hosts else {}
 
-    # cn_only 模式：只返回已同步的本地服务器；raw 列表未出现的也要能返回（避免拉取失败时丢失）
+    # r5_servers_url 的 raw 列表是唯一输出基准；SDK 上报只合并到已存在的 raw 行。
     results: list[dict] = []
 
     def _match_name(name: str) -> bool:
         if not server_name:
             return True
         return server_name.lower() in (name or "").lower()
-
-    seen_keys: set[str] = set()
 
     for s in raw_list:
         server_identifiers = _raw_server_identifiers(s)
@@ -238,7 +228,7 @@ async def list_servers(
             status = synced_by_key.get(key) if key else None
         if status is None:
             status = _unique_status_by_name(s.get("name"))
-        if not ip and db_server is None and status is None:
+        if not (server_identifier or ip or db_server or status or s.get("name")):
             continue
         # raw 缺 port 时按 ip 兜底匹配，避免同一服务器在结果里出现两次
         if status is None and ip and not port:
@@ -316,92 +306,6 @@ async def list_servers(
         elif not simple:
             entry["players"] = []
 
-        _strip_public_server_fields(entry)
-        if key:
-            seen_keys.add(key)
-        if status:
-            status_key = _status_address_key(status)
-            if status_key:
-                seen_keys.add(status_key)
-        results.append(entry)
-
-    # 补充 raw 列表中缺失但已 SDK 上报到的服务器（例如 raw 拉取失败或服务器离开 master list）
-    for key, status in synced_by_key.items():
-        if key in seen_keys:
-            continue
-        status_identifier = str(status.get("server_id") or "").strip()
-        host_str = status.get("_server") or key
-        host_ip = status.get("ip")
-        host_port = status.get("port")
-        if not host_ip and ":" in host_str:
-            host_ip = host_str.split(":", 1)[0]
-        if not host_port and ":" in host_str:
-            host_port = _safe_int(host_str.rsplit(":", 1)[-1])
-        db_server = db_by_address.get(_address_key(host_ip, host_port))
-        if db_server is None and status_identifier:
-            identifier_server = db_by_identifier.get(status_identifier)
-            if identifier_server and _address_key(identifier_server.host, identifier_server.port) == _address_key(host_ip, host_port):
-                db_server = identifier_server
-        if db_server is None and host_ip and not host_port:
-            db_server = _unique_db_by_host(str(host_ip))
-        if db_server is None:
-            db_server = _unique_db_by_name(status.get("_api_name") or status.get("hostname"))
-
-        status_name = status.get("_api_name") or status.get("hostname")
-        if (
-            _is_unusable_server_identity(host_ip)
-            or _is_unusable_server_identity(host_str)
-            or _is_unusable_server_identity(status_name)
-        ):
-            continue
-        full_name = (
-            db_server.name
-            if db_server
-            and db_server.name
-            and (
-                status_name in (None, "", status_identifier, key, host_str)
-                or _name_key(db_server.name) == _name_key(status_name)
-            )
-            else status_name
-        ) or status.get("_server") or "Unknown"
-        if not _match_name(full_name):
-            continue
-
-        players_data = status.get("players") or []
-        ip_info = ip_info_by_ip.get(str(host_ip or "").strip())
-        entry = {
-            "name": full_name,
-            "short_name": parse_short_name(full_name) or (db_server.short_name if db_server else None) or status.get("short_name"),
-            "full_name": full_name,
-            "ip": host_ip,
-            "port": host_port,
-            "region": None,
-            "map": None,
-            "playlist": None,
-            "player_count": len(players_data),
-            "max_players": status.get("max_players", 0),
-            "has_status": True,
-            "ping": _first_positive_int(
-                ip_info.ping if ip_info else None,
-                db_server.ping if db_server else None,
-                status.get("server_ping"),
-            ),
-            "country": status.get("country"),
-            "host": host_str,
-        }
-        if is_admin:
-            entry["admin_region"] = status.get("region")
-        if not simple:
-            player_list = []
-            access_server_id = key or status.get("_server") or status.get("server_id")
-            for p in players_data:
-                p_info = await player_access_service.build_online_player_info(
-                    p,
-                    is_admin=is_admin,
-                    server_id=access_server_id,
-                )
-                player_list.append(p_info)
-            entry["players"] = player_list
         _strip_public_server_fields(entry)
         results.append(entry)
 

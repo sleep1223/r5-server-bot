@@ -28,7 +28,23 @@ events AS (
         pk.attacker_id AS player_id,
         pk.victim_id AS opponent_id,
         COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
-        'unknown'::text AS input_device,
+        COALESCE(
+            (
+                SELECT NULLIF(replace(replace(lower(trim(pmws.input_device)), '-', '_'), ' ', '_'), '')
+                FROM player_match_weapon_stats pmws
+                WHERE pmws.match_id = pk.match_id
+                  AND pmws.player_id = pk.attacker_id
+                  AND COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown') = COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown')
+                ORDER BY CASE WHEN pmws.source = 'sdk_match_end' THEN 0 ELSE 1 END, pmws.id DESC
+                LIMIT 1
+            ),
+            (
+                SELECT NULLIF(replace(replace(lower(trim(p.input_device)), '-', '_'), ' ', '_'), '')
+                FROM players p
+                WHERE p.id = pk.attacker_id
+            ),
+            'unknown'
+        ) AS input_device,
         1 AS kills,
         0 AS deaths,
         0 AS awarded_kills
@@ -39,6 +55,7 @@ events AS (
       AND pk.attacker_id IS NOT NULL
       AND pk.victim_id IS NOT NULL
       AND pk.attacker_id <> pk.victim_id
+      AND COALESCE(pk.category, '') <> 'sdk_match_end'
 
     UNION ALL
 
@@ -48,7 +65,23 @@ events AS (
         pk.victim_id AS player_id,
         pk.attacker_id AS opponent_id,
         COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
-        'unknown'::text AS input_device,
+        COALESCE(
+            (
+                SELECT NULLIF(replace(replace(lower(trim(pmws.input_device)), '-', '_'), ' ', '_'), '')
+                FROM player_match_weapon_stats pmws
+                WHERE pmws.match_id = pk.match_id
+                  AND pmws.player_id = pk.victim_id
+                  AND COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown') = COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown')
+                ORDER BY CASE WHEN pmws.source = 'sdk_match_end' THEN 0 ELSE 1 END, pmws.id DESC
+                LIMIT 1
+            ),
+            (
+                SELECT NULLIF(replace(replace(lower(trim(p.input_device)), '-', '_'), ' ', '_'), '')
+                FROM players p
+                WHERE p.id = pk.victim_id
+            ),
+            'unknown'
+        ) AS input_device,
         0 AS kills,
         1 AS deaths,
         0 AS awarded_kills
@@ -59,6 +92,7 @@ events AS (
       AND pk.attacker_id IS NOT NULL
       AND pk.victim_id IS NOT NULL
       AND pk.attacker_id <> pk.victim_id
+      AND COALESCE(pk.category, '') <> 'sdk_match_end'
 
     UNION ALL
 
@@ -68,7 +102,23 @@ events AS (
         pk.awarded_to_id AS player_id,
         pk.victim_id AS opponent_id,
         COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
-        'unknown'::text AS input_device,
+        COALESCE(
+            (
+                SELECT NULLIF(replace(replace(lower(trim(pmws.input_device)), '-', '_'), ' ', '_'), '')
+                FROM player_match_weapon_stats pmws
+                WHERE pmws.match_id = pk.match_id
+                  AND pmws.player_id = pk.awarded_to_id
+                  AND COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown') = COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown')
+                ORDER BY CASE WHEN pmws.source = 'sdk_match_end' THEN 0 ELSE 1 END, pmws.id DESC
+                LIMIT 1
+            ),
+            (
+                SELECT NULLIF(replace(replace(lower(trim(p.input_device)), '-', '_'), ' ', '_'), '')
+                FROM players p
+                WHERE p.id = pk.awarded_to_id
+            ),
+            'unknown'
+        ) AS input_device,
         0 AS kills,
         0 AS deaths,
         1 AS awarded_kills
@@ -80,6 +130,60 @@ events AS (
       AND pk.attacker_id IS NOT NULL
       AND pk.victim_id IS NOT NULL
       AND pk.attacker_id <> pk.victim_id
+      AND COALESCE(pk.category, '') <> 'sdk_match_end'
+
+    UNION ALL
+
+    SELECT
+        (COALESCE(m.ended_at, m.started_at, pmws.created_at) AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
+        pmws.server_id,
+        pmws.player_id,
+        pmws.opponent_id,
+        COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown') AS weapon,
+        COALESCE(NULLIF(lower(trim(pmws.input_device)), ''), 'unknown') AS input_device,
+        pmws.kills AS kills,
+        0 AS deaths,
+        0 AS awarded_kills
+    FROM player_match_weapon_stats pmws
+    JOIN matches m ON m.id = pmws.match_id
+    CROSS JOIN bounds b
+    WHERE COALESCE(m.ended_at, m.started_at, pmws.created_at) >= b.start_ts
+      AND COALESCE(m.ended_at, m.started_at, pmws.created_at) <  b.end_ts
+      AND pmws.server_id IS NOT NULL
+      AND pmws.player_id IS NOT NULL
+      AND pmws.opponent_id IS NOT NULL
+      AND pmws.player_id <> pmws.opponent_id
+      AND pmws.kills > 0
+
+    UNION ALL
+
+    SELECT
+        (COALESCE(m.ended_at, m.started_at, pmws.created_at) AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
+        pmws.server_id,
+        pmws.opponent_id AS player_id,
+        pmws.player_id AS opponent_id,
+        COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown') AS weapon,
+        COALESCE(
+            (
+                SELECT NULLIF(replace(replace(lower(trim(p.input_device)), '-', '_'), ' ', '_'), '')
+                FROM players p
+                WHERE p.id = pmws.opponent_id
+            ),
+            'unknown'
+        ) AS input_device,
+        0 AS kills,
+        pmws.kills AS deaths,
+        0 AS awarded_kills
+    FROM player_match_weapon_stats pmws
+    JOIN matches m ON m.id = pmws.match_id
+    CROSS JOIN bounds b
+    WHERE COALESCE(m.ended_at, m.started_at, pmws.created_at) >= b.start_ts
+      AND COALESCE(m.ended_at, m.started_at, pmws.created_at) <  b.end_ts
+      AND pmws.server_id IS NOT NULL
+      AND pmws.player_id IS NOT NULL
+      AND pmws.opponent_id IS NOT NULL
+      AND pmws.player_id <> pmws.opponent_id
+      AND pmws.kills > 0
 
     UNION ALL
 
@@ -100,6 +204,7 @@ events AS (
       AND COALESCE(m.ended_at, m.started_at, pmws.created_at) <  b.end_ts
       AND pmws.server_id IS NOT NULL
       AND pmws.player_id IS NOT NULL
+      AND pmws.opponent_id IS NULL
       AND pmws.kills > 0
       AND NOT EXISTS (
           SELECT 1
@@ -108,6 +213,16 @@ events AS (
             AND pk_existing.created_at >= b.start_ts - interval '2 hours'
             AND pk_existing.created_at <  b.end_ts + interval '30 minutes'
             AND pk_existing.attacker_id IS NOT NULL
+            AND COALESCE(pk_existing.category, '') <> 'sdk_match_end'
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM player_match_weapon_stats pmws_detail
+          WHERE pmws_detail.match_id = pmws.match_id
+            AND pmws_detail.player_id = pmws.player_id
+            AND pmws_detail.opponent_id IS NOT NULL
+            AND COALESCE(NULLIF(lower(trim(pmws_detail.weapon)), ''), 'unknown') = COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown')
+            AND pmws_detail.source = pmws.source
       )
 )
 INSERT INTO player_kill_daily_weapon_opponent_stats (

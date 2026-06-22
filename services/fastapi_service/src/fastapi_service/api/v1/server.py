@@ -28,7 +28,7 @@ async def get_server_list(
     参数：
     - ``server_name``: 按服务器名模糊过滤（不区分大小写）。
     - ``simple``: 精简字段，省略在线玩家列表等重字段。
-    - ``cn_only``: 只返回已通过 SDK 在线上报同步到本地的服务器（通常是中国服）。
+    - ``cn_only``: 只返回远程列表中识别为 CN/HK/TW 的服务器，或已由 SDK 在线上报命中的本地服务器。
     """
     is_admin = check_is_admin(credentials, settings.fastapi_access_tokens)
     results = await server_service.list_servers(

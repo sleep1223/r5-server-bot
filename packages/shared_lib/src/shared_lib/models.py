@@ -142,6 +142,7 @@ class PlayerKilled(BaseEvent):
 class PlayerMatchWeaponStat(models.Model):
     id = fields.IntField(pk=True)
     player = fields.ForeignKeyField("models.Player", related_name="match_weapon_stats")
+    opponent = fields.ForeignKeyField("models.Player", related_name="opponent_match_weapon_stats", null=True)
     match = fields.ForeignKeyField("models.Match", related_name="weapon_stats")
     server = fields.ForeignKeyField("models.Server", related_name="match_weapon_stats")
     weapon = fields.CharField(max_length=100, db_index=True)
@@ -160,10 +161,11 @@ class PlayerMatchWeaponStat(models.Model):
 
     class Meta:
         table = "player_match_weapon_stats"
-        unique_together = (("match", "player", "weapon", "source"),)
+        unique_together = (("match", "player", "opponent", "weapon", "source"),)
         indexes = (
-            ("match_id", "player_id"),
+            ("match_id", "player_id", "opponent_id"),
             ("player_id", "weapon"),
+            ("opponent_id", "weapon"),
             ("server_id", "weapon"),
             ("input_device", "weapon"),
         )
@@ -186,8 +188,6 @@ class PlayerKillDailyWeaponOpponentStat(models.Model):
         table = "player_kill_daily_weapon_opponent_stats"
         unique_together = (("stat_date", "server", "player", "opponent", "weapon", "input_device"),)
         indexes = (
-            ("stat_date", "server_id", "player_id"),
-            ("player_id", "stat_date"),
             ("player_id", "stat_date", "opponent_id"),
             ("player_id", "stat_date", "weapon"),
             ("stat_date", "weapon", "player_id"),

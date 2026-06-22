@@ -2,8 +2,8 @@ import unittest
 
 from fastapi_service.core.cache import server_cache
 from fastapi_service.core.utils import generate_hash
-from fastapi_service.services import player_service, server_service
 from fastapi_service.services import player_access_service as access_service
+from fastapi_service.services import player_service, server_service
 from shared_lib.models import BanRecord, IpInfo, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server
 from tortoise import Tortoise
 
@@ -394,6 +394,18 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(players[0]["country"], "日本")
         self.assertEqual(players[0]["region"], "东京")
 
+        server_cache.update_raw_response({
+            "servers": [
+                {
+                    "serverId": "raw-cn-server",
+                    "name": "119.188.164.105:37015",
+                    "region": "CN",
+                    "map": "mp_rr_arena_phase_runner",
+                    "numPlayers": 0,
+                    "maxPlayers": 46,
+                }
+            ]
+        })
         servers = await server_service.list_servers(cn_only=True, is_admin=True)
         self.assertEqual(len(servers), 1)
         self.assertEqual(servers[0]["name"], "119.188.164.105:37015")
@@ -475,6 +487,24 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         statuses = server_cache.get_online_server_statuses()
         self.assertEqual({status["_server"] for status in statuses}, {"1.2.3.4:37015", "2.2.2.2:37016"})
 
+        server_cache.update_raw_response({
+            "servers": [
+                {
+                    "serverId": "raw-alpha",
+                    "name": "[CN(A)] Alpha",
+                    "region": "CN",
+                    "numPlayers": 0,
+                    "maxPlayers": 20,
+                },
+                {
+                    "serverId": "raw-beta",
+                    "name": "[CN(B)] Beta",
+                    "region": "CN",
+                    "numPlayers": 0,
+                    "maxPlayers": 20,
+                },
+            ]
+        })
         listed = await server_service.list_servers(cn_only=True, is_admin=True)
         self.assertEqual({server["name"] for server in listed}, {"[CN(A)] Alpha", "[CN(B)] Beta"})
         self.assertEqual({server["short_name"] for server in listed}, {"[CN(A)]", "[CN(B)]"})
@@ -701,6 +731,45 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(listed), 1)
         self.assertEqual(listed[0]["name"], "[CN(Shanghai)] PWLA 1v1 Telecom 0.3AA")
 
+    async def test_server_list_uses_raw_response_as_authoritative_source(self) -> None:
+        await access_service.process_online_players_report(
+            server_id="sdk-only-config-id",
+            report={
+                "serverId": "sdk-only-config-id",
+                "serverIp": "1.2.3.4",
+                "serverPort": 37015,
+                "serverName": "[CN(Missing)] SDK Only",
+                "players": [
+                    {
+                        "uid": "1000000000023",
+                        "nucleusId": 1000000000023,
+                        "playerName": "sdk-only-player",
+                    }
+                ],
+            },
+        )
+        server_cache.update_raw_response({
+            "servers": [
+                {
+                    "serverId": "raw-empty-id",
+                    "name": "[CN(Empty)] Raw Empty",
+                    "region": "CN",
+                    "map": "mp_rr_arena_composite",
+                    "playlist": "fs_1v1",
+                    "numPlayers": 0,
+                    "maxPlayers": 20,
+                }
+            ]
+        })
+
+        listed = await server_service.list_servers(cn_only=True, is_admin=True)
+
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["name"], "[CN(Empty)] Raw Empty")
+        self.assertEqual(listed[0]["player_count"], 0)
+        self.assertEqual(listed[0]["players"], [])
+        self.assertNotIn("[CN(Missing)] SDK Only", {server["name"] for server in listed})
+
     async def test_server_list_matches_sdk_status_by_unique_name_ignoring_case(self) -> None:
         await access_service.process_online_players_report(
             server_id="shared-sdk-config-id",
@@ -804,6 +873,18 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(online_location["player_country"])
         self.assertIsNone(online_location["player_region"])
 
+        server_cache.update_raw_response({
+            "servers": [
+                {
+                    "serverId": "raw-cn-server",
+                    "name": "119.188.164.105:37015",
+                    "region": "CN",
+                    "map": "mp_rr_arena_phase_runner",
+                    "numPlayers": 0,
+                    "maxPlayers": 46,
+                }
+            ]
+        })
         servers = await server_service.list_servers(cn_only=True, is_admin=True)
         self.assertEqual(servers[0]["players"][0]["name"], "no-ip-player")
         self.assertIsNone(servers[0]["players"][0]["country"])

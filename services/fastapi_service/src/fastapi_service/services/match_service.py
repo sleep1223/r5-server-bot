@@ -137,6 +137,32 @@ async def _upsert_report_players(players: list[dict[str, Any]]) -> tuple[int, di
     return count, player_map
 
 
+async def _ensure_report_player(
+    player_map: dict[str, Player],
+    *,
+    uid: object | None,
+    nucleus_id: object | None,
+    player_name: object | None,
+    input_device: object | None = None,
+) -> Player | None:
+    player = _lookup_report_player(player_map, uid=uid, nucleus_id=nucleus_id)
+    if player is not None:
+        return player
+
+    if not uid and nucleus_id is None:
+        return None
+
+    saved = await player_access_service.upsert_access_player_snapshot(
+        uid=uid,
+        nucleus_id=nucleus_id,
+        player_name=player_name,
+        input_device=_normalize_input_device(input_device),
+    )
+    if saved:
+        _cache_player_aliases(player_map, saved, uid=uid, nucleus_id=nucleus_id)
+    return saved
+
+
 async def _find_or_create_sdk_match(server: Server, report: dict[str, Any], ended_at: datetime) -> tuple[Match, bool]:
     map_name = str(report.get("map") or "") or "unknown"
     playlist_name = str(report.get("playlist") or "") or "unknown"
@@ -206,11 +232,13 @@ async def _save_sdk_weapon_stats(
     match: Match,
     server: Server,
     players: list[dict[str, Any]],
+    kill_events: list[dict[str, Any]],
     player_map: dict[str, Player],
-) -> int:
+) -> tuple[int, int]:
     await PlayerMatchWeaponStat.filter(match=match, source=_SDK_MATCH_END_CATEGORY).delete()
 
     rows: list[PlayerMatchWeaponStat] = []
+    player_input_devices: dict[int, str] = {}
     for player_payload in players:
         player = _lookup_report_player(
             player_map,
@@ -221,6 +249,7 @@ async def _save_sdk_weapon_stats(
             continue
 
         input_device = _input_device_from_payload(player_payload) or "unknown"
+        player_input_devices[player.id] = input_device
 
         for stat in _weapon_stats_from_payload(player_payload):
             weapon = str(stat.get("weapon") or "").strip() or "unknown"
@@ -241,6 +270,7 @@ async def _save_sdk_weapon_stats(
             rows.append(
                 PlayerMatchWeaponStat(
                     player=player,
+                    opponent=None,
                     match=match,
                     server=server,
                     weapon=weapon,
@@ -257,9 +287,64 @@ async def _save_sdk_weapon_stats(
                 )
             )
 
+    detail_rows: dict[tuple[int, int, str, str], dict[str, Any]] = {}
+    saved_kill_event_count = 0
+    for event in kill_events:
+        attacker = await _ensure_report_player(
+            player_map,
+            uid=event.get("attackerUid"),
+            nucleus_id=event.get("attackerNucleusId"),
+            player_name=event.get("attackerName"),
+        )
+        victim = await _ensure_report_player(
+            player_map,
+            uid=event.get("victimUid"),
+            nucleus_id=event.get("victimNucleusId"),
+            player_name=event.get("victimName"),
+        )
+        if attacker is None or victim is None or attacker.id == victim.id:
+            continue
+
+        weapon = str(event.get("weapon") or "").strip() or "unknown"
+        input_device = player_input_devices.get(attacker.id) or _normalize_input_device(attacker.input_device)
+        key = (attacker.id, victim.id, weapon, input_device)
+        detail = detail_rows.get(key)
+        if detail is None:
+            detail = {
+                "attacker": attacker,
+                "victim": victim,
+                "weapon": weapon,
+                "input_device": input_device,
+                "kills": 0,
+            }
+            detail_rows[key] = detail
+        detail["kills"] += 1
+        saved_kill_event_count += 1
+
+    for detail in detail_rows.values():
+        rows.append(
+            PlayerMatchWeaponStat(
+                player=detail["attacker"],
+                opponent=detail["victim"],
+                match=match,
+                server=server,
+                weapon=detail["weapon"],
+                shots=0,
+                hits=0,
+                bullets_hit=0,
+                damage=0,
+                headshots=0,
+                kills=detail["kills"],
+                accuracy=0,
+                accuracy_percent=0,
+                input_device=detail["input_device"],
+                source=_SDK_MATCH_END_CATEGORY,
+            )
+        )
+
     if rows:
         await PlayerMatchWeaponStat.bulk_create(rows)
-    return len(rows)
+    return len(rows), saved_kill_event_count
 
 
 async def process_match_end_report(report: dict[str, Any]) -> dict[str, Any]:
@@ -312,18 +397,20 @@ async def process_match_end_report(report: dict[str, Any]) -> dict[str, Any]:
         saved_report = await SdkMatchEndReport.create(**report_values)
         report_id = saved_report.id
 
-    weapon_stat_count = await _save_sdk_weapon_stats(
+    weapon_stat_count, saved_kill_event_count = await _save_sdk_weapon_stats(
         match=match,
         server=server,
         players=players,
+        kill_events=kill_events,
         player_map=player_map,
     )
+    await PlayerKilled.filter(match=match, category=_SDK_MATCH_END_CATEGORY).delete()
 
     logger.info(
         "对局结束上报: "
         f"server_id={server_identifier or server.id}, report_id={report_id}, "
         f"match_id={match.id}, players={player_count}/{len(players)}, "
-        f"kill_events={len(kill_events)}, weapon_stats={weapon_stat_count}, "
+        f"kill_events={saved_kill_event_count}/{len(kill_events)}, weapon_stats={weapon_stat_count}, "
         f"created_match={created_match}, map={report_values['map_name'] or '-'}, "
         f"playlist={report_values['playlist_name'] or '-'}"
     )
@@ -333,7 +420,7 @@ async def process_match_end_report(report: dict[str, Any]) -> dict[str, Any]:
         "match_id": match.id,
         "created_match": created_match,
         "players": player_count,
-        "kill_events": len(kill_events),
+        "kill_events": saved_kill_event_count,
         "weapon_stats": weapon_stat_count,
     }
 

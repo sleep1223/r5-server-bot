@@ -36,6 +36,9 @@ dist/
 *.egg-info/
 
 scripts/
+!services/fastapi_service/src/fastapi_service/scripts/
+services/fastapi_service/src/fastapi_service/scripts/*
+!services/fastapi_service/src/fastapi_service/scripts/rebuild_sdk_match_weapon_stats.py
 services/nonebot_service/data
 docs/
 backups/db_access_cleanup_20260621_003753/players_and_ban_records.dump
