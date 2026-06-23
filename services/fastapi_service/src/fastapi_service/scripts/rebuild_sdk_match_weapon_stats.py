@@ -52,11 +52,13 @@ def _payload_dict(report: SdkMatchEndReport) -> dict | None:
 async def _resolve_server_and_match(report: SdkMatchEndReport) -> tuple[Server | None, Match | None]:
     server = getattr(report, "server", None)
     match = getattr(report, "match", None)
+    server_id = getattr(report, "server_id", None)
+    match_id = getattr(report, "match_id", None)
 
-    if server is None and getattr(report, "server_id", None):
-        server = await Server.get_or_none(id=report.server_id)
-    if match is None and getattr(report, "match_id", None):
-        match = await Match.get_or_none(id=report.match_id)
+    if server is None and server_id:
+        server = await Server.get_or_none(id=server_id)
+    if match is None and match_id:
+        match = await Match.get_or_none(id=match_id)
     if server is None and match is not None and getattr(match, "server_id", None):
         server = await Server.get_or_none(id=match.server_id)
 
@@ -98,10 +100,7 @@ async def _rebuild_one_report(
 
     server, match = await _resolve_server_and_match(report)
     if server is None or match is None:
-        logger.warning(
-            f"跳过 sdk_match_end_report id={report.id}: "
-            f"缺少 server/match 关联(server_id={getattr(report, 'server_id', None)}, match_id={getattr(report, 'match_id', None)})"
-        )
+        logger.warning(f"跳过 sdk_match_end_report id={report.id}: 缺少 server/match 关联(server_id={getattr(report, 'server_id', None)}, match_id={getattr(report, 'match_id', None)})")
         return False, 0, 0, 0, 0, None
 
     players = [player for player in payload.get("players") or [] if isinstance(player, dict)]
@@ -109,10 +108,7 @@ async def _rebuild_one_report(
     old_rows = await PlayerMatchWeaponStat.filter(match=match, source=_SDK_MATCH_END_CATEGORY).count()
 
     if not apply:
-        logger.info(
-            f"dry-run sdk_match_end_report id={report.id}: "
-            f"match_id={match.id}, old_weapon_rows={old_rows}, players={len(players)}, kill_events={len(kill_events)}"
-        )
+        logger.info(f"dry-run sdk_match_end_report id={report.id}: match_id={match.id}, old_weapon_rows={old_rows}, players={len(players)}, kill_events={len(kill_events)}")
         return False, old_rows, 0, len(kill_events), 0, _to_shanghai_date(report.ended_at)
 
     async with in_transaction():
@@ -228,10 +224,7 @@ async def _run_from_args(args: argparse.Namespace) -> RebuildSummary:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=(
-            "Rebuild player_match_weapon_stats rows from sdk_match_end_reports.payload. "
-            "Default mode is dry-run; pass --apply to overwrite current sdk_match_end rows."
-        )
+        description=("Rebuild player_match_weapon_stats rows from sdk_match_end_reports.payload. Default mode is dry-run; pass --apply to overwrite current sdk_match_end rows.")
     )
     parser.add_argument("--apply", action="store_true", help="Overwrite player_match_weapon_stats for matched reports.")
     parser.add_argument("--start", type=_parse_day, help="Report ended_at start date, inclusive, YYYY-MM-DD.")

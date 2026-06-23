@@ -21,7 +21,7 @@ def _looks_like_server_address(value: object | None) -> bool:
 
     host = text
     if text.startswith("[") and "]" in text:
-        host = text[1:text.index("]")]
+        host = text[1 : text.index("]")]
     elif ":" in text:
         host_part, _, port_part = text.rpartition(":")
         if port_part.isdigit():
@@ -100,11 +100,7 @@ async def list_players(
     query = Player.all()
     online_nucleus_ids: list[int] = []
     if status in {"online", "offline"}:
-        online_nucleus_ids = [
-            int(uid)
-            for uid in server_cache.get_online_nucleus_ids()
-            if uid.isdigit()
-        ]
+        online_nucleus_ids = [int(uid) for uid in server_cache.get_online_nucleus_ids() if uid.isdigit()]
         if status == "online" and not online_nucleus_ids:
             return [], 0
         if status == "online":

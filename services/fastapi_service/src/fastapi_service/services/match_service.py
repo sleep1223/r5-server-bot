@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 from loguru import logger
 from shared_lib.models import Match, Player, PlayerKilled, PlayerMatchWeaponStat, SdkMatchEndReport, Server
@@ -29,8 +29,8 @@ def _add_match_player_count(target: dict[int, dict[int, int]], match_id: object,
     parsed_count = _safe_int(count, 0)
     if parsed_count <= 0:
         return
-    match_bucket = target.setdefault(int(match_id), {})
-    player_key = int(player_id)
+    match_bucket = target.setdefault(int(cast(Any, match_id)), {})
+    player_key = int(cast(Any, player_id))
     match_bucket[player_key] = match_bucket.get(player_key, 0) + parsed_count
 
 
@@ -65,13 +65,15 @@ async def _aggregate_match_player_kills_deaths(
 
     player_killed_filters = {"match_id__in": match_ids, **(pk_bounds or {})}
     kill_rows = (
-        await PlayerKilled.filter(_player_killed_countable_q(), attacker_id__isnull=False, **player_killed_filters)
+        await PlayerKilled
+        .filter(_player_killed_countable_q(), attacker_id__isnull=False, **player_killed_filters)
         .group_by("match_id", "attacker_id")
         .annotate(k_count=Count("id"))
         .values("match_id", "attacker_id", "k_count")
     )
     death_rows = (
-        await PlayerKilled.filter(_player_killed_countable_q(), victim_id__isnull=False, **player_killed_filters)
+        await PlayerKilled
+        .filter(_player_killed_countable_q(), victim_id__isnull=False, **player_killed_filters)
         .group_by("match_id", "victim_id")
         .annotate(d_count=Count("id"))
         .values("match_id", "victim_id", "d_count")
@@ -85,13 +87,15 @@ async def _aggregate_match_player_kills_deaths(
         _add_match_player_count(deaths_by_match, row["match_id"], row["victim_id"], row["d_count"])
 
     detail_kill_rows = (
-        await PlayerMatchWeaponStat.filter(match_id__in=match_ids, player_id__isnull=False, opponent_id__isnull=False, kills__gt=0)
+        await PlayerMatchWeaponStat
+        .filter(match_id__in=match_ids, player_id__isnull=False, opponent_id__isnull=False, kills__gt=0)
         .group_by("match_id", "player_id")
         .annotate(k_sum=Sum("kills"))
         .values("match_id", "player_id", "k_sum")
     )
     detail_death_rows = (
-        await PlayerMatchWeaponStat.filter(match_id__in=match_ids, opponent_id__isnull=False, kills__gt=0)
+        await PlayerMatchWeaponStat
+        .filter(match_id__in=match_ids, opponent_id__isnull=False, kills__gt=0)
         .group_by("match_id", "opponent_id")
         .annotate(d_sum=Sum("kills"))
         .values("match_id", "opponent_id", "d_sum")
@@ -107,10 +111,7 @@ async def _aggregate_match_player_kills_deaths(
         "weapon",
         "source",
     )
-    detail_keys = {
-        (row["match_id"], row["player_id"], _normalized_weapon_key(row["weapon"]), row.get("source") or "")
-        for row in detail_key_rows
-    }
+    detail_keys = {(row["match_id"], row["player_id"], _normalized_weapon_key(row["weapon"]), row.get("source") or "") for row in detail_key_rows}
     summary_rows = await PlayerMatchWeaponStat.filter(match_id__in=match_ids, player_id__isnull=False, opponent_id__isnull=True, kills__gt=0).values(
         "match_id",
         "player_id",
@@ -249,7 +250,7 @@ async def _ensure_report_player(
     saved = await player_access_service.upsert_access_player_snapshot(
         uid=uid,
         nucleus_id=nucleus_id,
-        player_name=player_name,
+        player_name=cast(str | None, player_name),
         input_device=_normalize_input_device(input_device),
     )
     if saved:
@@ -312,12 +313,10 @@ def _weapon_stats_from_payload(player_payload: dict[str, Any]) -> list[dict[str,
     for weapon_kill in player_payload.get("weaponKills") or []:
         if not isinstance(weapon_kill, dict):
             continue
-        fallback_stats.append(
-            {
-                "weapon": weapon_kill.get("weapon"),
-                "kills": weapon_kill.get("kills"),
-            }
-        )
+        fallback_stats.append({
+            "weapon": weapon_kill.get("weapon"),
+            "kills": weapon_kill.get("kills"),
+        })
     return fallback_stats
 
 
