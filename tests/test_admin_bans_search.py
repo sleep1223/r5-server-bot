@@ -106,6 +106,7 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(rows[0]["can_self_unban"])
         self.assertEqual(rows[0]["resolution_status"], "active")
         self.assertIsNone(data)
+        assert err is not None
         self.assertEqual(err["code"], ErrorCode.INVALID_REASON)
 
     async def test_self_unban_acknowledges_pending_kick_notice(self) -> None:
@@ -138,6 +139,7 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
         await notice.refresh_from_db()
         await player.refresh_from_db()
         self.assertIsNone(err)
+        assert data is not None
         self.assertTrue(data["self_unban"])
         self.assertFalse(notice.requires_ack)
         self.assertIsNotNone(notice.acknowledged_at)

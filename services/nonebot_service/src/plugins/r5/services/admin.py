@@ -84,10 +84,7 @@ def _kick_notice_summary(data: dict) -> str:
     context = notice.get("message_context") or {}
     reused = bool(context.get("pending_notice_reused"))
     status = "已复用待确认记录" if reused else "已创建待确认记录"
-    return (
-        f"\n📩 Kick 确认: {status} #{notice.get('id')}\n"
-        "🔗 自助解除: https://r5.sleep0.de/bans"
-    )
+    return f"\n📩 Kick 确认: {status} #{notice.get('id')}\n🔗 自助解除: https://r5.sleep0.de/bans"
 
 
 def _access_submit_summary(data: dict, action_label: str) -> str:
@@ -130,12 +127,7 @@ async def handle_ban(bot: Bot, event: Event, args: Message = CommandArg()) -> No
 
         data = res.get("data") or {}
         player = data.get("player") or {}
-        await cmd_ban.finish(
-            f"🔨 封禁已提交\n\n"
-            f"👤 玩家: {_player_display(player, target)}\n"
-            f"📌 原因: {reason_cn}\n"
-            f"{_access_submit_summary(data, '封禁')}"
-        )
+        await cmd_ban.finish(f"🔨 封禁已提交\n\n👤 玩家: {_player_display(player, target)}\n📌 原因: {reason_cn}\n{_access_submit_summary(data, '封禁')}")
 
     except FinishedException:
         raise
@@ -173,13 +165,7 @@ async def handle_kick(event: Event, args: Message = CommandArg()) -> None:
 
         data = res.get("data") or {}
         player = data.get("player") or {}
-        await cmd_kick.finish(
-            f"👢 踢出已提交\n\n"
-            f"👤 玩家: {_player_display(player, target)}\n"
-            f"📌 原因: {reason_cn}"
-            f"{_kick_notice_summary(data)}\n"
-            f"{_access_submit_summary(data, '踢出')}"
-        )
+        await cmd_kick.finish(f"👢 踢出已提交\n\n👤 玩家: {_player_display(player, target)}\n📌 原因: {reason_cn}{_kick_notice_summary(data)}\n{_access_submit_summary(data, '踢出')}")
 
     except FinishedException:
         raise
@@ -211,12 +197,7 @@ async def handle_unban(bot: Bot, event: Event, args: Message = CommandArg()) -> 
         data = res.get("data") or {}
         player = data.get("player") or {}
         released_count = len(data.get("released_rules") or [])
-        await cmd_unban.finish(
-            f"🔓 解封已提交\n\n"
-            f"👤 玩家: {_player_display(player, target)}\n"
-            f"🧹 释放规则: {released_count}\n"
-            "🧭 执行方式: SDK 准入规则已释放"
-        )
+        await cmd_unban.finish(f"🔓 解封已提交\n\n👤 玩家: {_player_display(player, target)}\n🧹 释放规则: {released_count}\n🧭 执行方式: SDK 准入规则已释放")
 
     except FinishedException:
         raise

@@ -118,7 +118,7 @@ async def report_online_players(
 ) -> OnlinePlayersResponse:
     _verify_optional_access_token(credentials)
     result = await player_access_service.process_online_players_report(
-        server_id=None,
+        server_id="",
         report=payload.model_dump(),
     )
     return OnlinePlayersResponse(

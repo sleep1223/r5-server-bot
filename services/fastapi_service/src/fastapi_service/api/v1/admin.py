@@ -46,11 +46,7 @@ def _request_ip(request: Request) -> str:
 
 
 def _prune_self_unban_ip_rate_limit(now: float) -> None:
-    expired_ips = [
-        ip
-        for ip, last_success_at in _SELF_UNBAN_IP_LAST_SUCCESS.items()
-        if now - last_success_at >= SELF_UNBAN_IP_RATE_LIMIT_SECONDS
-    ]
+    expired_ips = [ip for ip, last_success_at in _SELF_UNBAN_IP_LAST_SUCCESS.items() if now - last_success_at >= SELF_UNBAN_IP_RATE_LIMIT_SECONDS]
     for ip in expired_ips:
         _SELF_UNBAN_IP_LAST_SUCCESS.pop(ip, None)
 

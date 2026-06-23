@@ -3,7 +3,7 @@ from __future__ import annotations
 import ipaddress
 import json
 from datetime import datetime, timezone
-from typing import Any, Iterable, cast
+from typing import Any, Iterable, Literal, cast
 
 from loguru import logger
 from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server
@@ -576,7 +576,7 @@ def _notice_decision(notice: PlayerAccessNotice, *, locale: str = DEFAULT_REASON
     }
 
 
-def action_from_access_decision(decision: dict[str, Any]) -> str | None:
+def action_from_access_decision(decision: dict[str, Any]) -> Literal["kick", "ban"] | None:
     if decision.get("allow", True):
         return None
     if decision.get("source") == "kick_notice":
@@ -586,8 +586,10 @@ def action_from_access_decision(decision: dict[str, Any]) -> str | None:
 
     rule = decision.get("rule") or {}
     source_action = str(rule.get("source_action") or "").strip().lower()
-    if source_action in {"ban", "kick"}:
-        return source_action
+    if source_action == "kick":
+        return "kick"
+    if source_action == "ban":
+        return "ban"
 
     return "ban"
 
@@ -1704,7 +1706,8 @@ async def create_access_notice(
     action_text = str(action or "").strip().lower()
     if action_text == "kick":
         existing_notice = await (
-            PlayerAccessNotice.filter(
+            PlayerAccessNotice
+            .filter(
                 uid=uid_text,
                 action="kick",
                 server_scope=scope,
@@ -1761,21 +1764,12 @@ async def sync_legacy_access_records(*, batch_size: int = 5000) -> dict[str, int
 
     offset = 0
     while True:
-        banned_players = await (
-            Player.filter(status="banned", nucleus_id__isnull=False)
-            .order_by("-updated_at", "-id")
-            .offset(offset)
-            .limit(batch_size)
-        )
+        banned_players = await Player.filter(status="banned", nucleus_id__isnull=False).order_by("-updated_at", "-id").offset(offset).limit(batch_size)
         if not banned_players:
             break
         offset += batch_size
 
-        uid_by_player_id = {
-            player.id: uid
-            for player in banned_players
-            if (uid := normalize_uid(player.nucleus_id))
-        }
+        uid_by_player_id = {player.id: uid for player in banned_players if (uid := normalize_uid(player.nucleus_id))}
         existing_rule_values: set[str] = set()
         if uid_by_player_id:
             existing_rule_value_rows = await PlayerAccessRule.filter(
@@ -1808,38 +1802,19 @@ async def sync_legacy_access_records(*, batch_size: int = 5000) -> dict[str, int
     offset = 0
     while True:
         kicked_players = await (
-            Player.filter(Q(kick_count__gt=0) | Q(status="kicked"), nucleus_id__isnull=False)
-            .exclude(status="banned")
-            .order_by("-updated_at", "-id")
-            .offset(offset)
-            .limit(batch_size)
+            Player.filter(Q(kick_count__gt=0) | Q(status="kicked"), nucleus_id__isnull=False).exclude(status="banned").order_by("-updated_at", "-id").offset(offset).limit(batch_size)
         )
         if not kicked_players:
             break
         offset += batch_size
 
-        uid_by_player_id = {
-            player.id: uid
-            for player in kicked_players
-            if (uid := normalize_uid(player.nucleus_id))
-        }
+        uid_by_player_id = {player.id: uid for player in kicked_players if (uid := normalize_uid(player.nucleus_id))}
         existing_notice_uids: set[str] = set()
         existing_notice_player_ids: set[int] = set()
         if uid_by_player_id:
-            notice_rows = await PlayerAccessNotice.filter(
-                Q(uid__in=list(set(uid_by_player_id.values())))
-                | Q(player_id__in=list(uid_by_player_id.keys()))
-            ).values("uid", "player_id")
-            existing_notice_uids = {
-                str(row["uid"])
-                for row in notice_rows
-                if row.get("uid") is not None
-            }
-            existing_notice_player_ids = {
-                int(row["player_id"])
-                for row in notice_rows
-                if row.get("player_id") is not None
-            }
+            notice_rows = await PlayerAccessNotice.filter(Q(uid__in=list(set(uid_by_player_id.values()))) | Q(player_id__in=list(uid_by_player_id.keys()))).values("uid", "player_id")
+            existing_notice_uids = {str(row["uid"]) for row in notice_rows if row.get("uid") is not None}
+            existing_notice_player_ids = {int(row["player_id"]) for row in notice_rows if row.get("player_id") is not None}
 
         for player in kicked_players:
             uid = uid_by_player_id.get(player.id)

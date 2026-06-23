@@ -49,14 +49,24 @@ async def list_bans(
     player_name: str | None = None,
     nucleus_id: int | None = None,
 ) -> tuple[list[dict], int]:
-    operations = await PlayerAccessOperation.filter(
-        action__in=["ban", "kick"],
-        target_type__in=["player", "uid"],
-    ).order_by("-created_at", "-id").prefetch_related("player")
-    unban_operations = await PlayerAccessOperation.filter(
-        action="unban",
-        target_type__in=["player", "uid"],
-    ).order_by("-created_at", "-id").prefetch_related("player")
+    operations = (
+        await PlayerAccessOperation
+        .filter(
+            action__in=["ban", "kick"],
+            target_type__in=["player", "uid"],
+        )
+        .order_by("-created_at", "-id")
+        .prefetch_related("player")
+    )
+    unban_operations = (
+        await PlayerAccessOperation
+        .filter(
+            action="unban",
+            target_type__in=["player", "uid"],
+        )
+        .order_by("-created_at", "-id")
+        .prefetch_related("player")
+    )
     bans = await BanRecord.all().order_by("-created_at", "-id").prefetch_related("player")
     kicked_players = await Player.filter(status="kicked").order_by("-updated_at", "-id")
     has_player_query, player_ids, exact_targets = await _exact_player_search(
@@ -65,16 +75,8 @@ async def list_bans(
         nucleus_id=nucleus_id,
     )
     if has_player_query:
-        operations = [
-            operation
-            for operation in operations
-            if _operation_matches_exact_player(operation, player_ids=player_ids, exact_targets=exact_targets)
-        ]
-        unban_operations = [
-            operation
-            for operation in unban_operations
-            if _operation_matches_exact_player(operation, player_ids=player_ids, exact_targets=exact_targets)
-        ]
+        operations = [operation for operation in operations if _operation_matches_exact_player(operation, player_ids=player_ids, exact_targets=exact_targets)]
+        unban_operations = [operation for operation in unban_operations if _operation_matches_exact_player(operation, player_ids=player_ids, exact_targets=exact_targets)]
         bans = [ban for ban in bans if _ban_matches_exact_player(ban, player_ids=player_ids)]
         kicked_players = [player for player in kicked_players if player.id in player_ids]
 
@@ -222,13 +224,12 @@ def _suppress_duplicate_pending_kick_rows(rows: list[dict[str, Any]]) -> None:
     if not pending_by_key:
         return
 
-    rows[:] = [
-        row
-        for row in rows
-        if row is pending_by_key.get(_kick_row_dedupe_key(row))
-        or _kick_row_dedupe_key(row) not in pending_by_key
-        or row.get("resolution_status") == "resolved"
-    ]
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        key = _kick_row_dedupe_key(row)
+        if key is None or key not in pending_by_key or row is pending_by_key.get(key) or row.get("resolution_status") == "resolved":
+            filtered.append(row)
+    rows[:] = filtered
 
 
 def _datetime_gte(left: Any, right: Any) -> bool:
@@ -431,13 +432,7 @@ async def _serialize_access_operation_row(
         "created_at": operation.created_at,
         "acknowledged_at": acknowledged_at,
         "requires_ack": requires_ack,
-        "can_self_unban": (
-            action == "kick"
-            and bool(notice)
-            and notice_action == "kick"
-            and requires_ack
-            and not acknowledged_at
-        ),
+        "can_self_unban": (action == "kick" and bool(notice) and notice_action == "kick" and requires_ack and not acknowledged_at),
         **resolution,
         "linked_rule_ids": operation.linked_rule_ids,
         "player": _player_payload(player, is_admin=is_admin),
@@ -447,11 +442,7 @@ async def _serialize_access_operation_row(
 
 async def _serialize_legacy_ban_row(ban: BanRecord, *, is_admin: bool) -> dict[str, Any]:
     operation_ip = str(ban.player.ip or "").strip() or None
-    resolution = (
-        _resolution_payload("active", "生效中")
-        if ban.player.status == "banned"
-        else _resolution_payload("resolved", "已解除")
-    )
+    resolution = _resolution_payload("active", "生效中") if ban.player.status == "banned" else _resolution_payload("resolved", "已解除")
     return {
         "id": ban.id,
         "source": "ban_record",

@@ -221,7 +221,8 @@ async def _pending_kick_notice_for_player(
         return None
 
     return await (
-        PlayerAccessNotice.filter(
+        PlayerAccessNotice
+        .filter(
             uid=uid,
             action="kick",
             server_scope=server_scope,
