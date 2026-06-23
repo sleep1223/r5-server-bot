@@ -1,7 +1,8 @@
 import unittest
+from datetime import datetime, timedelta
 
-from fastapi_service.core.cache import server_cache
-from fastapi_service.core.utils import generate_hash
+from fastapi_service.core.cache import ACCESS_REPORT_TTL_SECONDS, server_cache
+from fastapi_service.core.utils import CN_TZ, generate_hash
 from fastapi_service.services import admin_management_service, player_service, server_service
 from fastapi_service.services import player_access_service as access_service
 from fastapi_service.tasks import fetch_servers
@@ -548,10 +549,56 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertTrue(rows[0]["is_online"])
+        self.assertEqual(rows[0]["player"]["status"], "online")
         self.assertEqual(rows[0]["server"]["name"], "[CN(Jinan)] PWLA 1v1 Telecom")
         self.assertEqual(rows[0]["server"]["short_name"], "[CN(Jinan)]")
         self.assertEqual(rows[0]["server"]["host"], "119.188.164.105")
         self.assertEqual(rows[0]["server"]["port"], 37015)
+
+    async def test_access_report_preserves_player_online_at_between_heartbeats(self) -> None:
+        uid = 1000000000022
+        server_key = "119.188.164.105:37015"
+        payload = {
+            "serverIp": "119.188.164.105",
+            "serverPort": 37015,
+            "serverName": "[CN(Jinan)] PWLA 1v1 Telecom",
+            "players": [
+                {
+                    "uid": str(uid),
+                    "nucleusId": uid,
+                    "playerName": "duration-player",
+                    "inputDevice": "keyboard_mouse",
+                }
+            ],
+        }
+
+        server_cache.update_access_report(server_key, payload)
+        first_seen = datetime.now(CN_TZ) - timedelta(minutes=5)
+        report = server_cache._access_reports[server_key]
+        players = report["players"]
+        assert isinstance(players, list)
+        players[0]["online_at"] = first_seen
+
+        server_cache.update_access_report(server_key, payload)
+
+        online_location = server_cache.get_online_location(uid)
+        self.assertIsNotNone(online_location)
+        assert online_location is not None
+        self.assertEqual(online_location["online_at"], first_seen)
+
+        report = server_cache._access_reports[server_key]
+        report["updated_at"] = datetime.now(CN_TZ) - timedelta(seconds=ACCESS_REPORT_TTL_SECONDS + 1)
+        players = report["players"]
+        assert isinstance(players, list)
+        players[0]["online_at"] = first_seen
+
+        server_cache.update_access_report(server_key, payload)
+
+        reset_location = server_cache.get_online_location(uid)
+        self.assertIsNotNone(reset_location)
+        assert reset_location is not None
+        self.assertNotEqual(reset_location["online_at"], first_seen)
+        self.assertGreater(reset_location["online_at"], first_seen)
 
     async def test_sdk_reports_with_shared_config_server_id_are_scoped_by_address(self) -> None:
         shared_server_id = "shared-sdk-config-id"

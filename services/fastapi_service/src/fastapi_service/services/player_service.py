@@ -229,7 +229,7 @@ async def query_players(q: str, *, page_size: int = 20, offset: int = 0) -> list
             "player": {
                 "name": player.name,
                 "nucleus_id": player.nucleus_id,
-                "status": player.status,
+                "status": "online" if is_online and player.status == "offline" else player.status,
                 "ban_count": player.ban_count,
                 "kick_count": player.kick_count,
                 "country": player_country,

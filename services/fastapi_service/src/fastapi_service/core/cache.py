@@ -107,13 +107,26 @@ class ServerCache:
             return
 
         updated_at = datetime.now(CN_TZ)
+        previous_report = self._access_reports.get(server_key) or {}
+        previous_updated_at = previous_report.get("updated_at")
+        previous_players = previous_report.get("players") or []
+        reuse_previous_online_at = isinstance(previous_updated_at, datetime) and (updated_at - previous_updated_at).total_seconds() <= ACCESS_REPORT_TTL_SECONDS
+        previous_online_at_by_uid = {}
+        if reuse_previous_online_at and isinstance(previous_players, list):
+            previous_online_at_by_uid = {
+                str(p_data.get("uniqueid")): p_data.get("online_at")
+                for p_data in previous_players
+                if isinstance(p_data, dict) and p_data.get("uniqueid") is not None and isinstance(p_data.get("online_at"), datetime)
+            }
+
         players = []
         for player in data.get("players") or []:
             uid = player.get("uid") or player.get("nucleusId") or player.get("uniqueid")
             if uid is None:
                 continue
+            uid_text = str(uid)
             players.append({
-                "uniqueid": str(uid),
+                "uniqueid": uid_text,
                 "name": player.get("playerName") or player.get("name") or str(uid),
                 "ip": _normalize_ip(player.get("ip")) or player.get("ip"),
                 "port": player.get("port"),
@@ -125,7 +138,7 @@ class ServerCache:
                 "signon_state": player.get("signonState"),
                 "ping": _safe_int(player.get("ping"), 0),
                 "loss": _safe_int(player.get("loss"), 0),
-                "online_at": updated_at,
+                "online_at": previous_online_at_by_uid.get(uid_text) or updated_at,
             })
 
         server_host = _normalize_server_host(data.get("serverIp")) or None
@@ -228,12 +241,15 @@ class ServerCache:
                     continue
                 server_host = report.get("server_host") or server_id
                 server_port = _safe_int(report.get("server_port"), 0)
+                online_at = p_data.get("online_at")
+                if not isinstance(online_at, datetime):
+                    online_at = updated_at
                 return {
                     "server_id": server_id,
                     "server_name": report.get("server_name") or server_id,
                     "server_host": server_host,
                     "server_port": server_port,
-                    "online_at": updated_at,
+                    "online_at": online_at,
                     "ping": p_data.get("ping", 0),
                     "player_ip": p_data.get("ip"),
                     "player_country": p_data.get("country"),
