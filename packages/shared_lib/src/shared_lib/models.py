@@ -73,7 +73,7 @@ class MatchSetup(BaseEvent):
     playlist_desc = fields.CharField(max_length=100)
     datacenter = fields.JSONField()
     aim_assist_on = fields.BooleanField()
-    # LiveAPI proto 里的 server_id（字符串标识符，保留原值供审计）
+    # 上游服务器列表里的 server_id（字符串标识符，保留原值供审计）
     server_id = fields.CharField(max_length=100)
     # 业务 Match 聚合实体（server 可通过 match.server 反查）
     match = fields.ForeignKeyField("models.Match", related_name="setup_events", null=True, db_index=True)
@@ -452,24 +452,3 @@ class TeamMember(models.Model):
     class Meta:
         table = "team_member"
         unique_together = (("team", "user_binding"),)
-
-
-class SteamAuthLog(models.Model):
-    """Audit trail for Pylon /client/auth Steam authentication attempts.
-
-    Standalone table — intentionally not FK'd to Player so Steam-only users
-    that never appeared in a LiveAPI event can still be logged. Pair with
-    Player via `steam_id` once that field is added in a follow-up migration.
-    """
-
-    id = fields.IntField(pk=True)
-    steam_id = fields.BigIntField(db_index=True)
-    persona_name = fields.CharField(max_length=255, null=True)
-    server_endpoint = fields.CharField(max_length=255, null=True)
-    client_ip = fields.CharField(max_length=64, null=True, db_index=True)
-    success = fields.BooleanField(db_index=True)
-    error_code = fields.CharField(max_length=64, null=True)
-    created_at = fields.DatetimeField(auto_now_add=True, db_index=True)
-
-    class Meta:
-        table = "steam_auth_log"

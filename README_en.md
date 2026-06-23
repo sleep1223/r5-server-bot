@@ -41,43 +41,17 @@ Copy the `env/.env.example` file to `env/.env` and modify the configuration as n
 **Key settings in `env/.env`:**
 
 ```properties
-# Console output netkey (corresponds to liveapi.cfg)
-r5_target_keys='["server_key"]'
-
-# RCON configuration (corresponds to rcon_server.cfg)
-r5_rcon_key="rcon_key"
-r5_rcon_password="sv_rcon_password"
-
-# WS Service settings
-ws_host="127.0.0.1"
-ws_port=7771
+# Remote server list
+r5_servers_url="https://r5r-org.sleep0.de/servers"
+r5_servers_fetch_interval=180
 
 # FastAPI Service settings
 fastapi_host="0.0.0.0"
 fastapi_port=8000
 fastapi_access_tokens='["your_api_token"]'
-```
 
-### 2. Game Server Configuration
-
-Ensure the game server configuration files are set correctly to support LiveAPI and RCON connections.
-
-**LiveAPI Configuration**
-File Path: `server_live_v2.6.21\platform\cfg\liveapi.cfg`
-
-```cfg
-liveapi_enabled           "1"                   // Enable LiveAPI functionality
-liveapi_session_name      "cn-hangzhou-1"       // LiveAPI session name
-liveapi_websocket_enabled "1"                   // Enable WebSocket transmission
-liveapi_servers           "ws://127.0.0.1:7771" // WebSocket connection address (must match ws_host/ws_port in .env)
-```
-
-**RCON Configuration**
-File Path: `server_live_v2.6.21\platform\cfg\tools\rcon_server.cfg`
-
-```cfg
-sv_rcon_password         "sv_rcon_password"                 // RCON password (must match r5_rcon_password in .env)
-rcon_key                 "rcon_key"  // RCON key (note this is the server-side generated key, must match r5_rcon_key in .env)
+# Server IPs excluded from KD / weapon statistics
+kd_excluded_server_hosts='["47.116.182.240"]'
 ```
 
 ## Deployment Steps
@@ -94,27 +68,13 @@ uv sync --all-packages
 
 ### 2. Start Services
 
-Please start the following services in **four different terminal windows**. The FastAPI main service and ingest service are now split into two independent Granian processes and must be started separately.
-
-#### Window 1: Start WebSocket Service
-
-```shell
-uv run python -m ws_service.main
-```
-
-#### Window 2: Start FastAPI Main Service
+Start the following services in separate terminal windows.
 
 ```shell
 uv run python -m fastapi_service.server
 ```
 
-#### Window 3: Start FastAPI Ingest Service
-
-```shell
-uv run python -m fastapi_service.ingest_server
-```
-
-#### Window 4: Start NoneBot Service
+#### Start NoneBot Service
 
 **Note**: The NoneBot service depends on the FastAPI service, please ensure the FastAPI service has started successfully.
 

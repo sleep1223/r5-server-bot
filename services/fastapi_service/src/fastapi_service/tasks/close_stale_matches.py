@@ -9,9 +9,7 @@ from shared_lib.models import Match, PlayerKilled
 async def _close_one(match: Match, ended_at: datetime, *, status: str, reason: str) -> bool:
     """CAS 关闭指定 match；返回是否更新成功。
 
-    注意：本任务跑在主 app 进程，而 `_ACTIVE_MATCH_BY_SERVER` 缓存在 ingest 进程，
-    跨进程不共享。这里只依赖 DB CAS；ingest 进程的缓存会在下一次事件到达时
-    通过 `_load_active_match` 回源 DB 自我修正。
+    这里只依赖 DB CAS，避免和其他写入路径共享进程内状态。
     """
     rows = await Match.filter(id=match.id, status="active").update(
         status=status,
@@ -28,7 +26,7 @@ async def _close_no_activity_matches(now: datetime) -> None:
 
     覆盖"玩家全退 → 游戏服不再 emit Prematch"这类场景。给一段宽限期
     (started_at < now - N **且** created_at < now - N) 避免把刚写入但 started_at
-    回溯的 back-dated match（比如 ws_service 重启后 replay 的旧 MatchSetup）秒死。
+    回溯的 back-dated match 秒死。
     """
     grace = timedelta(seconds=settings.match_no_activity_timeout_seconds)
     cutoff = now - grace
@@ -54,8 +52,8 @@ async def _close_no_activity_matches(now: datetime) -> None:
 async def _close_hard_timeout_matches(now: datetime) -> None:
     """总时长 safety net（默认 2h）→ 标记为 abandoned/inactivity。
 
-    同样要求 started_at 和 created_at 都早于 cutoff，避免 back-dated MatchSetup
-    （ws_service 重启后 replay）刚插入就被秒判超时。
+    同样要求 started_at 和 created_at 都早于 cutoff，避免 back-dated match
+    刚插入就被秒判超时。
     """
     cutoff = now - timedelta(seconds=settings.match_inactivity_timeout_seconds)
     stale = await Match.filter(
@@ -74,7 +72,7 @@ async def close_stale_matches_task() -> None:
     1. 先看"无击杀活动 > match_no_activity_timeout_seconds"（默认 30min）→ completed/no_activity
     2. 再看"总时长 > match_inactivity_timeout_seconds"（默认 2h）→ abandoned/inactivity
 
-    正常路径仍由 ingest_service 通过 Prematch / 新 MatchSetup 关闭。
+    正常路径仍由比赛上报写入路径关闭。
     """
     interval = settings.match_closer_interval_seconds
     while True:

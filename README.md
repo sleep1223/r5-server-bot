@@ -41,43 +41,17 @@ uv tool install nb-cli
 **`env/.env` 关键配置项说明：**
 
 ```properties
-# master-server JSON 中的 serverId；留空数组则尝试同步所有中国服
-r5_target_keys='["serverId"]'
-
-# RCON 配置 (对应 rcon_server.cfg 中的配置)
-r5_rcon_key="rcon_key"
-r5_rcon_password="sv_rcon_password"
-
-# WebSocket 服务设置
-ws_host="127.0.0.1"
-ws_port=7771
+# 远程服务器列表
+r5_servers_url="https://r5r-org.sleep0.de/servers"
+r5_servers_fetch_interval=180
 
 # FastAPI 服务设置
 fastapi_host="0.0.0.0"
 fastapi_port=8000
 fastapi_access_tokens='["your_api_token"]'
-```
 
-### 2. 游戏服务器配置
-
-请确保游戏服务器配置文件正确设置，以支持 LiveAPI 和 RCON 连接。
-
-**LiveAPI 配置**
-文件路径: `server_live_v2.6.21\platform\cfg\liveapi.cfg`
-
-```cfg
-liveapi_enabled           "1"                   // 启用 LiveAPI 功能
-liveapi_session_name      "cn-hangzhou-1"       // LiveAPI 会话名称
-liveapi_websocket_enabled "1"                   // 启用 WebSocket 传输
-liveapi_servers           "ws://127.0.0.1:7771" // WebSocket 连接地址 (需与 .env 中的 ws_host/ws_port 对应)
-```
-
-**RCON 配置**
-文件路径: `server_live_v2.6.21\platform\cfg\tools\rcon_server.cfg`
-
-```cfg
-sv_rcon_password         "sv_rcon_password"                 // RCON 密码 (需与 .env 中的 r5_rcon_password 对应)
-rcon_key                 "rcon_key"  // RCON 密钥 (注意这是服务端生成的, 需与 .env 中的 r5_rcon_key 对应)
+# KD/武器等战绩统计排除的服务器 IP
+kd_excluded_server_hosts='["47.116.182.240"]'
 ```
 
 ## 部署步骤
@@ -94,27 +68,13 @@ uv sync --all-packages
 
 ### 2. 启动服务
 
-请在 **四个不同的终端窗口** 中分别启动以下服务。FastAPI 主服务与 ingest 服务现已拆分为两个独立 Granian 进程，必须分别启动。
-
-#### 窗口 1: 启动 WebSocket 服务
-
-```shell
-uv run python -m ws_service.main
-```
-
-#### 窗口 2: 启动 FastAPI 主服务
+请在不同的终端窗口中分别启动以下服务。
 
 ```shell
 uv run python -m fastapi_service.server
 ```
 
-#### 窗口 3: 启动 FastAPI Ingest 服务
-
-```shell
-uv run python -m fastapi_service.ingest_server
-```
-
-#### 窗口 4: 启动 NoneBot 服务
+#### 启动 NoneBot 服务
 
 **注意**：NoneBot 服务依赖于 FastAPI 服务，请确保 FastAPI 服务已成功启动。
 

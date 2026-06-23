@@ -8,15 +8,8 @@ dependencies = [
     "pydantic-settings>=2.12.0",
     "tortoise-orm[asyncpg]>=0.25.3,<1.0.0",
     "aiosqlite>=0.17.0",
-    "protobuf>=6.33.4",
     "loguru>=0.7.3",
-    "pycryptodomex>=3.23.0",
     "qqwry-py3>=1.2.1"
-]
-
-[project.optional-dependencies]
-dev = [
-    "grpcio-tools>=1.76.0",
 ]
 
 [build-system]

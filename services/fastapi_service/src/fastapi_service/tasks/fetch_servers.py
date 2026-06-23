@@ -107,7 +107,7 @@ async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
             if not ip and not server_identifier:
                 continue
 
-            port = _safe_int(raw.get("port"), settings.ws_public_port or 37015)
+            port = _safe_int(raw.get("port"), 37015)
             full_name = raw.get("name") or f"server-{ip or server_identifier}"
             short_name = parse_short_name(full_name) or None
             raw_netkey = _raw_server_netkey(raw)

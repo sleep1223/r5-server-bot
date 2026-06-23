@@ -1,13 +1,12 @@
 [project]
 name = "my-project-root"
 version = "0.1.0"
-description = "Monorepo root for WS and API services"
+description = "Monorepo root for API services"
 requires-python = ">=3.12"
 dependencies = [
     "aerich>=0.7.2",
     "fastapi-service",
     "shared-lib",
-    "ws-service",
 ]
 
 [tool.uv]
@@ -20,7 +19,6 @@ default = true
 [tool.uv.workspace]
 members = [
     "packages/shared_lib",
-    "services/ws_service",
     "services/fastapi_service"
 ]
 exclude = [
@@ -30,7 +28,6 @@ exclude = [
 [tool.uv.sources]
 fastapi-service = { workspace = true }
 shared-lib = { workspace = true }
-ws-service = { workspace = true }
 
 [tool.aerich]
 tortoise_orm = "shared_lib.database.TORTOISE_ORM"

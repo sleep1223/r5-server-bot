@@ -17,5 +17,3 @@ router.include_router(donations.router)
 router.include_router(launcher.router)
 router.include_router(user.router)
 router.include_router(teams.router)
-# ingest 路由拆到独立 app (fastapi_service.ingest_main)，
-# 由独立 Granian 进程跑，避免进程内去重 LRU 跨 worker 失效。
