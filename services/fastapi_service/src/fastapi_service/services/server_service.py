@@ -123,11 +123,7 @@ async def list_servers(
     synced_by_name_candidates: dict[str, list[dict]] = {}
     for s_status in server_cache.get_online_server_statuses():
         status_name = s_status.get("_api_name") or s_status.get("hostname")
-        if (
-            _is_unusable_server_identity(s_status.get("ip"))
-            or _is_unusable_server_identity(s_status.get("_server"))
-            or _is_unusable_server_identity(status_name)
-        ):
+        if _is_unusable_server_identity(s_status.get("ip")) or _is_unusable_server_identity(s_status.get("_server")) or _is_unusable_server_identity(status_name):
             continue
 
         server_identifier = str(s_status.get("server_id") or "").strip()
@@ -252,13 +248,14 @@ async def list_servers(
         raw_max_players = _safe_int(s.get("maxPlayers"))
         ip_info = ip_info_by_ip.get(ip)
         status_ip_info = ip_info_by_ip.get(str(status.get("ip") or "").strip()) if status else None
-        server_ping = _first_positive_int(
-            s.get("ping"),
-            status_ip_info.ping if status_ip_info else None,
-            ip_info.ping if ip_info else None,
-            db_server.ping if db_server else None,
-            status.get("server_ping") if status else None,
-        )
+        server_ping = 0
+        if status:
+            server_ping = _first_positive_int(
+                status_ip_info.ping if status_ip_info else None,
+                ip_info.ping if ip_info else None,
+                db_server.ping if db_server else None,
+                status.get("server_ping"),
+            )
         display_ip = ip if ip and ip != server_identifier else ""
 
         entry: dict = {
@@ -276,6 +273,9 @@ async def list_servers(
             "max_players": raw_max_players,
             "has_status": has_status,
             "ping": server_ping,
+            "_reported": status is not None,
+            "_ping_sortable": bool(status and server_ping > 0),
+            "_result_order": len(results),
         }
 
         if status:
@@ -308,6 +308,30 @@ async def list_servers(
 
         _strip_public_server_fields(entry)
         results.append(entry)
+
+    def _sort_group(entry: dict) -> int:
+        has_players = _safe_int(entry.get("player_count")) > 0
+        is_reported = bool(entry.get("_reported"))
+        if has_players and is_reported:
+            return 0
+        if has_players:
+            return 1
+        if is_reported:
+            return 2
+        return 3
+
+    results.sort(
+        key=lambda entry: (
+            _sort_group(entry),
+            -_safe_int(entry.get("player_count")),
+            _safe_int(entry.get("ping")) if entry.get("_ping_sortable") else 1_000_000,
+            _safe_int(entry.get("_result_order")),
+        )
+    )
+    for entry in results:
+        entry.pop("_reported", None)
+        entry.pop("_ping_sortable", None)
+        entry.pop("_result_order", None)
 
     return results
 

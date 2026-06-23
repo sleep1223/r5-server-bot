@@ -1,14 +1,15 @@
 import asyncio
+import ipaddress
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 from loguru import logger
 from shared_lib.config import settings
-from shared_lib.models import Server
+from shared_lib.models import IpInfo, Server
 
 from fastapi_service.core.cache import server_cache
-from fastapi_service.core.utils import parse_short_name
+from fastapi_service.core.utils import get_local_ping, parse_short_name
 
 
 def _safe_int(val: object, default: int = 0) -> int:
@@ -38,6 +39,58 @@ def _is_cn_region(raw: dict) -> bool:
     return str(raw.get("region") or "").strip().upper() == "CN"
 
 
+def _ping_target_from_status(status: dict) -> str:
+    host = str(status.get("ip") or "").strip()
+    if not host:
+        server_text = str(status.get("_server") or "").strip()
+        if ":" in server_text:
+            host_part, _, port_part = server_text.rpartition(":")
+            if host_part and port_part.isdigit():
+                host = host_part
+    if not host:
+        return ""
+
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    if address.is_link_local or address.is_unspecified:
+        return ""
+    return str(address.ipv4_mapped or address) if isinstance(address, ipaddress.IPv6Address) else str(address)
+
+
+async def _refresh_reported_server_pings() -> int:
+    """Ping SDK/access-report cached servers and persist the latest latency."""
+    targets: set[str] = set()
+    for status in server_cache.get_online_server_statuses():
+        target = _ping_target_from_status(status)
+        if target:
+            targets.add(target)
+    if not targets:
+        return 0
+
+    semaphore = asyncio.Semaphore(16)
+
+    async def _ping_one(host: str) -> tuple[str, int]:
+        async with semaphore:
+            return host, await get_local_ping(host)
+
+    results = await asyncio.gather(*(_ping_one(host) for host in sorted(targets)), return_exceptions=True)
+    updated = 0
+    for result in results:
+        if isinstance(result, BaseException):
+            logger.warning(f"上报服务器 ping 失败: {result}")
+            continue
+        host, ping_val = result
+        await IpInfo.update_or_create(
+            defaults={"ping": max(int(ping_val or 0), 0), "is_resolved": True},
+            ip=host,
+        )
+        await Server.filter(host=host).update(ping=max(int(ping_val or 0), 0))
+        updated += 1
+    return updated
+
+
 async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
     """把上游服务器列表同步到 Server 表，并翻转 has_status 标记。"""
     if not raw_list:
@@ -61,18 +114,9 @@ async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
 
             server = await Server.get_or_none(server_id=server_identifier) if server_identifier else None
             if server is None and server_identifier and _is_cn_region(raw):
-                server = (
-                    await Server.filter(name=full_name)
-                    .exclude(server_id=server_identifier)
-                    .exclude(server_id__isnull=True)
-                    .order_by("-last_seen_at", "-id")
-                    .first()
-                )
+                server = await Server.filter(name=full_name).exclude(server_id=server_identifier).exclude(server_id__isnull=True).order_by("-last_seen_at", "-id").first()
                 if server:
-                    logger.info(
-                        f"CN 服务器 server_id 已按名称更新: "
-                        f"name={full_name}, old={server.server_id}, new={server_identifier}"
-                    )
+                    logger.info(f"CN 服务器 server_id 已按名称更新: name={full_name}, old={server.server_id}, new={server_identifier}")
             if not ip and server is None:
                 logger.debug(f"跳过缺少 host 的原始服务器: server_id={server_identifier}")
                 continue
@@ -178,6 +222,12 @@ async def fetch_server_list_raw_once() -> int | None:
         except Exception as e:
             logger.error(f"写入 Server 行异常: {e}")
             return None
+        try:
+            ping_count = await _refresh_reported_server_pings()
+            if ping_count:
+                logger.info(f"已刷新上报服务器延迟: {ping_count} 台服务器")
+        except Exception as e:
+            logger.warning(f"刷新上报服务器延迟异常: {e}")
         return len(raw_list)
     except Exception as e:
         logger.error(f"拉取原始服务器列表异常: {e}")

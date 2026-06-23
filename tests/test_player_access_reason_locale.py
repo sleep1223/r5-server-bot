@@ -4,6 +4,7 @@ from fastapi_service.core.cache import server_cache
 from fastapi_service.core.utils import generate_hash
 from fastapi_service.services import admin_management_service, player_service, server_service
 from fastapi_service.services import player_access_service as access_service
+from fastapi_service.tasks import fetch_servers
 from shared_lib.models import BanRecord, IpInfo, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server
 from tortoise import Tortoise
 
@@ -936,6 +937,175 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listed[0]["name"], "[CN(Test)] Real Server")
         self.assertEqual(listed[0]["short_name"], "[CN(Test)]")
         self.assertEqual(listed[0]["ping"], 42)
+
+    async def test_server_list_hides_ping_for_raw_only_servers(self) -> None:
+        await IpInfo.create(ip="9.9.9.9", country="中国", region="山东", ping=12, is_resolved=True)
+        server_cache.update_raw_response({
+            "servers": [
+                {
+                    "serverId": "raw-only-id",
+                    "ip": "9.9.9.9",
+                    "port": 37015,
+                    "name": "[CN(Raw)] Only",
+                    "region": "CN",
+                    "playerCount": 2,
+                    "maxPlayers": 20,
+                    "ping": 7,
+                }
+            ]
+        })
+
+        listed = await server_service.list_servers(cn_only=True, is_admin=True)
+
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["name"], "[CN(Raw)] Only")
+        self.assertEqual(listed[0]["ping"], 0)
+
+    async def test_server_list_sorts_by_players_then_player_count_then_ping(self) -> None:
+        def players(prefix: str, count: int) -> list[dict]:
+            return [
+                {
+                    "uid": f"10000000010{index}",
+                    "nucleusId": 1000000001000 + index,
+                    "playerName": f"{prefix}-{index}",
+                }
+                for index in range(count)
+            ]
+
+        await IpInfo.create(ip="1.1.1.1", country="中国", region="山东", ping=80, is_resolved=True)
+        await IpInfo.create(ip="2.2.2.2", country="中国", region="山东", ping=20, is_resolved=True)
+        await IpInfo.create(ip="3.3.3.3", country="中国", region="山东", ping=1, is_resolved=True)
+        await IpInfo.create(ip="6.6.6.6", country="中国", region="山东", ping=5, is_resolved=True)
+        server_cache.update_access_report(
+            "1.1.1.1:37015",
+            {
+                "serverIp": "1.1.1.1",
+                "serverPort": 37015,
+                "serverName": "[CN(Sort)] High",
+                "players": players("high", 5),
+                "maxPlayers": 20,
+            },
+        )
+        server_cache.update_access_report(
+            "2.2.2.2:37015",
+            {
+                "serverIp": "2.2.2.2",
+                "serverPort": 37015,
+                "serverName": "[CN(Sort)] Low",
+                "players": players("low", 5),
+                "maxPlayers": 20,
+            },
+        )
+        server_cache.update_access_report(
+            "6.6.6.6:37015",
+            {
+                "serverIp": "6.6.6.6",
+                "serverPort": 37015,
+                "serverName": "[CN(Sort)] Reported Empty",
+                "players": [],
+                "maxPlayers": 20,
+            },
+        )
+        server_cache.update_raw_response({
+            "servers": [
+                {
+                    "serverId": "empty-id",
+                    "ip": "4.4.4.4",
+                    "port": 37015,
+                    "name": "[CN(Sort)] Empty",
+                    "region": "CN",
+                    "playerCount": 0,
+                    "maxPlayers": 20,
+                },
+                {
+                    "serverId": "raw-equal-id",
+                    "ip": "3.3.3.3",
+                    "port": 37015,
+                    "name": "[CN(Sort)] Raw Equal",
+                    "region": "CN",
+                    "playerCount": 5,
+                    "maxPlayers": 20,
+                    "ping": 1,
+                },
+                {
+                    "serverId": "high-id",
+                    "ip": "1.1.1.1",
+                    "port": 37015,
+                    "name": "[CN(Sort)] High",
+                    "region": "CN",
+                    "playerCount": 0,
+                    "maxPlayers": 20,
+                },
+                {
+                    "serverId": "three-id",
+                    "ip": "5.5.5.5",
+                    "port": 37015,
+                    "name": "[CN(Sort)] Three",
+                    "region": "CN",
+                    "playerCount": 3,
+                    "maxPlayers": 20,
+                },
+                {
+                    "serverId": "reported-empty-id",
+                    "ip": "6.6.6.6",
+                    "port": 37015,
+                    "name": "[CN(Sort)] Reported Empty",
+                    "region": "CN",
+                    "playerCount": 0,
+                    "maxPlayers": 20,
+                },
+                {
+                    "serverId": "low-id",
+                    "ip": "2.2.2.2",
+                    "port": 37015,
+                    "name": "[CN(Sort)] Low",
+                    "region": "CN",
+                    "playerCount": 0,
+                    "maxPlayers": 20,
+                },
+            ]
+        })
+
+        listed = await server_service.list_servers(cn_only=True, is_admin=True)
+
+        self.assertEqual(
+            [server["name"] for server in listed],
+            [
+                "[CN(Sort)] Low",
+                "[CN(Sort)] High",
+                "[CN(Sort)] Raw Equal",
+                "[CN(Sort)] Three",
+                "[CN(Sort)] Reported Empty",
+                "[CN(Sort)] Empty",
+            ],
+        )
+        self.assertEqual({server["name"]: server["ping"] for server in listed}["[CN(Sort)] Raw Equal"], 0)
+
+    async def test_fetch_server_task_refreshes_reported_server_pings(self) -> None:
+        server_cache.update_access_report(
+            "1.2.3.4:37015",
+            {
+                "serverIp": "1.2.3.4",
+                "serverPort": 37015,
+                "serverName": "[CN(Ping)] Reported",
+                "players": [],
+            },
+        )
+        original_ping = fetch_servers.get_local_ping
+
+        async def fake_ping(host: str) -> int:
+            self.assertEqual(host, "1.2.3.4")
+            return 33
+
+        fetch_servers.get_local_ping = fake_ping
+        try:
+            refreshed = await fetch_servers._refresh_reported_server_pings()
+        finally:
+            fetch_servers.get_local_ping = original_ping
+
+        info = await IpInfo.get(ip="1.2.3.4")
+        self.assertEqual(refreshed, 1)
+        self.assertEqual(info.ping, 33)
 
     async def test_online_report_accepts_player_without_ip(self) -> None:
         result = await access_service.process_online_players_report(
