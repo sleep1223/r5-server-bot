@@ -1,4 +1,16 @@
 {
   "python.analysis.extraPaths": ["packages/shared_lib/src"],
-  "python.venv.switcher.customProvider": "bash -c 'unset VIRTUAL_ENV && uv run --no-sync which python'"
+  "python.venv.switcher.customProvider": "bash -c 'unset VIRTUAL_ENV && uv run --no-sync which python'",
+  "github.copilot.chat.localeOverride": "zh-CN",
+  "github.copilot.chat.commitMessageGeneration.instructions": [
+    {
+      "text": "使用中文生成 Git 提交信息。"
+    },
+    {
+      "text": "使用 GitHub 风格：首行用简洁、明确的摘要说明变更，必要时在正文中用项目符号补充关键改动。"
+    },
+    {
+      "text": "优先使用 Conventional Commits 格式，例如 feat:、fix:、refactor:、docs:、test:、chore:，摘要保持中文且避免过度展开。"
+    }
+  ]
 }
