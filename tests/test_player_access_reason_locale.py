@@ -1385,7 +1385,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second_stats["ban_rules_created"], 0)
         self.assertEqual(second_stats["kick_notices_created"], 0)
 
-    async def test_create_access_notice_reuses_pending_kick_notice(self) -> None:
+    async def test_create_access_notice_overwrites_pending_kick_notice(self) -> None:
         player = await Player.create(
             nucleus_id=1000000000105,
             nucleus_hash=generate_hash("1000000000105"),
@@ -1436,9 +1436,10 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(first_notice.id, second_notice.id)
         self.assertEqual(await PlayerAccessNotice.filter(uid=str(player.nucleus_id), requires_ack=True).count(), 1)
-        self.assertEqual(second_notice.reason, "RULES")
-        self.assertEqual(getattr(second_notice, "operation_id", None), first_operation.id)
-        self.assertEqual(second_notice.message_context["remark"], "first")
+        self.assertEqual(second_notice.reason, "NO_COVER")
+        self.assertEqual(getattr(second_notice, "operation_id", None), second_operation.id)
+        self.assertEqual(second_notice.message, "second")
+        self.assertEqual(second_notice.message_context["remark"], "second")
         self.assertTrue(second_notice.message_context["pending_notice_reused"])
 
 

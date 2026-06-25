@@ -1720,11 +1720,15 @@ async def create_access_notice(
             .first()
         )
         if existing_notice:
-            next_context = dict(existing_notice.message_context or {})
+            next_context = dict(message_context or {})
             next_context["pending_notice_reused"] = True
             updates = {
                 "player_id": player.id,
+                "reason": (reason or "").strip() or None,
+                "message": (message or "").strip() or None,
                 "message_context": next_context,
+                "expires_at": expires_at,
+                "operation_id": operation.id if operation else getattr(existing_notice, "operation_id", None),
                 "updated_at": _now(),
             }
             await PlayerAccessNotice.filter(id=existing_notice.id).update(**updates)

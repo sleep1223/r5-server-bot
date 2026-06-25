@@ -3,7 +3,7 @@ import unittest
 from fastapi_service.api.v1 import admin as admin_api
 from fastapi_service.core.errors import ErrorCode
 from fastapi_service.services import admin_management_service, admin_service
-from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessOperation
+from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule
 from tortoise import Tortoise
 
 TORTOISE_TEST_CONFIG = {
@@ -268,9 +268,54 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await PlayerAccessNotice.filter(player=player, action="kick", requires_ack=True).count(), 1)
         self.assertEqual(second_data["operation"]["id"], first_data["operation"]["id"])
         self.assertEqual(second_data["notice"]["id"], first_data["notice"]["id"])
+        self.assertEqual(second_data["operation"]["reason"], "NO_COVER")
+        self.assertEqual(second_data["notice"]["reason"], "NO_COVER")
         self.assertTrue(second_data["pending_notice_reused"])
         await player.refresh_from_db()
         self.assertEqual(player.kick_count, 1)
+
+    async def test_pending_ban_action_is_overwritten_and_syncs_ip_without_duplicate_operation(self) -> None:
+        player = await Player.create(nucleus_id=1009800111088, name="Pending_Ban_Player", ip="203.0.113.88")
+
+        first_data, first_err = await admin_management_service.apply_access_action(
+            action="ban",
+            target_type="player",
+            target_value=player.nucleus_id,
+            reason="RULES",
+            operator_name="unit-test",
+        )
+        second_data, second_err = await admin_management_service.apply_access_action(
+            action="ban",
+            target_type="player",
+            target_value=player.nucleus_id,
+            reason="CHEAT",
+            operator_name="unit-test",
+        )
+
+        self.assertIsNone(first_err)
+        self.assertIsNone(second_err)
+        assert first_data is not None
+        assert second_data is not None
+        self.assertEqual(await PlayerAccessOperation.filter(player=player, action="ban").count(), 1)
+        self.assertEqual(await BanRecord.filter(player=player).count(), 1)
+        self.assertEqual(second_data["operation"]["id"], first_data["operation"]["id"])
+        self.assertEqual(second_data["operation"]["reason"], "CHEAT")
+        self.assertTrue(second_data["operation_reused"])
+        self.assertTrue(second_data["sync_player_ip"])
+        self.assertTrue(second_data["ip_synced"])
+
+        uid_rule = await PlayerAccessRule.get(rule_type="uid", value=str(player.nucleus_id), source_action="ban")
+        ip_rule = await PlayerAccessRule.get(rule_type="ip", source_action="ban")
+        ban_record = await BanRecord.get(player=player)
+        self.assertEqual(uid_rule.reason, "CHEAT")
+        self.assertEqual(ip_rule.value, "203.0.113.88")
+        self.assertEqual(ip_rule.reason, "CHEAT")
+        self.assertEqual(getattr(ip_rule, "source_operation_id", None), second_data["operation"]["id"])
+        self.assertEqual(ban_record.reason, "CHEAT")
+
+        await player.refresh_from_db()
+        self.assertEqual(player.ban_count, 1)
+        self.assertEqual(player.status, "banned")
 
     async def test_bans_suppresses_duplicate_kick_rows_when_pending_notice_exists(self) -> None:
         player = await Player.create(nucleus_id=1009800111078, name="Duplicate_Kick_Player", kick_count=2)

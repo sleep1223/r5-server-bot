@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, UserBinding
-from tortoise.expressions import Q
+from tortoise.expressions import F, Q
 
 from fastapi_service.core.constants import ALLOWED_REASONS
 from fastapi_service.core.errors import ErrorCode
@@ -110,6 +110,7 @@ def _operation_result_payload(result: dict[str, Any]) -> dict[str, Any]:
         "ip_sync_reason",
         "expires_at",
         "linked_ip_released_count",
+        "operation_reused",
     ):
         if key in result:
             payload[key] = _json_safe_value(result[key])
@@ -134,6 +135,121 @@ def _player_current_ip(player: Player, online_location: dict | None = None) -> s
     return str(player.ip or "").strip() or None
 
 
+async def _update_access_operation_metadata(
+    operation: PlayerAccessOperation,
+    *,
+    target_value: object,
+    normalized_target: object | None,
+    server_scope: str,
+    server_id: str | None,
+    reason: str | None,
+    remark: str | None,
+    operator_name: str | None,
+) -> PlayerAccessOperation:
+    patch = {
+        "target_value": str(target_value),
+        "normalized_target": str(normalized_target).strip() if normalized_target is not None else None,
+        "server_scope": server_scope,
+        "server_id": server_id,
+        "reason": (reason or "").strip() or None,
+        "remark": (remark or "").strip() or None,
+        "operator": (operator_name or "").strip() or None,
+    }
+    await PlayerAccessOperation.filter(id=operation.id).update(**patch)
+    for key, value in patch.items():
+        setattr(operation, key, value)
+    return operation
+
+
+async def _active_uid_action_rule(
+    *,
+    player: Player,
+    server_scope: str,
+    server_id: str | None,
+    source_action: str,
+) -> PlayerAccessRule | None:
+    if not player.nucleus_id:
+        return None
+
+    return await (
+        PlayerAccessRule
+        .filter(
+            rule_type="uid",
+            action="deny",
+            value=str(player.nucleus_id),
+            server_scope=server_scope,
+            server_id=server_id,
+            source_action=source_action,
+            enabled=True,
+        )
+        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=datetime.now(CN_TZ)))
+        .order_by("-updated_at", "-id")
+        .first()
+    )
+
+
+async def _operation_from_rule(rule: PlayerAccessRule | None, action: str) -> PlayerAccessOperation | None:
+    operation_id = getattr(rule, "source_operation_id", None) if rule else None
+    if not operation_id:
+        return None
+
+    operation = await PlayerAccessOperation.get_or_none(id=operation_id)
+    if operation and operation.action == action:
+        return operation
+    return None
+
+
+async def _record_global_ban_state(
+    player: Player,
+    *,
+    reason: str,
+    operator_name: str,
+    overwrite_existing: bool,
+) -> None:
+    latest_record = await BanRecord.filter(player=player).order_by("-created_at", "-id").first()
+    if overwrite_existing and latest_record:
+        await BanRecord.filter(id=latest_record.id).update(reason=reason, operator=operator_name)
+    else:
+        await BanRecord.create(player=player, reason=reason, operator=operator_name)
+        await Player.filter(id=player.id).update(ban_count=F("ban_count") + 1, status="banned")
+        player.ban_count = int(player.ban_count or 0) + 1  # type: ignore[assignment]
+        player.status = "banned"  # type: ignore[assignment]
+        return
+
+    await Player.filter(id=player.id).update(status="banned")
+    player.status = "banned"  # type: ignore[assignment]
+
+
+async def _ack_pending_kick_notices_for_ban(
+    *,
+    player: Player,
+    server_scope: str,
+    server_id: str | None,
+) -> list[int]:
+    uid = player_access_service.normalize_uid(player.nucleus_id)
+    if not uid:
+        return []
+
+    notices = await (
+        PlayerAccessNotice
+        .filter(
+            uid=uid,
+            action="kick",
+            server_scope=server_scope,
+            server_id=server_id,
+            requires_ack=True,
+            acknowledged_at__isnull=True,
+        )
+        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=datetime.now(CN_TZ)))
+        .order_by("-created_at", "-id")
+    )
+    acknowledged_ids: list[int] = []
+    for notice in notices:
+        await player_access_service.acknowledge_access_notice(notice)
+        acknowledged_ids.append(notice.id)
+    return acknowledged_ids
+
+
 async def _create_synced_ip_rule(
     *,
     player: Player,
@@ -151,23 +267,46 @@ async def _create_synced_ip_rule(
     if not ip:
         return None, "player_ip_missing"
 
+    rule_id = f"{action}:linked_ip:{operation.id}"
     try:
-        rule = await player_access_service.create_access_rule(
-            rule_type="ip",
-            action="deny",
-            value=ip,
-            server_scope=server_scope,
-            server_id=server_id,
-            reason=reason,
-            remark=remark,
-            rule_id=f"{action}:linked_ip:{operation.id}",
-            operator=operator_name,
-            source_action=action,
-            source_operation=operation,
-            expires_at=expires_at,
-            priority=25,
-            player=player,
-        )
+        rule = await PlayerAccessRule.get_or_none(rule_id=rule_id)
+        if rule:
+            rule = await player_access_service.update_access_rule(
+                rule,
+                rule_type="ip",
+                action="deny",
+                value=ip,
+                server_scope=server_scope,
+                server_id=server_id,
+                reason=reason,
+                remark=remark,
+                rule_id=rule_id,
+                operator=operator_name,
+                source_action=action,
+                expires_at=expires_at,
+                enabled=True,
+                priority=25,
+            )
+            await PlayerAccessRule.filter(id=rule.id).update(source_operation_id=operation.id, player_id=player.id)
+            rule.source_operation_id = operation.id  # type: ignore[attr-defined]
+            rule.player_id = player.id  # type: ignore[attr-defined]
+        else:
+            rule = await player_access_service.create_access_rule(
+                rule_type="ip",
+                action="deny",
+                value=ip,
+                server_scope=server_scope,
+                server_id=server_id,
+                reason=reason,
+                remark=remark,
+                rule_id=rule_id,
+                operator=operator_name,
+                source_action=action,
+                source_operation=operation,
+                expires_at=expires_at,
+                priority=25,
+                player=player,
+            )
     except ValueError as exc:
         return None, str(exc)
 
@@ -262,6 +401,53 @@ async def _pending_kick_result(
         "pending_notice_reused": True,
         "expires_at": notice.expires_at,
     }
+
+
+async def _overwrite_pending_kick_notice(
+    *,
+    player: Player,
+    notice: PlayerAccessNotice,
+    reason: str,
+    operator_name: str,
+    server_scope: str,
+    server_id: str | None,
+    remark: str | None,
+    expires_at: datetime | None,
+    online_location: dict | None,
+) -> PlayerAccessOperation | None:
+    context = {
+        "remark": remark,
+        "server_scope": server_scope,
+        "server_id": server_id,
+        "player_ip": _player_current_ip(player, online_location),
+        "pending_notice_reused": True,
+    }
+    updates = {
+        "player_id": player.id,
+        "reason": reason,
+        "message": None,
+        "message_context": context,
+        "expires_at": expires_at,
+        "updated_at": datetime.now(CN_TZ),
+    }
+    await PlayerAccessNotice.filter(id=notice.id).update(**updates)
+    for key, value in updates.items():
+        setattr(notice, key, value)
+
+    operation_id = getattr(notice, "operation_id", None)
+    operation = await PlayerAccessOperation.get_or_none(id=operation_id) if operation_id else None
+    if operation:
+        operation = await _update_access_operation_metadata(
+            operation,
+            target_value=player.nucleus_id or player.name,
+            normalized_target=player.nucleus_id,
+            server_scope=server_scope,
+            server_id=server_id,
+            reason=reason,
+            remark=remark,
+            operator_name=operator_name,
+        )
+    return operation
 
 
 async def _qq_player_ids(query: str) -> list[int]:
@@ -436,6 +622,7 @@ async def ban_player(
     if reason not in ALLOWED_REASONS:
         return None, error(ErrorCode.INVALID_REASON, f"无效原因。允许值: {ALLOWED_REASONS}")
 
+    sync_player_ip = True
     player, err = await _player_or_error(identifier)
     if err or not player:
         return None, err
@@ -450,22 +637,47 @@ async def ban_player(
     )
     online_loc, _ = player_service.get_online_location(player)
     expires_at = _expires_at(duration_seconds)
-    operation = await player_access_service.create_access_operation(
-        action="ban",
-        target_type="player",
-        target_value=identifier,
-        normalized_target=player.nucleus_id,
+    existing_uid_rule = await _active_uid_action_rule(
+        player=player,
         server_scope=scope,
         server_id=access_server_id,
-        reason=reason,
-        remark=remark,
-        operator=operator_name,
-        player=player,
+        source_action="ban",
     )
+    operation = await _operation_from_rule(existing_uid_rule, "ban")
+    operation_reused = operation is not None
+    if operation:
+        operation = await _update_access_operation_metadata(
+            operation,
+            target_value=identifier,
+            normalized_target=player.nucleus_id,
+            server_scope=scope,
+            server_id=access_server_id,
+            reason=reason,
+            remark=remark,
+            operator_name=operator_name,
+        )
+    else:
+        operation = await player_access_service.create_access_operation(
+            action="ban",
+            target_type="player",
+            target_value=identifier,
+            normalized_target=player.nucleus_id,
+            server_scope=scope,
+            server_id=access_server_id,
+            reason=reason,
+            remark=remark,
+            operator=operator_name,
+            player=player,
+        )
 
     uid_rule = None
     if scope == "global":
-        await admin_service.record_ban(player, reason, operator_name)
+        await _record_global_ban_state(
+            player,
+            reason=reason,
+            operator_name=operator_name,
+            overwrite_existing=existing_uid_rule is not None or player.status == "banned",
+        )
         uid_rule = await player_access_service.ensure_uid_blacklist_rule(
             player,
             reason,
@@ -475,7 +687,6 @@ async def ban_player(
             source_operation=operation,
             expires_at=expires_at,
         )
-        player.status = "banned"  # type: ignore[assignment]
     else:
         uid_rule = await player_access_service.ensure_uid_blacklist_rule(
             player,
@@ -488,21 +699,26 @@ async def ban_player(
             expires_at=expires_at,
         )
 
+    superseded_notice_ids = await _ack_pending_kick_notices_for_ban(
+        player=player,
+        server_scope=scope,
+        server_id=access_server_id,
+    )
+
     synced_ip_rule = None
     ip_sync_reason = None
-    if sync_player_ip:
-        synced_ip_rule, ip_sync_reason = await _create_synced_ip_rule(
-            player=player,
-            operation=operation,
-            action="ban",
-            reason=reason,
-            operator_name=operator_name,
-            server_scope=scope,
-            server_id=access_server_id,
-            remark=remark,
-            online_location=online_loc,
-            expires_at=expires_at,
-        )
+    synced_ip_rule, ip_sync_reason = await _create_synced_ip_rule(
+        player=player,
+        operation=operation,
+        action="ban",
+        reason=reason,
+        operator_name=operator_name,
+        server_scope=scope,
+        server_id=access_server_id,
+        remark=remark,
+        online_location=online_loc,
+        expires_at=expires_at,
+    )
 
     linked_rule_ids = []
     if uid_rule:
@@ -522,6 +738,8 @@ async def ban_player(
         "ip_sync_reason": ip_sync_reason,
         "synced_ip_rule": synced_ip_rule,
         "expires_at": expires_at,
+        "operation_reused": operation_reused,
+        "superseded_notice_ids": superseded_notice_ids,
     }
     operation = await player_access_service.update_access_operation_result(
         operation,
@@ -633,13 +851,38 @@ async def kick_player(
         server_id=access_server_id,
     )
     if existing_notice:
-        return await _pending_kick_result(
+        online_loc, _ = player_service.get_online_location(player)
+        expires_at = _expires_at(duration_seconds)
+        operation = await _overwrite_pending_kick_notice(
+            player=player,
+            notice=existing_notice,
+            reason=reason,
+            operator_name=operator_name,
+            server_scope=scope,
+            server_id=access_server_id,
+            remark=remark,
+            expires_at=expires_at,
+            online_location=online_loc,
+        )
+        result = await _pending_kick_result(
             player=player,
             notice=existing_notice,
             server_scope=scope,
             server_id=access_server_id,
             remark=remark,
-        ), None
+        )
+        if operation:
+            linked_rule_ids = [str(item) for item in (operation.linked_rule_ids or []) if item]
+            notice_link = f"kick_notice:{existing_notice.id}"
+            if notice_link not in linked_rule_ids:
+                linked_rule_ids.append(notice_link)
+            operation = await player_access_service.update_access_operation_result(
+                operation,
+                result=_operation_result_payload(result),
+                linked_rule_ids=linked_rule_ids,
+            )
+            result["operation"] = player_access_service.serialize_access_operation(operation)
+        return result, None
 
     online_loc, _ = player_service.get_online_location(player)
     expires_at = _expires_at(duration_seconds)
