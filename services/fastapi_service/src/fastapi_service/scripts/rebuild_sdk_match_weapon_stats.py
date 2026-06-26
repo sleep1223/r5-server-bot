@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from loguru import logger
 from shared_lib.database import close_db, init_db
-from shared_lib.models import Match, PlayerKilled, PlayerMatchWeaponStat, SdkMatchEndReport, Server
+from shared_lib.models import Match, PlayerMatchWeaponStat, SdkMatchEndReport, Server
 from tortoise.transactions import in_transaction
 
 from fastapi_service.services import match_service
@@ -28,7 +28,6 @@ class RebuildSummary:
     new_weapon_rows: int = 0
     kill_events_seen: int = 0
     kill_events_saved: int = 0
-    legacy_player_killed_deleted: int = 0
 
 
 def _parse_day(value: str) -> date:
@@ -91,7 +90,6 @@ async def _rebuild_one_report(
     report: SdkMatchEndReport,
     *,
     apply: bool,
-    delete_legacy_player_killed: bool,
 ) -> tuple[bool, int, int, int, int, date | None]:
     payload = _payload_dict(report)
     if payload is None:
@@ -120,14 +118,11 @@ async def _rebuild_one_report(
             kill_events=kill_events,
             player_map=player_map,
         )
-        deleted_legacy = 0
-        if delete_legacy_player_killed:
-            deleted_legacy = await PlayerKilled.filter(match=match, category=_SDK_MATCH_END_CATEGORY).delete()
 
     logger.info(
         f"已重建 sdk_match_end_report id={report.id}: "
         f"match_id={match.id}, old_weapon_rows={old_rows}, new_weapon_rows={new_rows}, "
-        f"kill_events={saved_kill_events}/{len(kill_events)}, legacy_player_killed_deleted={deleted_legacy}"
+        f"kill_events={saved_kill_events}/{len(kill_events)}"
     )
     return True, old_rows, new_rows, len(kill_events), saved_kill_events, _to_shanghai_date(report.ended_at)
 
@@ -141,7 +136,6 @@ async def rebuild_sdk_match_weapon_stats(
     server_id: int | None = None,
     match_id: int | None = None,
     batch_size: int = 100,
-    delete_legacy_player_killed: bool = False,
     refresh_daily_stats: bool = False,
     stop_on_error: bool = False,
 ) -> RebuildSummary:
@@ -174,7 +168,6 @@ async def rebuild_sdk_match_weapon_stats(
                 did_rebuild, old_rows, new_rows, kill_events, saved_kill_events, affected_day = await _rebuild_one_report(
                     report,
                     apply=apply,
-                    delete_legacy_player_killed=delete_legacy_player_killed,
                 )
             except Exception:
                 summary.reports_failed += 1
@@ -214,7 +207,6 @@ async def _run_from_args(args: argparse.Namespace) -> RebuildSummary:
             server_id=args.server_id,
             match_id=args.match_id,
             batch_size=args.batch_size,
-            delete_legacy_player_killed=args.delete_legacy_player_killed,
             refresh_daily_stats=args.refresh_daily_stats,
             stop_on_error=args.stop_on_error,
         )
@@ -233,7 +225,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--server-id", type=int, help="Only rebuild reports for this Server.id.")
     parser.add_argument("--match-id", type=int, help="Only rebuild reports for this Match.id.")
     parser.add_argument("--batch-size", type=int, default=100, help="Reports to scan per batch.")
-    parser.add_argument("--delete-legacy-player-killed", action="store_true", help="Delete legacy player_killed rows with category=sdk_match_end for rebuilt matches.")
     parser.add_argument("--refresh-daily-stats", action="store_true", help="Refresh player_kill_daily_weapon_opponent_stats for affected report dates after --apply.")
     parser.add_argument("--stop-on-error", action="store_true", help="Abort on the first failed report.")
     return parser

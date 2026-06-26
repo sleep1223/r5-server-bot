@@ -120,25 +120,6 @@ class PlayerDisconnected(BaseEvent):
         table = "player_disconnected"
 
 
-class PlayerKilled(BaseEvent):
-    """击杀事件 —— PG 层按 `created_at` 月度分区（pg_partman v5），复合主键 `(id, created_at)`。
-
-    新增查询务必带 `created_at` 范围过滤，否则扫描所有分区。按 `match_id` / `server_id`
-    过滤的聚合也建议从关联对象的时间字段推导出 `created_at` 边界再加上。
-    """
-
-    attacker = fields.ForeignKeyField("models.Player", related_name="kills", null=True)
-    victim = fields.ForeignKeyField("models.Player", related_name="deaths", null=True)
-    awarded_to = fields.ForeignKeyField("models.Player", related_name="awarded_kills", null=True)
-    weapon = fields.CharField(max_length=100)
-    server = fields.ForeignKeyField("models.Server", related_name="kills", null=True)
-    match = fields.ForeignKeyField("models.Match", related_name="kills", null=True)
-
-    class Meta:
-        table = "player_killed"
-        # created_at 索引和复合 PK 由 PG 分区建表 SQL 创建，不再由 Tortoise generate_schemas 管理
-
-
 class PlayerMatchWeaponStat(models.Model):
     id = fields.IntField(pk=True)
     player = fields.ForeignKeyField("models.Player", related_name="match_weapon_stats")
@@ -216,7 +197,6 @@ class Server(models.Model):
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)
 
-    kills: fields.ReverseRelation["PlayerKilled"]
     matches: fields.ReverseRelation["Match"]
 
     class Meta:
@@ -251,7 +231,6 @@ class Match(models.Model):
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)
 
-    kills: fields.ReverseRelation["PlayerKilled"]
     setup_events: fields.ReverseRelation["MatchSetup"]
 
     class Meta:

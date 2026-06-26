@@ -1,13 +1,10 @@
-from shared_lib.models import Player, PlayerKilled
-from tortoise.expressions import F
-from tortoise.functions import Count
+from tortoise import connections
+
+from shared_lib.models import Player
 
 
 async def get_kd_leaderboard(player_name: str):
-    """
-    Query and print the KD ratio leaderboard for a specific player against other players.
-    """
-    # 1. Find the target player
+    """Print the KD ratio leaderboard for one player from daily stats."""
     player = await Player.filter(name=player_name).first()
     if not player:
         print(f"Error: Player '{player_name}' not found in the database.")
@@ -16,65 +13,36 @@ async def get_kd_leaderboard(player_name: str):
     print(f"Generating KD Leaderboard for: {player.name}")
     print("=" * 60)
 
-    # 2. Get Kills: Where target player is the attacker
-    # Group by victim
-    kills_query = (
-        PlayerKilled
-        .filter(attacker=player)
-        .exclude(victim_id=player.id)
-        .annotate(count=Count("id"))
-        .group_by("victim_id")  # Group by ID to be safe, though FK field works
-        .values("victim__name", "count")
+    rows = await connections.get("default").execute_query_dict(
+        """
+        SELECT
+            s.opponent_id,
+            p.name AS opponent_name,
+            SUM(s.kills)::int AS kills,
+            SUM(s.deaths)::int AS deaths
+        FROM player_kill_daily_weapon_opponent_stats s
+        LEFT JOIN players p ON p.id = s.opponent_id
+        WHERE s.player_id = $1
+          AND s.opponent_id IS NOT NULL
+        GROUP BY s.opponent_id, p.name
+        HAVING SUM(s.kills) > 0 OR SUM(s.deaths) > 0
+        """,
+        [player.id],
     )
-    kills_data = await kills_query
 
-    # 3. Get Deaths: Where target player is the victim
-    # Group by attacker
-    deaths_query = PlayerKilled.filter(victim=player).exclude(attacker_id=player.id).annotate(count=Count("id")).group_by("attacker_id").values("attacker__name", "count")
-    deaths_data = await deaths_query
-
-    # 4. Aggregate data
-    stats = {}
-
-    for k in kills_data:
-        name = k["victim__name"]
-        if not name:
-            name = "Unknown"
-
-        if name not in stats:
-            stats[name] = {"kills": 0, "deaths": 0}
-        stats[name]["kills"] = k["count"]
-
-    for d in deaths_data:
-        name = d["attacker__name"]
-        if not name:
-            name = "Unknown"
-
-        if name not in stats:
-            stats[name] = {"kills": 0, "deaths": 0}
-        stats[name]["deaths"] = d["count"]
-
-    # 5. Calculate KD and Format
     leaderboard = []
-    for opponent, data in stats.items():
-        k = data["kills"]
-        d = data["deaths"]
+    for row in rows:
+        kills = row["kills"] or 0
+        deaths = row["deaths"] or 0
+        leaderboard.append({
+            "opponent": row["opponent_name"] or f"Unknown ({row['opponent_id']})",
+            "kills": kills,
+            "deaths": deaths,
+            "kd": kills / max(1, deaths),
+        })
 
-        # Standard KD calculation: K / (D if D > 0 else 1)
-        # This treats 0 deaths as 1 for the ratio, preventing division by zero
-        # but maintaining a readable scale.
-        kd_ratio = k / max(1, d)
-
-        leaderboard.append({"opponent": opponent, "kills": k, "deaths": d, "kd": kd_ratio})
-
-    # 6. Sort
-    # Sort by:
-    # 1. KD Ratio (descending)
-    # 2. Deaths (ascending) - Fewer deaths is better for same KD
-    # 3. Kills (descending) - More kills is better if KD and Deaths are same (unlikely if KD same and Deaths same, Kills must be same)
     leaderboard.sort(key=lambda x: (x["kd"], -x["deaths"], x["kills"]), reverse=True)
 
-    # 7. Output
     header = f"{'Opponent':<25} | {'Kills':<6} | {'Deaths':<6} | {'KD Ratio':<8}"
     print(header)
     print("-" * len(header))
@@ -87,35 +55,33 @@ async def get_kd_leaderboard(player_name: str):
 
 
 async def get_global_kill_leaderboard(limit: int = 20):
-    """
-    Query and print the global leaderboard of players with the most kills.
-    """
+    """Print the global leaderboard of players with the most kills from daily stats."""
     print(f"Generating Global Top {limit} Kill Leaderboard")
     print("=" * 60)
 
-    # Group by attacker and count kills
-    # We filter out null attackers just in case
-    # Use attacker_id to check for null FK
-    leaderboard_query = (
-        PlayerKilled.filter(attacker_id__isnull=False).exclude(attacker_id=F("victim_id")).annotate(total_kills=Count("id")).group_by("attacker_id").values("attacker__name", "total_kills")
+    rows = await connections.get("default").execute_query_dict(
+        """
+        SELECT
+            s.player_id,
+            p.name,
+            SUM(s.kills)::int AS total_kills
+        FROM player_kill_daily_weapon_opponent_stats s
+        LEFT JOIN players p ON p.id = s.player_id
+        GROUP BY s.player_id, p.name
+        HAVING SUM(s.kills) > 0
+        ORDER BY total_kills DESC
+        LIMIT $1
+        """,
+        [limit],
     )
-
-    results = await leaderboard_query
-
-    # Sort by total_kills descending
-    results.sort(key=lambda x: x["total_kills"], reverse=True)
-
-    # Take top N
-    top_results = results[:limit]
 
     header = f"{'#':<4} {'Player':<30} | {'Total Kills':<10}"
     print(header)
     print("-" * len(header))
 
-    for rank, entry in enumerate(top_results, 1):
-        name = entry["attacker__name"] or "Unknown"
-        kills = entry["total_kills"]
-        print(f"{rank:<4} {name:<30} | {kills:<10}")
+    for rank, row in enumerate(rows, 1):
+        name = row["name"] or f"Unknown ({row['player_id']})"
+        print(f"{rank:<4} {name:<30} | {row['total_kills']:<10}")
 
-    if not results:
+    if not rows:
         print("No kill data found in the database.")

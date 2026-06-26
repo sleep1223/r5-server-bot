@@ -2,12 +2,10 @@ import asyncio
 
 from loguru import logger
 
-from .close_stale_matches import close_stale_matches_task
 from .fetch_launcher_version import fetch_launcher_version_task
 from .fetch_servers import fetch_server_list_raw_once, fetch_server_list_raw_task
 from .refresh_player_kill_daily_stats import player_kill_daily_stats_refresh_task
 from .resolve_ips import ip_resolution_task
-from .sync_legacy_access import sync_legacy_access_records_once
 
 
 class TaskScheduler:
@@ -22,12 +20,9 @@ class TaskScheduler:
         if initial_server_count is None:
             logger.warning("初始服务器列表拉取失败，将等待周期性拉取任务")
 
-        await sync_legacy_access_records_once()
-
         self._tasks = [
             asyncio.create_task(fetch_server_list_raw_task(delay_first=initial_server_count is not None)),
             asyncio.create_task(ip_resolution_task()),
-            asyncio.create_task(close_stale_matches_task()),
             asyncio.create_task(fetch_launcher_version_task()),
             asyncio.create_task(player_kill_daily_stats_refresh_task()),
         ]

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from fastapi_service.scripts.rebuild_sdk_match_weapon_stats import rebuild_sdk_match_weapon_stats
 from fastapi_service.services import match_service
 from fastapi_service.tasks import refresh_player_kill_daily_stats
-from shared_lib.models import Match, Player, PlayerKilled, PlayerMatchWeaponStat, SdkMatchEndReport, Server
+from shared_lib.models import Match, Player, PlayerMatchWeaponStat, SdkMatchEndReport
 from tortoise import Tortoise
 
 TORTOISE_TEST_CONFIG = {
@@ -29,7 +29,7 @@ class SdkMatchReportIngestTest(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await Tortoise.close_connections()
 
-    async def test_process_match_end_report_saves_weapon_stats_with_opponent_without_player_killed(self) -> None:
+    async def test_process_match_end_report_saves_weapon_stats_with_opponent(self) -> None:
         ended_at = int(datetime.now(timezone.utc).timestamp())
         report = {
             "serverId": "sdk-test-server",
@@ -99,7 +99,6 @@ class SdkMatchReportIngestTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["kill_events"], 2)
         self.assertEqual(result["weapon_stats"], 2)
         self.assertEqual(await Match.all().count(), 1)
-        self.assertEqual(await PlayerKilled.all().count(), 0)
         self.assertEqual(await PlayerMatchWeaponStat.all().count(), 2)
 
         attacker = await Player.get(nucleus_id=1001)
@@ -124,7 +123,6 @@ class SdkMatchReportIngestTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(second_result["kill_events"], 2)
         self.assertEqual(second_result["weapon_stats"], 2)
-        self.assertEqual(await PlayerKilled.all().count(), 0)
         self.assertEqual(await PlayerMatchWeaponStat.all().count(), 2)
 
         recent_matches = await match_service.get_recent_matches(limit=5, min_top_kills=1)
@@ -175,7 +173,7 @@ class SdkMatchReportIngestTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await PlayerMatchWeaponStat.filter(weapon="stale_weapon").count(), 0)
         self.assertEqual(await PlayerMatchWeaponStat.filter(opponent=victim).count(), 1)
 
-    async def test_process_match_end_report_does_not_infer_player_killed_from_weapon_stats(self) -> None:
+    async def test_process_match_end_report_uses_weapon_stats_without_kill_event_inference(self) -> None:
         ended_at = int(datetime.now(timezone.utc).timestamp())
         report = {
             "serverIp": "127.0.0.12",
@@ -210,60 +208,16 @@ class SdkMatchReportIngestTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["kill_events"], 0)
         self.assertEqual(result["weapon_stats"], 1)
-        self.assertEqual(await PlayerKilled.all().count(), 0)
         self.assertEqual(await PlayerMatchWeaponStat.all().count(), 1)
-
-    async def test_match_queries_count_legacy_player_killed_with_empty_category(self) -> None:
-        now = datetime.now(timezone.utc)
-        server = await Server.create(host="127.0.0.13", port=37015, name="legacy server")
-        match = await Match.create(
-            full_match_id="legacy-match",
-            server=server,
-            map_name="mp_rr_arena_phase_runner",
-            playlist_name="fs_dm",
-            playlist_desc="fs_dm",
-            started_at=now,
-            ended_at=now,
-            status="completed",
-        )
-        attacker = await Player.create(nucleus_id=3001, name="legacy attacker", input_device="controller")
-        victim = await Player.create(nucleus_id=3002, name="legacy victim", input_device="keyboard_mouse")
-        await PlayerKilled.create(
-            timestamp=int(now.timestamp()),
-            category="",
-            attacker=attacker,
-            victim=victim,
-            weapon="mp_weapon_r97",
-            server=server,
-            match=match,
-        )
-
-        recent_matches = await match_service.get_recent_matches(limit=5, min_top_kills=1)
-        self.assertEqual(len(recent_matches), 1)
-        self.assertEqual(recent_matches[0]["top"]["player_id"], attacker.id)
-        self.assertEqual(recent_matches[0]["top"]["kills"], 1)
-
-        attacker_matches = await match_service.get_player_matches(player_id=attacker.id, limit=5)
-        self.assertEqual(attacker_matches[0]["kills"], 1)
-        self.assertEqual(attacker_matches[0]["deaths"], 0)
-
-        victim_matches = await match_service.get_player_matches(player_id=victim.id, limit=5)
-        self.assertEqual(victim_matches[0]["kills"], 0)
-        self.assertEqual(victim_matches[0]["deaths"], 1)
 
     def test_daily_refresh_sql_includes_sdk_weapon_stats_without_opponent(self) -> None:
         self.assertIn("FROM player_match_weapon_stats pmws", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("NULL::int AS opponent_id", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("pmws.opponent_id", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("pmws.input_device", refresh_player_kill_daily_stats._INSERT_SQL)
-        self.assertIn("pk.attacker_id AS player_id", refresh_player_kill_daily_stats._INSERT_SQL)
-        self.assertIn("pk.victim_id AS opponent_id", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("pmws.opponent_id AS player_id", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("pmws.player_id AS opponent_id", refresh_player_kill_daily_stats._INSERT_SQL)
-        self.assertIn("pmws.player_id = pk.attacker_id", refresh_player_kill_daily_stats._INSERT_SQL)
-        self.assertIn("pmws.player_id = pk.victim_id", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("WHERE p.id = pmws.opponent_id", refresh_player_kill_daily_stats._INSERT_SQL)
-        self.assertIn("COALESCE(pk.category, '') <> 'sdk_match_end'", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("NOT EXISTS", refresh_player_kill_daily_stats._INSERT_SQL)
 
     def test_competitive_ranking_sql_includes_sdk_weapon_stats(self) -> None:
@@ -273,7 +227,6 @@ class SdkMatchReportIngestTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FROM player_match_weapon_stats pmws", source)
         self.assertIn("pmws.opponent_id IS NOT NULL", source)
         self.assertIn("pmws.opponent_id IS NULL", source)
-        self.assertIn("COALESCE(pk.category, '') <> 'sdk_match_end'", source)
 
 
 if __name__ == "__main__":

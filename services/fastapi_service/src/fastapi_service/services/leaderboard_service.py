@@ -63,15 +63,18 @@ async def _aggregate_kills_deaths(
     if group_kills_by != "attacker_id" or group_deaths_by != "victim_id":
         return {}
 
-    if extra_filters is not None and set(extra_filters) != {"server_id"}:
+    allowed_filter_keys = {"server_id", "input_device"}
+    if extra_filters is not None and not set(extra_filters).issubset(allowed_filter_keys):
         return {}
 
     start_day, end_day = _stat_date_window(start_time, end_time)
     server_id = extra_filters.get("server_id") if extra_filters else None
+    input_device = extra_filters.get("input_device") if extra_filters else None
     return await _aggregate_kills_deaths_from_daily_stats(
         start_day,
         end_day,
         server_id=server_id,
+        input_device=input_device,
         excluded_server_ids=excluded_server_ids,
     )
 
@@ -170,13 +173,19 @@ async def get_kd_ranking(
     min_deaths: int,
     offset: int,
     page_size: int,
+    input_device: str | None = None,
     server_id: int | None = None,
 ) -> tuple[list[dict], int]:
     start_time, end_time = get_date_range(range_type)
-    extra_filters = {"server_id": server_id} if server_id is not None else None
+    extra_filters: dict[str, object] = {}
+    if server_id is not None:
+        extra_filters["server_id"] = server_id
+    normalized_input_device = _normalize_input_device(input_device)
+    if normalized_input_device is not None:
+        extra_filters["input_device"] = normalized_input_device
     # 显式指定 server_id 时不再应用全局排除，允许单独查看被排除服务器的数据
     excluded_ids = None if server_id is not None else await _get_excluded_server_ids()
-    stats = await _aggregate_kills_deaths(start_time, end_time, extra_filters=extra_filters, excluded_server_ids=excluded_ids)
+    stats = await _aggregate_kills_deaths(start_time, end_time, extra_filters=extra_filters or None, excluded_server_ids=excluded_ids)
 
     if not stats:
         return [], 0
@@ -194,74 +203,7 @@ async def get_kd_ranking(
         results.append({
             "name": p_info["name"] if p_info else f"Unknown ({pid})",
             "nucleus_id": p_info["nucleus_id"] if p_info else None,
-            "input_device": (p_info or {}).get("input_device") or "unknown",
-            "kills": kills,
-            "deaths": deaths,
-            "kd": calc_kd(kills, deaths),
-        })
-
-    _sort_results(results, sort)
-    return _paginate(results, offset=offset, page_size=page_size)
-
-
-async def get_input_device_kill_ranking(
-    *,
-    range_type: str,
-    sort: str,
-    min_kills: int,
-    min_deaths: int,
-    offset: int,
-    page_size: int,
-    input_device: str | None = None,
-    server_id: int | None = None,
-) -> tuple[list[dict], int]:
-    start_time, end_time = get_date_range(range_type)
-    start_day, end_day = _stat_date_window(start_time, end_time)
-    excluded_ids = None if server_id is not None else await _get_excluded_server_ids()
-    where_sql, params = _daily_stats_filter_sql(
-        start_day=start_day,
-        end_day=end_day,
-        server_id=server_id,
-        input_device=input_device,
-        excluded_server_ids=excluded_ids,
-    )
-
-    rows = await connections.get("default").execute_query_dict(
-        f"""
-        SELECT
-            s.input_device,
-            s.player_id,
-            SUM(s.kills)::int AS kills,
-            SUM(s.deaths)::int AS deaths
-        FROM {_DAILY_STATS_TABLE} s
-        {where_sql}
-        GROUP BY s.input_device, s.player_id
-        HAVING SUM(s.kills) > 0 OR SUM(s.deaths) > 0
-        """,
-        params,
-    )
-
-    if not rows:
-        return [], 0
-
-    player_ids = [row["player_id"] for row in rows if row["player_id"] is not None]
-    p_map = await _enrich_with_player_names({}, player_ids)
-
-    results = []
-    for row in rows:
-        pid = row["player_id"]
-        if pid is None:
-            continue
-        kills, deaths = row["kills"] or 0, row["deaths"] or 0
-        if kills < min_kills or deaths < min_deaths:
-            continue
-        p_info = p_map.get(pid)
-        if p_info and p_info.get("status") == "banned":
-            continue
-        results.append({
-            "name": p_info["name"] if p_info else f"Unknown ({pid})",
-            "nucleus_id": p_info["nucleus_id"] if p_info else None,
-            "input_device": row.get("input_device") or "unknown",
+            "input_device": normalized_input_device or (p_info or {}).get("input_device") or "unknown",
             "kills": kills,
             "deaths": deaths,
             "kd": calc_kd(kills, deaths),

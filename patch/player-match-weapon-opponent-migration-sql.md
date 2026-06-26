@@ -1,6 +1,6 @@
 # PlayerMatchWeaponStat 被击杀者迁移 SQL
 
-用于让 SDK 对局结束上报的 `killEvents` 写入 `player_match_weapon_stats.opponent_id`，不再补写 `player_killed`。
+用于让 SDK 对局结束上报的 `killEvents` 写入 `player_match_weapon_stats.opponent_id`。
 
 ```sql
 BEGIN;
@@ -63,11 +63,5 @@ CREATE INDEX IF NOT EXISTS idx_pmws_match_player_opponent
 CREATE INDEX IF NOT EXISTS idx_pmws_opponent_weapon
     ON player_match_weapon_stats (opponent_id, weapon);
 
--- 如果曾短暂部署过把 SDK killEvents 写入 player_killed 的版本，可清理这些残留避免重复统计。
-DELETE FROM player_killed
-WHERE category = 'sdk_match_end';
-
 COMMIT;
 ```
-
-迁移后刷新近期日统计窗口，让 `player_kill_daily_weapon_opponent_stats` 重新从 `player_killed + player_match_weapon_stats` 聚合。

@@ -8,6 +8,7 @@ from tortoise.transactions import in_transaction
 
 _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 _refresh_lock = asyncio.Lock()
+_PMWS_STATS_CUTOFF_DAY = date(2026, 6, 22)
 
 _DELETE_SQL = """
 DELETE FROM player_kill_daily_weapon_opponent_stats
@@ -22,118 +23,6 @@ WITH bounds AS (
         ($2::date::timestamp AT TIME ZONE 'Asia/Shanghai') AS end_ts
 ),
 events AS (
-    SELECT
-        (pk.created_at AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
-        pk.server_id,
-        pk.attacker_id AS player_id,
-        pk.victim_id AS opponent_id,
-        COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
-        COALESCE(
-            (
-                SELECT NULLIF(replace(replace(lower(trim(pmws.input_device)), '-', '_'), ' ', '_'), '')
-                FROM player_match_weapon_stats pmws
-                WHERE pmws.match_id = pk.match_id
-                  AND pmws.player_id = pk.attacker_id
-                  AND COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown') = COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown')
-                ORDER BY CASE WHEN pmws.source = 'sdk_match_end' THEN 0 ELSE 1 END, pmws.id DESC
-                LIMIT 1
-            ),
-            (
-                SELECT NULLIF(replace(replace(lower(trim(p.input_device)), '-', '_'), ' ', '_'), '')
-                FROM players p
-                WHERE p.id = pk.attacker_id
-            ),
-            'unknown'
-        ) AS input_device,
-        1 AS kills,
-        0 AS deaths,
-        0 AS awarded_kills
-    FROM player_killed pk, bounds b
-    WHERE pk.created_at >= b.start_ts
-      AND pk.created_at <  b.end_ts
-      AND pk.server_id IS NOT NULL
-      AND pk.attacker_id IS NOT NULL
-      AND pk.victim_id IS NOT NULL
-      AND pk.attacker_id <> pk.victim_id
-      AND COALESCE(pk.category, '') <> 'sdk_match_end'
-
-    UNION ALL
-
-    SELECT
-        (pk.created_at AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
-        pk.server_id,
-        pk.victim_id AS player_id,
-        pk.attacker_id AS opponent_id,
-        COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
-        COALESCE(
-            (
-                SELECT NULLIF(replace(replace(lower(trim(pmws.input_device)), '-', '_'), ' ', '_'), '')
-                FROM player_match_weapon_stats pmws
-                WHERE pmws.match_id = pk.match_id
-                  AND pmws.player_id = pk.victim_id
-                  AND COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown') = COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown')
-                ORDER BY CASE WHEN pmws.source = 'sdk_match_end' THEN 0 ELSE 1 END, pmws.id DESC
-                LIMIT 1
-            ),
-            (
-                SELECT NULLIF(replace(replace(lower(trim(p.input_device)), '-', '_'), ' ', '_'), '')
-                FROM players p
-                WHERE p.id = pk.victim_id
-            ),
-            'unknown'
-        ) AS input_device,
-        0 AS kills,
-        1 AS deaths,
-        0 AS awarded_kills
-    FROM player_killed pk, bounds b
-    WHERE pk.created_at >= b.start_ts
-      AND pk.created_at <  b.end_ts
-      AND pk.server_id IS NOT NULL
-      AND pk.attacker_id IS NOT NULL
-      AND pk.victim_id IS NOT NULL
-      AND pk.attacker_id <> pk.victim_id
-      AND COALESCE(pk.category, '') <> 'sdk_match_end'
-
-    UNION ALL
-
-    SELECT
-        (pk.created_at AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
-        pk.server_id,
-        pk.awarded_to_id AS player_id,
-        pk.victim_id AS opponent_id,
-        COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
-        COALESCE(
-            (
-                SELECT NULLIF(replace(replace(lower(trim(pmws.input_device)), '-', '_'), ' ', '_'), '')
-                FROM player_match_weapon_stats pmws
-                WHERE pmws.match_id = pk.match_id
-                  AND pmws.player_id = pk.awarded_to_id
-                  AND COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown') = COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown')
-                ORDER BY CASE WHEN pmws.source = 'sdk_match_end' THEN 0 ELSE 1 END, pmws.id DESC
-                LIMIT 1
-            ),
-            (
-                SELECT NULLIF(replace(replace(lower(trim(p.input_device)), '-', '_'), ' ', '_'), '')
-                FROM players p
-                WHERE p.id = pk.awarded_to_id
-            ),
-            'unknown'
-        ) AS input_device,
-        0 AS kills,
-        0 AS deaths,
-        1 AS awarded_kills
-    FROM player_killed pk, bounds b
-    WHERE pk.created_at >= b.start_ts
-      AND pk.created_at <  b.end_ts
-      AND pk.server_id IS NOT NULL
-      AND pk.awarded_to_id IS NOT NULL
-      AND pk.attacker_id IS NOT NULL
-      AND pk.victim_id IS NOT NULL
-      AND pk.attacker_id <> pk.victim_id
-      AND COALESCE(pk.category, '') <> 'sdk_match_end'
-
-    UNION ALL
-
     SELECT
         (COALESCE(m.ended_at, m.started_at, pmws.created_at) AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
         pmws.server_id,
@@ -164,6 +53,17 @@ events AS (
         pmws.player_id AS opponent_id,
         COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown') AS weapon,
         COALESCE(
+            (
+                SELECT NULLIF(replace(replace(lower(trim(pmws_victim.input_device)), '-', '_'), ' ', '_'), '')
+                FROM player_match_weapon_stats pmws_victim
+                WHERE pmws_victim.match_id = pmws.match_id
+                  AND pmws_victim.player_id = pmws.opponent_id
+                ORDER BY
+                    CASE WHEN pmws_victim.source = 'sdk_match_end' THEN 0 ELSE 1 END,
+                    CASE WHEN pmws_victim.opponent_id IS NULL THEN 0 ELSE 1 END,
+                    pmws_victim.id DESC
+                LIMIT 1
+            ),
             (
                 SELECT NULLIF(replace(replace(lower(trim(p.input_device)), '-', '_'), ' ', '_'), '')
                 FROM players p
@@ -208,21 +108,12 @@ events AS (
       AND pmws.kills > 0
       AND NOT EXISTS (
           SELECT 1
-          FROM player_killed pk_existing
-          WHERE pk_existing.match_id = pmws.match_id
-            AND pk_existing.created_at >= b.start_ts - interval '2 hours'
-            AND pk_existing.created_at <  b.end_ts + interval '30 minutes'
-            AND pk_existing.attacker_id IS NOT NULL
-            AND COALESCE(pk_existing.category, '') <> 'sdk_match_end'
-      )
-      AND NOT EXISTS (
-          SELECT 1
           FROM player_match_weapon_stats pmws_detail
           WHERE pmws_detail.match_id = pmws.match_id
             AND pmws_detail.player_id = pmws.player_id
             AND pmws_detail.opponent_id IS NOT NULL
             AND COALESCE(NULLIF(lower(trim(pmws_detail.weapon)), ''), 'unknown') = COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown')
-            AND pmws_detail.source = pmws.source
+            AND COALESCE(pmws_detail.source, '') = COALESCE(pmws.source, '')
       )
 )
 INSERT INTO player_kill_daily_weapon_opponent_stats (
@@ -259,6 +150,12 @@ def _today_shanghai() -> date:
 
 async def refresh_player_kill_daily_stats_window(start_day: date, end_day: date) -> None:
     """Rebuild player kill daily weapon/opponent stats for [start_day, end_day)."""
+    if end_day <= _PMWS_STATS_CUTOFF_DAY:
+        logger.warning(f"跳过玩家击杀日统计刷新: 窗口早于 player_match_weapon_stats 统计口径 {start_day}..{end_day}")
+        return
+    if start_day < _PMWS_STATS_CUTOFF_DAY:
+        logger.warning(f"玩家击杀日统计刷新窗口从 {start_day} 裁剪到 {_PMWS_STATS_CUTOFF_DAY}，保留既有历史统计")
+        start_day = _PMWS_STATS_CUTOFF_DAY
     if start_day >= end_day:
         logger.warning(f"跳过玩家击杀日统计刷新: 窗口无效 {start_day}..{end_day}")
         return
