@@ -4,7 +4,7 @@ import traceback
 from datetime import datetime
 
 import httpx
-from .common import FRIEND_HINT, format_input_device, on_command
+from .common import FRIEND_HINT, format_input_device, format_input_device_emoji, on_command
 from nonebot.adapters.onebot.v11 import Event, Message
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
@@ -243,7 +243,7 @@ async def handle_competitive(args: Message = CommandArg()) -> None:
         rank_base = (page_no - 1) * 20
         for i, p in enumerate(data, 1):
             name = p.get("name", "Unknown")
-            device = format_input_device(p.get("input_device"))
+            device = format_input_device_emoji(p.get("input_device"))
             total_kills = p.get("total_kills", 0)
             counted = p.get("counted_matches", 0)
             msg += f"#{rank_base + i} {name} [{device}]: {total_kills} 击杀 ({counted} 场)\n"

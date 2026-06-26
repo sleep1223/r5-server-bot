@@ -1,7 +1,7 @@
 import traceback
 
 import httpx
-from .common import BINDING_GUIDE, format_input_device, on_command, range_label
+from .common import BINDING_GUIDE, format_input_device, format_input_device_emoji, on_command, range_label
 from nonebot.adapters.onebot.v11 import Event, Message
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
@@ -102,7 +102,7 @@ async def handle_kd_rank(args: Message = CommandArg()) -> None:
 
         for i, p in enumerate(data, 1):
             name = p.get("name", "Unknown")
-            device = format_input_device(p.get("input_device"))
+            device = format_input_device_emoji(p.get("input_device"))
             kd = p.get("kd", 0)
             kills = p.get("kills", 0)
             msg += f"#{i} {name} [{device}]: KD {kd} (击杀 {kills})\n"
@@ -226,15 +226,10 @@ async def handle_check_kd(event: Event, args: Message = CommandArg()) -> None:
             if worst:
                 w_name = worst.get("opponent_name", "Unknown")
                 w_device = format_input_device(worst.get("input_device"))
-                w_kd = worst.get("kd")
                 w_ekd = worst.get("enemy_kd_display")
                 w_k = worst.get("kills")
                 w_d = worst.get("deaths")
-                # 如果没有 enemy_kd_display (旧接口), 回退到 kd
-                if w_ekd is None:
-                    msg += f"☠️ 天敌: {w_name} [{w_device}] ({w_k}/{w_d} - KD {w_kd})\n"
-                else:
-                    msg += f"☠️ 天敌: {w_name} [{w_device}] ({w_k}/{w_d} - 对敌KD {w_ekd})\n"
+                msg += f"☠️ 天敌: {w_name} [{w_device}] ({w_k}/{w_d} - 对敌KD {w_ekd})\n"
 
             msg += "-" * 30 + "\n"
 
@@ -310,7 +305,7 @@ async def handle_input_device_rank(args: Message = CommandArg()) -> None:
         params["server"] = server_arg
 
     try:
-        resp = await api_client.get_input_device_leaderboard(**params, timeout=3.0)
+        resp = await api_client.get_kd_leaderboard(**params, timeout=3.0)
         if resp.status_code != 200:
             await input_device_rank.finish(f"❌ 查询失败: HTTP {resp.status_code}")
         req = resp.json()
@@ -319,20 +314,20 @@ async def handle_input_device_rank(args: Message = CommandArg()) -> None:
 
         data = req.get("data", [])
         if not data:
-            await input_device_rank.finish(f"ℹ️ 暂无设备击杀数据 ({range_label(range_type)})")
+            await input_device_rank.finish(f"ℹ️ 暂无设备 KD 数据 ({range_label(range_type)})")
 
         server_info = req.get("server") or {}
         scope = server_info.get("short_name") or server_info.get("name") or server_info.get("host")
         title_suffix = f" @{scope}" if scope else ""
-        device_suffix = f" - {format_input_device(input_device)}" if input_device else ""
-        msg = f"🏆 R5 输入设备击杀榜 ({range_label(range_type)}{device_suffix}){title_suffix}\n"
+        device_suffix = f" - {format_input_device_emoji(input_device)}" if input_device else ""
+        msg = f"🏆 R5 输入设备 KD 榜 ({range_label(range_type)}{device_suffix}){title_suffix}\n"
         msg += f"排序: {sort}\n"
         msg += "排名 | 玩家 | 设备 | 击杀/死亡 | KD\n"
         msg += "-" * 30 + "\n"
 
         for i, p in enumerate(data[:10], 1):
             name = p.get("name", "Unknown")
-            device = format_input_device(p.get("input_device"))
+            device = format_input_device_emoji(p.get("input_device"))
             kills = p.get("kills", 0)
             deaths = p.get("deaths", 0)
             kd = p.get("kd", 0)

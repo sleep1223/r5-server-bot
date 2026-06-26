@@ -1,7 +1,7 @@
 import traceback
 
 import httpx
-from .common import BINDING_GUIDE, format_input_device, on_command, range_label
+from .common import BINDING_GUIDE, format_input_device, format_input_device_emoji, on_command, range_label
 from nonebot.adapters.onebot.v11 import Event, Message
 from nonebot.exception import FinishedException
 from nonebot.params import CommandArg
@@ -236,7 +236,7 @@ async def handle_weapon_leaderboard(args: Message = CommandArg()) -> None:
             weapon_key = w.get("weapon", "unknown")
             weapon_name = weapon_map.get(weapon_key.lower(), weapon_key)
             name = w.get("name") or "未知"
-            device = format_input_device(w.get("input_device"))
+            device = format_input_device_emoji(w.get("input_device"))
             k = w.get("kills", 0)
             d = w.get("deaths", 0)
             kd = w.get("kd", 0)

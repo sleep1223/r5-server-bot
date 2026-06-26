@@ -40,6 +40,22 @@ def format_input_device(input_device: object | None) -> str:
     return labels.get(text, text or "未知设备")
 
 
+def format_input_device_emoji(input_device: object | None) -> str:
+    text = str(input_device or "").strip().lower().replace("-", "_").replace(" ", "_")
+    labels = {
+        "keyboard_mouse": "⌨️",
+        "keyboard": "⌨️",
+        "mouse": "⌨️",
+        "kbm": "⌨️",
+        "mnk": "⌨️",
+        "controller": "🎮",
+        "gamepad": "🎮",
+        "pad": "🎮",
+        "unknown": "❔",
+    }
+    return labels.get(text, "❔")
+
+
 def _case_variants(name: CommandName) -> set[CommandName]:
     """生成指令名的大小写变体（中文字符不受影响）。"""
     if isinstance(name, tuple):

@@ -29,29 +29,6 @@ class R5ApiClient:
         sort: str = "kd",
         min_kills: int = 100,
         min_deaths: int = 0,
-        server: str | None = None,
-        timeout: float = 3.0,
-    ) -> httpx.Response:
-        params: dict[str, Any] = {
-            "range": range_type,
-            "page_no": page_no,
-            "page_size": page_size,
-            "sort": sort,
-            "min_kills": min_kills,
-            "min_deaths": min_deaths,
-        }
-        if server:
-            params["server"] = server
-        return await self._request("GET", "/leaderboard/kd", params=params, timeout=timeout)
-
-    async def get_input_device_leaderboard(
-        self,
-        range_type: str = "today",
-        page_no: int = 1,
-        page_size: int = 20,
-        sort: str = "kills",
-        min_kills: int = 1,
-        min_deaths: int = 0,
         input_device: str | None = None,
         server: str | None = None,
         timeout: float = 3.0,
@@ -68,7 +45,7 @@ class R5ApiClient:
             params["input_device"] = input_device
         if server:
             params["server"] = server
-        return await self._request("GET", "/leaderboard/input-device", params=params, timeout=timeout)
+        return await self._request("GET", "/leaderboard/kd", params=params, timeout=timeout)
 
     async def get_player_vs_all(
         self,
