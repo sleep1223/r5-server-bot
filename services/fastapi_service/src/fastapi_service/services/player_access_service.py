@@ -686,6 +686,53 @@ async def _resolve_geo(ip: str) -> tuple[str | None, str | None]:
     return country, region
 
 
+def _snapshot_ip(context: dict[str, Any] | None) -> str:
+    if not isinstance(context, dict):
+        return ""
+    return _normalize_ip(context.get("player_ip") or context.get("ip"))
+
+
+def _snapshot_geo(context: dict[str, Any] | None) -> tuple[str | None, str | None]:
+    if not isinstance(context, dict):
+        return None, None
+    country = context.get("player_country") or context.get("country")
+    region = context.get("player_region") or context.get("region")
+    return (str(country).strip() or None) if country is not None else None, (str(region).strip() or None) if region is not None else None
+
+
+async def _snapshot_locale_result(context: dict[str, Any] | None, *, fallback: str) -> tuple[str, bool]:
+    country, region = _snapshot_geo(context)
+    ip = _snapshot_ip(context)
+    if not (country or region) and ip:
+        country, region = await _resolve_geo(ip)
+    if country or region:
+        return reason_locale_from_geo(country, region), True
+    return fallback, False
+
+
+async def _snapshot_locale(context: dict[str, Any] | None, *, fallback: str) -> str:
+    locale, _ = await _snapshot_locale_result(context, fallback=fallback)
+    return locale
+
+
+async def _operation_result_for_id(operation_id: object | None) -> dict[str, Any] | None:
+    if not operation_id:
+        return None
+    operation = await PlayerAccessOperation.get_or_none(id=operation_id)
+    return operation.result if operation and isinstance(operation.result, dict) else None
+
+
+async def _notice_locale(notice: PlayerAccessNotice, *, fallback: str) -> str:
+    locale, found = await _snapshot_locale_result(notice.message_context if isinstance(notice.message_context, dict) else None, fallback=fallback)
+    if found:
+        return locale
+    return await _snapshot_locale(await _operation_result_for_id(getattr(notice, "operation_id", None)), fallback=fallback)
+
+
+async def _rule_locale(rule: PlayerAccessRule, *, fallback: str) -> str:
+    return await _snapshot_locale(await _operation_result_for_id(getattr(rule, "source_operation_id", None)), fallback=fallback)
+
+
 async def _resolve_server_geo(identity: dict[str, Any], server_ip: object | None = None) -> tuple[str | None, str | None]:
     server = identity.get("server")
     candidate_ip = _normalize_server_identity_ip(server_ip) or _normalize_server_identity_ip(getattr(server, "host", None))
@@ -927,7 +974,7 @@ async def evaluate_player_access(
     if uid_text:
         notice = await _pending_notice_for_uid(uid_text, server_id=server_id, server_keys=server_keys)
         if notice:
-            return _notice_decision(notice, locale=locale)
+            return _notice_decision(notice, locale=await _notice_locale(notice, fallback=locale))
 
         rule = await _first_exact_rule("uid", "allow", uid_text, server_id=server_id, server_keys=server_keys)
         if rule:
@@ -935,7 +982,7 @@ async def evaluate_player_access(
 
         rule = await _first_exact_rule("uid", "deny", uid_text, server_id=server_id, server_keys=server_keys)
         if rule:
-            return _rule_decision(rule, locale=locale)
+            return _rule_decision(rule, locale=await _rule_locale(rule, fallback=locale))
 
         legacy_ban = await _legacy_ban_for_uid(uid_text, player, locale=locale)
         if legacy_ban:
@@ -1010,7 +1057,7 @@ async def trace_player_access(
         notice = await _pending_notice_for_uid(uid_text, server_id=server_id, server_keys=server_keys)
         checks.append(_trace_record("kick_notice", notice is not None, notice))
         if notice:
-            decision = _notice_decision(notice)
+            decision = _notice_decision(notice, locale=await _notice_locale(notice, fallback=reason_locale_from_geo(country, region)))
             return {"decision": decision, "checks": checks, "matched_rules": [decision]}
 
         rule = await _first_exact_rule("uid", "allow", uid_text, server_id=server_id, server_keys=server_keys)
@@ -1022,7 +1069,7 @@ async def trace_player_access(
         rule = await _first_exact_rule("uid", "deny", uid_text, server_id=server_id, server_keys=server_keys)
         checks.append(_trace_record("uid_deny", rule is not None, rule))
         if rule:
-            decision = _rule_decision(rule)
+            decision = _rule_decision(rule, locale=await _rule_locale(rule, fallback=reason_locale_from_geo(country, region)))
             return {"decision": decision, "checks": checks, "matched_rules": [decision]}
 
         legacy_ban = await _legacy_ban_for_uid(uid_text, player)

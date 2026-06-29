@@ -75,6 +75,7 @@ async def get_ban_list(
     q: str | None = Query(None, description="精确搜索玩家名或 Nucleus ID"),
     player_name: str | None = Query(None, description="精确搜索玩家名"),
     nucleus_id: int | None = Query(None, description="精确搜索 Nucleus ID"),
+    acknowledged: bool | None = Query(None, description="按确认状态筛选：true 已确认，false 未确认，留空为全部"),
     pg: Pagination = Depends(get_pagination),
     credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
 ):
@@ -88,6 +89,7 @@ async def get_ban_list(
         player_query=q,
         player_name=player_name,
         nucleus_id=nucleus_id,
+        acknowledged=acknowledged,
     )
 
     return paginated(data=results, total=total, msg="封禁列表已获取")

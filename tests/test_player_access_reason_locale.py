@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 from fastapi_service.core.cache import ACCESS_REPORT_TTL_SECONDS, server_cache
 from fastapi_service.core.utils import CN_TZ, generate_hash
-from fastapi_service.services import admin_management_service, player_service, server_service
+from fastapi_service.services import admin_management_service, admin_service, player_service, server_service
 from fastapi_service.services import player_access_service as access_service
 from fastapi_service.tasks import fetch_servers
 from shared_lib.models import BanRecord, IpInfo, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server
@@ -440,6 +440,88 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["actions"][0]["action"], "kick")
         self.assertEqual(result["actions"][0]["reason"], decision["reason"])
         self.assertEqual(result["actions"][0]["reason"], f"Kicked: No-cover rule violation. Visit {access_service.SELF_UNBAN_URL} to self-unban")
+
+    async def test_reconnect_and_bans_use_operation_ip_locale_for_pending_kick(self) -> None:
+        uid = "1000000000027"
+        player = await Player.create(
+            nucleus_id=int(uid),
+            nucleus_hash=generate_hash(uid),
+            name="operation-ip-kick",
+            ip="8.8.8.8",
+            country="美国",
+            region="加利福尼亚",
+        )
+
+        data, err = await admin_management_service.apply_access_action(
+            action="kick",
+            target_type="player",
+            target_value=player.nucleus_id,
+            reason="NO_COVER",
+            operator_name="unit-test",
+        )
+
+        self.assertIsNone(err)
+        assert data is not None
+        decision = await self._check(uid=uid, ip="1.2.3.4")
+
+        self.assertFalse(decision["allow"])
+        self.assertEqual(decision["source"], "kick_notice")
+        self.assertEqual(decision["reason_locale"], "en")
+        self.assertEqual(decision["reason"], f"Kicked: No-cover rule violation. Visit {access_service.SELF_UNBAN_URL} to self-unban")
+
+        await player.refresh_from_db()
+        self.assertEqual(player.country, "中国")
+        rows, total = await admin_service.list_bans(page_size=20, offset=0, is_admin=True)
+
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0]["operation_ip"], "8.8.8.8")
+        self.assertEqual(rows[0]["operation_country"], "美国")
+        self.assertEqual(rows[0]["operation_region"], "加利福尼亚")
+        self.assertEqual(rows[0]["country"], "美国")
+        self.assertEqual(rows[0]["region"], "加利福尼亚")
+        self.assertEqual(rows[0]["player"]["country"], "美国")
+        self.assertEqual(rows[0]["player"]["region"], "加利福尼亚")
+        self.assertEqual(rows[0]["access"]["reason_locale"], "en")
+
+    async def test_reconnect_and_bans_use_operation_ip_locale_for_uid_ban(self) -> None:
+        uid = "1000000000028"
+        player = await Player.create(
+            nucleus_id=int(uid),
+            nucleus_hash=generate_hash(uid),
+            name="operation-ip-ban",
+            ip="203.0.113.9",
+            country="韩国",
+            region="首尔",
+        )
+
+        data, err = await admin_management_service.apply_access_action(
+            action="ban",
+            target_type="player",
+            target_value=player.nucleus_id,
+            reason="CHEAT",
+            operator_name="unit-test",
+        )
+
+        self.assertIsNone(err)
+        assert data is not None
+        decision = await self._check(uid=uid, ip="1.2.3.4")
+
+        self.assertFalse(decision["allow"])
+        self.assertEqual(decision["rule_type"], "uid")
+        self.assertEqual(decision["reason_locale"], "ko")
+        self.assertEqual(decision["reason"], "차단됨: 부정행위")
+
+        await player.refresh_from_db()
+        self.assertEqual(player.country, "中国")
+        rows, total = await admin_service.list_bans(page_size=20, offset=0, is_admin=True)
+
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0]["operation_ip"], "203.0.113.9")
+        self.assertEqual(rows[0]["operation_country"], "韩国")
+        self.assertEqual(rows[0]["operation_region"], "首尔")
+        self.assertEqual(rows[0]["player"]["country"], "韩国")
+        self.assertEqual(rows[0]["player"]["region"], "首尔")
+        self.assertEqual(rows[0]["access"]["reason_locale"], "ko")
 
     async def test_online_report_populates_sdk_memory_cache_without_legacy_status(self) -> None:
         result = await access_service.process_online_players_report(

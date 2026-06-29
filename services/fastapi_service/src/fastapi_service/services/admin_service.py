@@ -48,6 +48,7 @@ async def list_bans(
     player_query: str | None = None,
     player_name: str | None = None,
     nucleus_id: int | None = None,
+    acknowledged: bool | None = None,
 ) -> tuple[list[dict], int]:
     operations = (
         await PlayerAccessOperation
@@ -102,6 +103,7 @@ async def list_bans(
 
     _apply_unban_resolution(rows, unban_operations)
     _suppress_duplicate_pending_kick_rows(rows)
+    rows = _filter_rows_by_acknowledged(rows, acknowledged)
     rows.sort(key=lambda item: (item["operation_created_at"], item["id"]), reverse=True)
     return rows[offset : offset + page_size], len(rows)
 
@@ -152,7 +154,14 @@ async def _notice_by_operation_id(operation_ids: list[int]) -> dict[int, dict[st
     return {int(row["operation_id"]): row for row in rows if row.get("operation_id") is not None}
 
 
-def _player_payload(player: Player | None, *, is_admin: bool) -> dict[str, Any] | None:
+def _player_payload(
+    player: Player | None,
+    *,
+    is_admin: bool,
+    country: str | None = None,
+    region: str | None = None,
+    ip: str | None = None,
+) -> dict[str, Any] | None:
     if player is None:
         return None
 
@@ -163,23 +172,30 @@ def _player_payload(player: Player | None, *, is_admin: bool) -> dict[str, Any] 
         "kick_count": player.kick_count,
         "ban_count": player.ban_count,
         "status": player.status,
-        "country": player.country,
+        "country": country if country is not None else player.country,
         "input_device": player.input_device or "unknown",
     }
     if is_admin:
         payload.update({
-            "region": player.region,
-            "ip": player.ip,
+            "region": region if region is not None else player.region,
+            "ip": ip if ip is not None else player.ip,
         })
     return payload
 
 
-def _resolution_payload(status: str, label: str, resolved_at: Any = None) -> dict[str, Any]:
+def _resolution_payload(status: str, resolved_at: Any = None) -> dict[str, Any]:
     return {
         "resolution_status": status,
-        "resolution_label": label,
         "resolved_at": resolved_at,
     }
+
+
+def _filter_rows_by_acknowledged(rows: list[dict[str, Any]], acknowledged: bool | None) -> list[dict[str, Any]]:
+    if acknowledged is None:
+        return rows
+    if acknowledged:
+        return [row for row in rows if row.get("acknowledged_at")]
+    return [row for row in rows if row.get("requires_ack") and not row.get("acknowledged_at")]
 
 
 def _row_player_id(row: dict[str, Any]) -> int | None:
@@ -257,7 +273,7 @@ def _apply_unban_resolution(rows: list[dict[str, Any]], unban_operations: list[P
         if not unban_operation:
             continue
         if _datetime_gte(unban_operation.created_at, row.get("operation_created_at")):
-            row.update(_resolution_payload("resolved", "已解除", unban_operation.created_at))
+            row.update(_resolution_payload("resolved", unban_operation.created_at))
 
 
 def _operation_target(operation: PlayerAccessOperation) -> str | None:
@@ -293,6 +309,41 @@ def _operation_ip(operation: PlayerAccessOperation, notice: dict[str, Any] | Non
         if player_ip:
             return player_ip
     return None
+
+
+def _snapshot_context_value(context: dict[str, Any] | None, *keys: str) -> str | None:
+    if not isinstance(context, dict):
+        return None
+    for key in keys:
+        value = str(context.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
+async def _operation_snapshot(operation: PlayerAccessOperation, notice: dict[str, Any] | None, player: Player | None) -> dict[str, str | None]:
+    result = operation.result if isinstance(operation.result, dict) else {}
+    notice_context = notice.get("message_context") if notice else None
+    if not isinstance(notice_context, dict):
+        notice_context = {}
+
+    operation_ip = player_access_service._normalize_ip(_operation_ip(operation, notice, player)) or _operation_ip(operation, notice, player)
+    country = _snapshot_context_value(result, "player_country", "country") or _snapshot_context_value(notice_context, "player_country", "country")
+    region = _snapshot_context_value(result, "player_region", "region") or _snapshot_context_value(notice_context, "player_region", "region")
+
+    player_ip = player_access_service._normalize_ip(player.ip) if player else ""
+    if not (country or region) and operation_ip and player_ip and operation_ip == player_ip:
+        country = player.country if player else None
+        region = player.region if player else None
+
+    if not (country or region) and operation_ip:
+        country, region = await player_access_service._resolve_geo(operation_ip)
+
+    return {
+        "ip": operation_ip,
+        "country": country,
+        "region": region,
+    }
 
 
 async def _self_unban_player_by_exact_search(
@@ -384,12 +435,42 @@ async def self_unban_player(
     return result, None
 
 
-async def _access_state(player: Player | None, *, target_type: str, target_value: str | None) -> dict[str, Any]:
+async def _access_state(
+    player: Player | None,
+    *,
+    target_type: str,
+    target_value: str | None,
+    ip: str | None = None,
+    country: str | None = None,
+    region: str | None = None,
+) -> dict[str, Any]:
     if player is not None:
-        return await player_access_service.get_player_access_state(player=player)
+        effective_country = country if country is not None else player.country
+        effective_region = region if region is not None else player.region
+        return await player_access_service.evaluate_player_access(
+            uid=player.nucleus_id,
+            ip=ip if ip is not None else player.ip,
+            player=player,
+            country=effective_country,
+            region=effective_region,
+            reason_locale=player_access_service.reason_locale_from_geo(effective_country, effective_region),
+        )
+    reason_locale = player_access_service.reason_locale_from_geo(country, region)
     if target_type == "uid" and target_value:
-        return await player_access_service.get_player_access_state(uid=target_value)
-    return await player_access_service.get_player_access_state(uid=None)
+        return await player_access_service.evaluate_player_access(
+            uid=target_value,
+            ip=ip,
+            country=country,
+            region=region,
+            reason_locale=reason_locale,
+        )
+    return await player_access_service.evaluate_player_access(
+        uid=None,
+        ip=ip,
+        country=country,
+        region=region,
+        reason_locale=reason_locale,
+    )
 
 
 async def _serialize_access_operation_row(
@@ -400,19 +481,22 @@ async def _serialize_access_operation_row(
 ) -> dict[str, Any]:
     player = getattr(operation, "player", None)
     target_value = _operation_target(operation)
-    operation_ip = _operation_ip(operation, notice, player)
+    snapshot = await _operation_snapshot(operation, notice, player)
+    operation_ip = snapshot["ip"]
+    operation_country = snapshot["country"]
+    operation_region = snapshot["region"]
     action = str(operation.action or "").strip().lower()
     acknowledged_at = notice.get("acknowledged_at") if notice else None
     requires_ack = bool(notice.get("requires_ack")) if notice else False
     notice_action = str(notice.get("action") or "").strip().lower() if notice else ""
     if action == "kick" and notice_action == "kick" and acknowledged_at:
-        resolution = _resolution_payload("resolved", "已解除", acknowledged_at)
+        resolution = _resolution_payload("resolved", acknowledged_at)
     elif action == "kick" and notice_action == "kick" and requires_ack:
-        resolution = _resolution_payload("pending", "待确认")
+        resolution = _resolution_payload("pending")
     elif action == "kick":
-        resolution = _resolution_payload("active", "已踢出")
+        resolution = _resolution_payload("active")
     else:
-        resolution = _resolution_payload("active", "生效中")
+        resolution = _resolution_payload("active")
 
     return {
         "id": operation.id,
@@ -428,6 +512,10 @@ async def _serialize_access_operation_row(
         "operator": operation.operator,
         "remark": operation.remark,
         "operation_ip": operation_ip if is_admin else None,
+        "operation_country": operation_country,
+        "operation_region": operation_region,
+        "country": operation_country,
+        "region": operation_region,
         "operation_created_at": operation.created_at,
         "created_at": operation.created_at,
         "acknowledged_at": acknowledged_at,
@@ -435,14 +523,16 @@ async def _serialize_access_operation_row(
         "can_self_unban": (action == "kick" and bool(notice) and notice_action == "kick" and requires_ack and not acknowledged_at),
         **resolution,
         "linked_rule_ids": operation.linked_rule_ids,
-        "player": _player_payload(player, is_admin=is_admin),
-        "access": await _access_state(player, target_type=operation.target_type, target_value=target_value),
+        "player": _player_payload(player, is_admin=is_admin, country=operation_country, region=operation_region, ip=operation_ip if is_admin else None),
+        "access": await _access_state(player, target_type=operation.target_type, target_value=target_value, ip=operation_ip, country=operation_country, region=operation_region),
     }
 
 
 async def _serialize_legacy_ban_row(ban: BanRecord, *, is_admin: bool) -> dict[str, Any]:
     operation_ip = str(ban.player.ip or "").strip() or None
-    resolution = _resolution_payload("active", "生效中") if ban.player.status == "banned" else _resolution_payload("resolved", "已解除")
+    operation_country = ban.player.country
+    operation_region = ban.player.region
+    resolution = _resolution_payload("active") if ban.player.status == "banned" else _resolution_payload("resolved")
     return {
         "id": ban.id,
         "source": "ban_record",
@@ -457,6 +547,10 @@ async def _serialize_legacy_ban_row(ban: BanRecord, *, is_admin: bool) -> dict[s
         "operator": ban.operator,
         "remark": None,
         "operation_ip": operation_ip if is_admin else None,
+        "operation_country": operation_country,
+        "operation_region": operation_region,
+        "country": operation_country,
+        "region": operation_region,
         "operation_created_at": ban.created_at,
         "created_at": ban.created_at,
         "acknowledged_at": None,
@@ -464,13 +558,22 @@ async def _serialize_legacy_ban_row(ban: BanRecord, *, is_admin: bool) -> dict[s
         "can_self_unban": False,
         **resolution,
         "linked_rule_ids": None,
-        "player": _player_payload(ban.player, is_admin=is_admin),
-        "access": await player_access_service.get_player_access_state(player=ban.player),
+        "player": _player_payload(ban.player, is_admin=is_admin, country=operation_country, region=operation_region, ip=operation_ip if is_admin else None),
+        "access": await _access_state(
+            ban.player,
+            target_type="player",
+            target_value=str(ban.player.nucleus_id) if ban.player.nucleus_id is not None else None,
+            ip=operation_ip,
+            country=operation_country,
+            region=operation_region,
+        ),
     }
 
 
 async def _serialize_legacy_kick_row(player: Player, *, is_admin: bool) -> dict[str, Any]:
     operation_ip = str(player.ip or "").strip() or None
+    operation_country = player.country
+    operation_region = player.region
     return {
         "id": player.id,
         "source": "player_status",
@@ -485,15 +588,26 @@ async def _serialize_legacy_kick_row(player: Player, *, is_admin: bool) -> dict[
         "operator": None,
         "remark": None,
         "operation_ip": operation_ip if is_admin else None,
+        "operation_country": operation_country,
+        "operation_region": operation_region,
+        "country": operation_country,
+        "region": operation_region,
         "operation_created_at": player.updated_at,
         "created_at": player.updated_at,
         "acknowledged_at": None,
         "requires_ack": False,
         "can_self_unban": False,
-        **_resolution_payload("active", "已踢出"),
+        **_resolution_payload("active"),
         "linked_rule_ids": None,
-        "player": _player_payload(player, is_admin=is_admin),
-        "access": await player_access_service.get_player_access_state(player=player),
+        "player": _player_payload(player, is_admin=is_admin, country=operation_country, region=operation_region, ip=operation_ip if is_admin else None),
+        "access": await _access_state(
+            player,
+            target_type="player",
+            target_value=str(player.nucleus_id) if player.nucleus_id is not None else None,
+            ip=operation_ip,
+            country=operation_country,
+            region=operation_region,
+        ),
     }
 
 

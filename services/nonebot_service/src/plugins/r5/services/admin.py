@@ -165,6 +165,11 @@ async def handle_kick(event: Event, args: Message = CommandArg()) -> None:
 
         data = res.get("data") or {}
         player = data.get("player") or {}
+        operation = data.get("operation") or {}
+        actual_action = str(operation.get("action") or "").lower()
+        if data.get("action_escalated") or actual_action == "ban":
+            ip_line = "\n🌐 IP 封禁: 未同步" if data.get("sync_player_ip") is False else ""
+            await cmd_kick.finish(f"🔨 二次 Kick 已升级为封禁\n\n👤 玩家: {_player_display(player, target)}\n📌 原因: {reason_cn}{ip_line}\n{_access_submit_summary(data, '封禁')}")
         await cmd_kick.finish(f"👢 踢出已提交\n\n👤 玩家: {_player_display(player, target)}\n📌 原因: {reason_cn}{_kick_notice_summary(data)}\n{_access_submit_summary(data, '踢出')}")
 
     except FinishedException:

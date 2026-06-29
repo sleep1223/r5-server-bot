@@ -1,0 +1,46 @@
+# R5RC N Launcher 配置信息
+# 由 /v1/r5/launcher/config 接口读取并返回
+
+# 下载域名
+download_domain = "r5r.org"
+
+# 离线包下载地址
+offline_package_url = "https://www.123684.com/s/C9r9-IkJhH"
+
+# 文档地址
+docs_url = "https://af3mroq0w3.feishu.cn/wiki/WgIhwpiOwi6aYgkEJrQcGc4snHg"
+
+# launcher_version 已从 launcher_update.toml 动态获取，无需在此配置
+
+# 是否强制更新
+force_update = true
+
+# 当前游戏版本
+game_version = "v2.6.42"
+
+# 版本补丁地址列表（从某个版本到某个版本之间的补丁）
+[[patches]]
+from_version = "v2.6.41" # 或你的客户端本地实际保存值
+to_version = "2.6.42-live"
+url = "https://r5r-patch.sleep0.de/r5r-patch-.41-to-2.6.42-live.zip"
+checksum = "5e4e88908d7119017e6f859583ac0f678ff8649726e5de6415b403b5acb4459a"
+size = 303051
+
+# 公告
+[announcement]
+title = "R5ApexCN社区服"
+content = """QQ群 732124612
+KOOK 41289816"""
+
+# 服务器规则
+[[rules]]
+icon = "🚫"
+text = "禁止利用掩体/卡头皮"
+
+[[rules]]
+icon = "💬"
+text = "请文明用语"
+
+[[rules]]
+icon = "⛔"
+text = "严禁作弊"
