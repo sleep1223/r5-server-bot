@@ -109,7 +109,7 @@ class PlayerAdminBody(BaseModel):
 class AccessActionBody(ScopedServerBody):
     target_type: Literal["player", "uid", "ip", "cidr", "country", "region"]
     target_value: int | str
-    reason: str = "RULES"
+    reason: str = "NO_SPAM_CROUCH"
     sync_player_ip: bool = False
     remark: str | None = None
     duration_seconds: int | None = Field(default=None, gt=0)

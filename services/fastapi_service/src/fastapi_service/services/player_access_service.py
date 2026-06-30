@@ -1906,7 +1906,7 @@ async def sync_legacy_access_records(*, batch_size: int = 5000) -> dict[str, int
 
             rule = await ensure_uid_blacklist_rule(
                 player,
-                "RULES",
+                "NO_SPAM_CROUCH",
                 "legacy_sync",
                 source_action="ban",
             )
@@ -1943,8 +1943,8 @@ async def sync_legacy_access_records(*, batch_size: int = 5000) -> dict[str, int
                 player=player,
                 uid=uid,
                 action="kick",
-                reason="RULES",
-                message=_kick_reason("RULES"),
+                reason="NO_SPAM_CROUCH",
+                message=_kick_reason("NO_SPAM_CROUCH"),
                 message_context={
                     "legacy_sync": True,
                     "kick_count": player.kick_count,
