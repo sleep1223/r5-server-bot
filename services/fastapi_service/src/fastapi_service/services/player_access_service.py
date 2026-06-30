@@ -1444,6 +1444,90 @@ def normalize_access_rule_payload(
     }
 
 
+def _serialize_access_player(player: Player | None) -> dict[str, Any] | None:
+    if not player:
+        return None
+    return {
+        "id": player.id,
+        "name": player.name,
+        "nucleus_id": player.nucleus_id,
+        "kick_count": player.kick_count,
+        "ban_count": player.ban_count,
+        "status": player.status,
+        "country": player.country,
+        "input_device": player.input_device,
+    }
+
+
+async def _access_player_maps(
+    *,
+    player_ids: set[int] | None = None,
+    uids: set[int] | None = None,
+) -> tuple[dict[int, Player], dict[int, Player]]:
+    player_ids = {pid for pid in (player_ids or set()) if pid}
+    uids = {uid for uid in (uids or set()) if uid}
+    if not player_ids and not uids:
+        return {}, {}
+
+    filters: list[Q] = []
+    if player_ids:
+        filters.append(Q(id__in=player_ids))
+    if uids:
+        filters.append(Q(nucleus_id__in=uids))
+
+    query = filters[0]
+    for item in filters[1:]:
+        query |= item
+
+    players = await Player.filter(query)
+    return (
+        {player.id: player for player in players},
+        {int(player.nucleus_id): player for player in players if player.nucleus_id is not None},
+    )
+
+
+def _access_rule_uid(rule: PlayerAccessRule) -> int | None:
+    return _uid_to_int(rule.value) if rule.rule_type == "uid" else None
+
+
+def _access_operation_uid(operation: PlayerAccessOperation) -> int | None:
+    if str(operation.target_type or "").lower() not in {"player", "uid"}:
+        return None
+    return _uid_to_int(operation.normalized_target) or _uid_to_int(operation.target_value)
+
+
+def _enrich_access_rule_payload(
+    rule: PlayerAccessRule,
+    payload: dict[str, Any],
+    players_by_id: dict[int, Player],
+    players_by_uid: dict[int, Player],
+) -> dict[str, Any]:
+    player = getattr(rule, "player", None)
+    if not player and getattr(rule, "player_id", None):
+        player = players_by_id.get(rule.player_id)
+    uid = _access_rule_uid(rule)
+    if not player and uid is not None:
+        player = players_by_uid.get(uid)
+    payload["player"] = _serialize_access_player(player)
+    return payload
+
+
+def _enrich_access_operation_payload(
+    operation: PlayerAccessOperation,
+    payload: dict[str, Any],
+    players_by_id: dict[int, Player],
+    players_by_uid: dict[int, Player],
+) -> dict[str, Any]:
+    player = getattr(operation, "player", None)
+    if not player and getattr(operation, "player_id", None):
+        player = players_by_id.get(operation.player_id)
+    uid = _access_operation_uid(operation)
+    if not player and uid is not None:
+        player = players_by_uid.get(uid)
+    payload["player"] = _serialize_access_player(player)
+    return payload
+
+
 def serialize_access_rule(rule: PlayerAccessRule) -> dict[str, Any]:
     return {
         "id": rule.id,
@@ -1532,8 +1616,19 @@ async def list_access_rules(
         query = query.filter(enabled=enabled)
 
     total = await query.count()
-    rules = await query.order_by("server_scope", "priority", "-updated_at").offset(offset).limit(page_size)
-    return [serialize_access_rule(rule) for rule in rules], total
+    rules = await (
+        query.select_related("player")
+        .order_by("server_scope", "priority", "-updated_at")
+        .offset(offset)
+        .limit(page_size)
+    )
+    player_ids = {rule.player_id for rule in rules if getattr(rule, "player_id", None)}
+    uids = {uid for uid in (_access_rule_uid(rule) for rule in rules) if uid is not None}
+    players_by_id, players_by_uid = await _access_player_maps(player_ids=player_ids, uids=uids)
+    return [
+        _enrich_access_rule_payload(rule, serialize_access_rule(rule), players_by_id, players_by_uid)
+        for rule in rules
+    ], total
 
 
 async def get_access_rule(rule_id: int) -> PlayerAccessRule | None:
@@ -1695,8 +1790,19 @@ async def list_access_operations(
         query = query.filter(server_id=server_id)
 
     total = await query.count()
-    operations = await query.order_by("-created_at", "-id").offset(offset).limit(page_size)
-    return [serialize_access_operation(operation) for operation in operations], total
+    operations = await (
+        query.select_related("player")
+        .order_by("-created_at", "-id")
+        .offset(offset)
+        .limit(page_size)
+    )
+    player_ids = {operation.player_id for operation in operations if getattr(operation, "player_id", None)}
+    uids = {uid for uid in (_access_operation_uid(operation) for operation in operations) if uid is not None}
+    players_by_id, players_by_uid = await _access_player_maps(player_ids=player_ids, uids=uids)
+    return [
+        _enrich_access_operation_payload(operation, serialize_access_operation(operation), players_by_id, players_by_uid)
+        for operation in operations
+    ], total
 
 
 async def create_access_notice(

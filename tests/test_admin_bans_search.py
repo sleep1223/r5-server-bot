@@ -3,7 +3,7 @@ from datetime import datetime
 
 from fastapi_service.api.v1 import admin as admin_api
 from fastapi_service.core.errors import ErrorCode
-from fastapi_service.services import admin_management_service, admin_service
+from fastapi_service.services import admin_management_service, admin_service, player_access_service
 from shared_lib.models import Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, UserBinding
 from tortoise import Tortoise
 
@@ -316,6 +316,68 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(rows[0]["access"]["allow"])
         self.assertEqual(rows[0]["access"]["rule_id"], "ban:uid:list-new")
         self.assertEqual(rows[0]["display_status"], "ban")
+
+    async def test_access_rule_list_includes_player_summary_from_uid_value(self) -> None:
+        player = await Player.create(
+            nucleus_id=1009800111092,
+            name="Rule_Summary_Player",
+            kick_count=1,
+            ban_count=2,
+            status="offline",
+            country="Japan",
+            input_device="keyboard_mouse",
+        )
+        await PlayerAccessRule.create(
+            rule_type="uid",
+            action="deny",
+            value=str(player.nucleus_id),
+            reason="RULES",
+            rule_id="ban:uid:summary-player",
+        )
+
+        rows, total = await player_access_service.list_access_rules(page_size=10, offset=0)
+
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0]["player"]["id"], player.id)
+        self.assertEqual(rows[0]["player"]["name"], "Rule_Summary_Player")
+        self.assertEqual(rows[0]["player"]["nucleus_id"], player.nucleus_id)
+        self.assertEqual(rows[0]["player"]["kick_count"], 1)
+        self.assertEqual(rows[0]["player"]["ban_count"], 2)
+        self.assertEqual(rows[0]["player"]["status"], "offline")
+        self.assertEqual(rows[0]["player"]["country"], "Japan")
+        self.assertEqual(rows[0]["player"]["input_device"], "keyboard_mouse")
+
+    async def test_access_operation_list_includes_player_summary_from_uid_target(self) -> None:
+        player = await Player.create(
+            nucleus_id=1009800111093,
+            name="Operation_Summary_Player",
+            kick_count=3,
+            ban_count=4,
+            status="banned",
+            country="United States",
+            input_device="controller",
+        )
+        await PlayerAccessOperation.create(
+            action="ban",
+            target_type="player",
+            target_value=str(player.nucleus_id),
+            normalized_target=str(player.nucleus_id),
+            server_scope="global",
+            reason="CHEAT",
+            operator="unit-test",
+        )
+
+        rows, total = await player_access_service.list_access_operations(page_size=10, offset=0)
+
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0]["player"]["id"], player.id)
+        self.assertEqual(rows[0]["player"]["name"], "Operation_Summary_Player")
+        self.assertEqual(rows[0]["player"]["nucleus_id"], player.nucleus_id)
+        self.assertEqual(rows[0]["player"]["kick_count"], 3)
+        self.assertEqual(rows[0]["player"]["ban_count"], 4)
+        self.assertEqual(rows[0]["player"]["status"], "banned")
+        self.assertEqual(rows[0]["player"]["country"], "United States")
+        self.assertEqual(rows[0]["player"]["input_device"], "controller")
 
     async def test_second_pending_kick_escalates_to_uid_ban_without_ip_rule(self) -> None:
         player = await Player.create(nucleus_id=1009800111077, name="Pending_Kick_Player", ip="203.0.113.77")
