@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timezone
 
 from fastapi_service.scripts.rebuild_sdk_match_weapon_stats import rebuild_sdk_match_weapon_stats
-from fastapi_service.services import match_service
+from fastapi_service.services import leaderboard_service, match_service
 from fastapi_service.tasks import refresh_player_kill_daily_stats
 from shared_lib.models import Match, Player, PlayerMatchWeaponStat, SdkMatchEndReport
 from tortoise import Tortoise
@@ -211,14 +211,23 @@ class SdkMatchReportIngestTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await PlayerMatchWeaponStat.all().count(), 1)
 
     def test_daily_refresh_sql_includes_sdk_weapon_stats_without_opponent(self) -> None:
+        self.assertIn("INSERT INTO player_kill_daily_weapon_stats", refresh_player_kill_daily_stats._INSERT_SQL)
+        self.assertIn("INSERT INTO player_kill_daily_opponent_stats", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("FROM player_match_weapon_stats pmws", refresh_player_kill_daily_stats._INSERT_SQL)
-        self.assertIn("NULL::int AS opponent_id", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("pmws.opponent_id", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("pmws.input_device", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("pmws.opponent_id AS player_id", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("pmws.player_id AS opponent_id", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("WHERE p.id = pmws.opponent_id", refresh_player_kill_daily_stats._INSERT_SQL)
         self.assertIn("NOT EXISTS", refresh_player_kill_daily_stats._INSERT_SQL)
+        self.assertNotIn("'__all__'", refresh_player_kill_daily_stats._INSERT_SQL)
+
+    def test_player_vs_all_uses_compact_daily_opponent_rows(self) -> None:
+        source = inspect.getsource(leaderboard_service.get_player_vs_all)
+
+        self.assertIn("_DAILY_OPPONENT_STATS_TABLE", source)
+        self.assertIn("FROM {_DAILY_OPPONENT_STATS_TABLE} s", source)
+        self.assertNotIn("_OPPONENT_TOTAL_WEAPON", source)
 
     def test_competitive_ranking_sql_includes_sdk_weapon_stats(self) -> None:
         source = inspect.getsource(match_service.get_competitive_ranking)

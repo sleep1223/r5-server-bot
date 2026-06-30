@@ -12,7 +12,7 @@ async def _get_player_kd(player_id: int) -> float:
         SELECT
             COALESCE(SUM(kills), 0)::int AS kills,
             COALESCE(SUM(deaths), 0)::int AS deaths
-        FROM player_kill_daily_weapon_opponent_stats
+        FROM player_kill_daily_weapon_stats
         WHERE player_id = $1
         """,
         [player_id],

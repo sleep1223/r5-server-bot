@@ -6,7 +6,7 @@ from fastapi_service.core.utils import CN_TZ, generate_hash
 from fastapi_service.services import admin_management_service, admin_service, player_service, server_service
 from fastapi_service.services import player_access_service as access_service
 from fastapi_service.tasks import fetch_servers
-from shared_lib.models import BanRecord, IpInfo, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server
+from shared_lib.models import IpInfo, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server
 from tortoise import Tortoise
 
 TORTOISE_TEST_CONFIG = {
@@ -120,7 +120,18 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
             name=f"banned-{uid}",
             status="banned",
         )
-        await BanRecord.create(player=player, reason=reason, operator="unit-test")
+        await PlayerAccessRule.create(
+            rule_type="uid",
+            action="deny",
+            value=uid,
+            server_scope="global",
+            reason=reason,
+            rule_id=f"ban:uid:{uid}",
+            operator="unit-test",
+            source_action="ban",
+            priority=20,
+            player=player,
+        )
         return player
 
     async def test_overseas_ip_blocked_from_domestic_server_returns_english_reason(self) -> None:
@@ -481,7 +492,6 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["region"], "加利福尼亚")
         self.assertEqual(rows[0]["player"]["country"], "美国")
         self.assertEqual(rows[0]["player"]["region"], "加利福尼亚")
-        self.assertEqual(rows[0]["access"]["reason_locale"], "en")
 
     async def test_reconnect_and_bans_use_operation_ip_locale_for_uid_ban(self) -> None:
         uid = "1000000000028"
@@ -521,7 +531,6 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["operation_region"], "首尔")
         self.assertEqual(rows[0]["player"]["country"], "韩国")
         self.assertEqual(rows[0]["player"]["region"], "首尔")
-        self.assertEqual(rows[0]["access"]["reason_locale"], "ko")
 
     async def test_online_report_populates_sdk_memory_cache_without_legacy_status(self) -> None:
         result = await access_service.process_online_players_report(
@@ -1303,33 +1312,33 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(access_service.action_from_access_decision(decision), "ban")
         self.assertEqual(decision["rule"]["rule_id"], "deny-cn-hk")
 
-    async def test_japanese_banned_player_returns_japanese_reason(self) -> None:
+    async def test_japanese_uid_ban_returns_japanese_reason(self) -> None:
         await self._banned_player(uid="1000000000004", reason="CHEAT")
 
         decision = await self._check(uid="1000000000004", ip="203.0.113.8")
 
         self.assertFalse(decision["allow"])
-        self.assertEqual(decision["source"], "legacy_ban")
+        self.assertEqual(decision["source"], "player_access_rule")
         self.assertEqual(decision["reason_locale"], "ja")
         self.assertEqual(decision["reason"], "参加禁止: チート行為")
 
-    async def test_europe_banned_player_returns_english_reason(self) -> None:
+    async def test_europe_uid_ban_returns_english_reason(self) -> None:
         await self._banned_player(uid="1000000000005", reason="BE_POLITE")
 
         decision = await self._check(uid="1000000000005", ip="5.6.7.8")
 
         self.assertFalse(decision["allow"])
-        self.assertEqual(decision["source"], "legacy_ban")
+        self.assertEqual(decision["source"], "player_access_rule")
         self.assertEqual(decision["reason_locale"], "en")
         self.assertEqual(decision["reason"], "Banned: Inappropriate behavior")
 
-    async def test_chinese_banned_player_returns_chinese_reason(self) -> None:
+    async def test_chinese_uid_ban_returns_chinese_reason(self) -> None:
         await self._banned_player(uid="1000000000006", reason="CHEAT")
 
         decision = await self._check(uid="1000000000006", ip="1.2.3.4")
 
         self.assertFalse(decision["allow"])
-        self.assertEqual(decision["source"], "legacy_ban")
+        self.assertEqual(decision["source"], "player_access_rule")
         self.assertEqual(decision["reason_locale"], "zh")
         self.assertEqual(decision["reason"], "已被封禁: 作弊")
 
@@ -1392,7 +1401,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision["reason_locale"], "en")
         self.assertEqual(decision["reason"], "Kicked: Rule violation. Visit r5.sleep0.de/bans to self-unban")
 
-    async def test_uid_allow_rule_overrides_legacy_ban(self) -> None:
+    async def test_uid_allow_rule_overrides_uid_ban(self) -> None:
         uid = "1000000000011"
         await self._banned_player(uid=uid, reason="CHEAT")
         await PlayerAccessRule.create(
@@ -1411,14 +1420,13 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(decision["reason"])
         self.assertEqual(decision["rule"]["rule_id"], "allow-banned-uid")
 
-    async def test_legacy_access_sync_backfills_bans_and_kick_notices_once(self) -> None:
+    async def test_legacy_access_sync_backfills_status_bans_and_kick_notices_once(self) -> None:
         banned = await Player.create(
             nucleus_id=1000000000101,
             nucleus_hash=generate_hash("1000000000101"),
             name="legacy-banned",
             status="banned",
         )
-        await BanRecord.create(player=banned, reason="NO_COVER", operator="legacy-admin")
 
         kicked = await Player.create(
             nucleus_id=1000000000102,
@@ -1435,7 +1443,6 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
             status="banned",
             kick_count=1,
         )
-        await BanRecord.create(player=banned_with_kick_count, reason="CHEAT", operator="legacy-admin")
 
         existing_notice_player = await Player.create(
             nucleus_id=1000000000104,

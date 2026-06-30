@@ -5,7 +5,7 @@ import ipaddress
 from datetime import datetime, timedelta
 from typing import Any
 
-from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, UserBinding
+from shared_lib.models import Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, UserBinding
 from tortoise.expressions import F, Q
 
 from fastapi_service.core.constants import ALLOWED_REASONS
@@ -49,8 +49,6 @@ def _access_denied_action(access: dict[str, Any] | None) -> str | None:
         return None
     if access.get("source") == "kick_notice":
         return "kick"
-    if access.get("source") == "legacy_ban":
-        return "ban"
 
     rule = access.get("rule") or {}
     source_action = str(rule.get("source_action") or "").strip().lower()
@@ -256,15 +254,9 @@ async def _operation_from_rule(rule: PlayerAccessRule | None, action: str) -> Pl
 async def _record_global_ban_state(
     player: Player,
     *,
-    reason: str,
-    operator_name: str,
     overwrite_existing: bool,
 ) -> None:
-    latest_record = await BanRecord.filter(player=player).order_by("-created_at", "-id").first()
-    if overwrite_existing and latest_record:
-        await BanRecord.filter(id=latest_record.id).update(reason=reason, operator=operator_name)
-    else:
-        await BanRecord.create(player=player, reason=reason, operator=operator_name)
+    if not overwrite_existing:
         await Player.filter(id=player.id).update(ban_count=F("ban_count") + 1, status="banned")
         player.ban_count = int(player.ban_count or 0) + 1  # type: ignore[assignment]
         player.status = "banned"  # type: ignore[assignment]
@@ -369,19 +361,6 @@ async def _create_synced_ip_rule(
 
 async def _player_or_error(identifier: int | str) -> tuple[Player | None, dict | None]:
     return await player_service.get_player_by_identifier(identifier)
-
-
-async def _recent_bans(player: Player, limit: int = 10) -> list[dict[str, Any]]:
-    records = await BanRecord.filter(player=player).order_by("-created_at").limit(limit)
-    return [
-        {
-            "id": record.id,
-            "reason": record.reason,
-            "operator": record.operator,
-            "created_at": record.created_at,
-        }
-        for record in records
-    ]
 
 
 async def _uid_rules(player: Player) -> list[dict[str, Any]]:
@@ -536,7 +515,6 @@ async def serialize_player_detail(
         "access": access,
     }
     if include_history:
-        payload["recent_bans"] = await _recent_bans(player)
         payload["access_rules"] = await _uid_rules(player)
         payload["access_trace"] = await player_access_service.trace_player_access(
             uid=player.nucleus_id,
@@ -653,20 +631,6 @@ def _matching_geo_rule(rules: list[PlayerAccessRule], player: Player, server_id:
     return _best_scoped_rule(matches, server_id)
 
 
-async def _latest_ban_records_map(players: list[Player]) -> dict[int, BanRecord]:
-    banned_player_ids = [player.id for player in players if player.status == "banned"]
-    if not banned_player_ids:
-        return {}
-
-    records = await BanRecord.filter(player_id__in=banned_player_ids).order_by("player_id", "-created_at", "-id")
-    record_by_player_id: dict[int, BanRecord] = {}
-    for record in records:
-        player_id = int(getattr(record, "player_id", 0) or 0)
-        if player_id and player_id not in record_by_player_id:
-            record_by_player_id[player_id] = record
-    return record_by_player_id
-
-
 async def _rule_access_decision(rule: PlayerAccessRule, fallback_locale: str) -> dict[str, Any]:
     if rule.action == "allow":
         return player_access_service._rule_decision(rule, locale=fallback_locale)
@@ -699,7 +663,6 @@ async def _players_access_state_map(players: list[Player], server_id: str | None
     cidr_allow_rules = await _active_rules("cidr", "allow", server_id)
     cidr_deny_rules = await _active_rules("cidr", "deny", server_id)
     geo_deny_rules = await _active_rules(["geo", "country", "region"], "deny", server_id)
-    latest_ban_records = await _latest_ban_records_map(players)
 
     access_by_player_id: dict[int, dict[str, Any]] = {}
     fallback_players: list[Player] = []
@@ -719,11 +682,6 @@ async def _players_access_state_map(players: list[Player], server_id: str | None
 
         if uid and (rule := uid_deny_rules.get(uid)):
             access_by_player_id[player.id] = await _rule_access_decision(rule, locale)
-            continue
-
-        if uid and player.status == "banned":
-            record = latest_ban_records.get(player.id)
-            access_by_player_id[player.id] = player_access_service._legacy_ban_decision(uid, record.reason if record else "banned", record.operator if record else None, locale=locale)
             continue
 
         rule = ip_allow_rules.get(ip or "") or _matching_cidr_rule(cidr_allow_rules, ip or "", server_id)
@@ -968,8 +926,6 @@ async def ban_player(
     if scope == "global":
         await _record_global_ban_state(
             player,
-            reason=reason,
-            operator_name=operator_name,
             overwrite_existing=existing_uid_rule is not None or player.status == "banned",
         )
         uid_rule = await player_access_service.ensure_uid_blacklist_rule(

@@ -8,15 +8,20 @@ from tortoise.transactions import in_transaction
 
 _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 _refresh_lock = asyncio.Lock()
-_PMWS_STATS_CUTOFF_DAY = date(2026, 6, 22)
 
-_DELETE_SQL = """
-DELETE FROM player_kill_daily_weapon_opponent_stats
+_DELETE_WEAPON_SQL = """
+DELETE FROM player_kill_daily_weapon_stats
 WHERE stat_date >= $1::date
   AND stat_date <  $2::date
 """
 
-_INSERT_SQL = """
+_DELETE_OPPONENT_SQL = """
+DELETE FROM player_kill_daily_opponent_stats
+WHERE stat_date >= $1::date
+  AND stat_date <  $2::date
+"""
+
+_INSERT_WEAPON_SQL = """
 WITH bounds AS (
     SELECT
         ($1::date::timestamp AT TIME ZONE 'Asia/Shanghai') AS start_ts,
@@ -24,10 +29,67 @@ WITH bounds AS (
 ),
 events AS (
     SELECT
+        (pk.created_at AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
+        pk.server_id,
+        pk.attacker_id AS player_id,
+        COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
+        'unknown' AS input_device,
+        1 AS kills,
+        0 AS deaths,
+        0 AS awarded_kills
+    FROM player_killed pk, bounds b
+    WHERE pk.created_at >= b.start_ts
+      AND pk.created_at <  b.end_ts
+      AND pk.server_id IS NOT NULL
+      AND pk.attacker_id IS NOT NULL
+      AND pk.victim_id IS NOT NULL
+      AND pk.attacker_id <> pk.victim_id
+
+    UNION ALL
+
+    SELECT
+        (pk.created_at AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
+        pk.server_id,
+        pk.victim_id AS player_id,
+        COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
+        'unknown' AS input_device,
+        0 AS kills,
+        1 AS deaths,
+        0 AS awarded_kills
+    FROM player_killed pk, bounds b
+    WHERE pk.created_at >= b.start_ts
+      AND pk.created_at <  b.end_ts
+      AND pk.server_id IS NOT NULL
+      AND pk.attacker_id IS NOT NULL
+      AND pk.victim_id IS NOT NULL
+      AND pk.attacker_id <> pk.victim_id
+
+    UNION ALL
+
+    SELECT
+        (pk.created_at AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
+        pk.server_id,
+        pk.awarded_to_id AS player_id,
+        COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') AS weapon,
+        'unknown' AS input_device,
+        0 AS kills,
+        0 AS deaths,
+        1 AS awarded_kills
+    FROM player_killed pk, bounds b
+    WHERE pk.created_at >= b.start_ts
+      AND pk.created_at <  b.end_ts
+      AND pk.server_id IS NOT NULL
+      AND pk.awarded_to_id IS NOT NULL
+      AND pk.attacker_id IS NOT NULL
+      AND pk.victim_id IS NOT NULL
+      AND pk.attacker_id <> pk.victim_id
+
+    UNION ALL
+
+    SELECT
         (COALESCE(m.ended_at, m.started_at, pmws.created_at) AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
         pmws.server_id,
         pmws.player_id,
-        pmws.opponent_id,
         COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown') AS weapon,
         COALESCE(NULLIF(lower(trim(pmws.input_device)), ''), 'unknown') AS input_device,
         pmws.kills AS kills,
@@ -43,6 +105,16 @@ events AS (
       AND pmws.opponent_id IS NOT NULL
       AND pmws.player_id <> pmws.opponent_id
       AND pmws.kills > 0
+      AND NOT EXISTS (
+          SELECT 1
+          FROM player_killed pk
+          WHERE pk.created_at >= b.start_ts
+            AND pk.created_at <  b.end_ts
+            AND pk.match_id = pmws.match_id
+            AND pk.attacker_id = pmws.player_id
+            AND pk.victim_id = pmws.opponent_id
+            AND COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') = COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown')
+      )
 
     UNION ALL
 
@@ -50,7 +122,6 @@ events AS (
         (COALESCE(m.ended_at, m.started_at, pmws.created_at) AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
         pmws.server_id,
         pmws.opponent_id AS player_id,
-        pmws.player_id AS opponent_id,
         COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown') AS weapon,
         COALESCE(
             (
@@ -84,6 +155,16 @@ events AS (
       AND pmws.opponent_id IS NOT NULL
       AND pmws.player_id <> pmws.opponent_id
       AND pmws.kills > 0
+      AND NOT EXISTS (
+          SELECT 1
+          FROM player_killed pk
+          WHERE pk.created_at >= b.start_ts
+            AND pk.created_at <  b.end_ts
+            AND pk.match_id = pmws.match_id
+            AND pk.attacker_id = pmws.player_id
+            AND pk.victim_id = pmws.opponent_id
+            AND COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') = COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown')
+      )
 
     UNION ALL
 
@@ -91,7 +172,6 @@ events AS (
         (COALESCE(m.ended_at, m.started_at, pmws.created_at) AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
         pmws.server_id,
         pmws.player_id,
-        NULL::int AS opponent_id,
         COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown') AS weapon,
         COALESCE(NULLIF(lower(trim(pmws.input_device)), ''), 'unknown') AS input_device,
         pmws.kills AS kills,
@@ -115,12 +195,20 @@ events AS (
             AND COALESCE(NULLIF(lower(trim(pmws_detail.weapon)), ''), 'unknown') = COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown')
             AND COALESCE(pmws_detail.source, '') = COALESCE(pmws.source, '')
       )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM player_killed pk
+          WHERE pk.created_at >= b.start_ts
+            AND pk.created_at <  b.end_ts
+            AND pk.match_id = pmws.match_id
+            AND pk.attacker_id = pmws.player_id
+            AND COALESCE(NULLIF(lower(trim(pk.weapon)), ''), 'unknown') = COALESCE(NULLIF(lower(trim(pmws.weapon)), ''), 'unknown')
+      )
 )
-INSERT INTO player_kill_daily_weapon_opponent_stats (
+INSERT INTO player_kill_daily_weapon_stats (
     stat_date,
     server_id,
     player_id,
-    opponent_id,
     weapon,
     input_device,
     kills,
@@ -132,7 +220,6 @@ SELECT
     stat_date,
     server_id,
     player_id,
-    opponent_id,
     weapon,
     input_device,
     SUM(kills)::int,
@@ -140,8 +227,128 @@ SELECT
     SUM(awarded_kills)::int,
     now()
 FROM events
-GROUP BY stat_date, server_id, player_id, opponent_id, weapon, input_device
+GROUP BY stat_date, server_id, player_id, weapon, input_device
 """
+
+_INSERT_OPPONENT_SQL = """
+WITH bounds AS (
+    SELECT
+        ($1::date::timestamp AT TIME ZONE 'Asia/Shanghai') AS start_ts,
+        ($2::date::timestamp AT TIME ZONE 'Asia/Shanghai') AS end_ts
+),
+events AS (
+    SELECT
+        (pk.created_at AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
+        pk.server_id,
+        pk.attacker_id AS player_id,
+        pk.victim_id AS opponent_id,
+        1 AS kills,
+        0 AS deaths
+    FROM player_killed pk, bounds b
+    WHERE pk.created_at >= b.start_ts
+      AND pk.created_at <  b.end_ts
+      AND pk.server_id IS NOT NULL
+      AND pk.attacker_id IS NOT NULL
+      AND pk.victim_id IS NOT NULL
+      AND pk.attacker_id <> pk.victim_id
+
+    UNION ALL
+
+    SELECT
+        (pk.created_at AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
+        pk.server_id,
+        pk.victim_id AS player_id,
+        pk.attacker_id AS opponent_id,
+        0 AS kills,
+        1 AS deaths
+    FROM player_killed pk, bounds b
+    WHERE pk.created_at >= b.start_ts
+      AND pk.created_at <  b.end_ts
+      AND pk.server_id IS NOT NULL
+      AND pk.attacker_id IS NOT NULL
+      AND pk.victim_id IS NOT NULL
+      AND pk.attacker_id <> pk.victim_id
+
+    UNION ALL
+
+    SELECT
+        (COALESCE(m.ended_at, m.started_at, pmws.created_at) AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
+        pmws.server_id,
+        pmws.player_id,
+        pmws.opponent_id,
+        pmws.kills AS kills,
+        0 AS deaths
+    FROM player_match_weapon_stats pmws
+    JOIN matches m ON m.id = pmws.match_id
+    CROSS JOIN bounds b
+    WHERE COALESCE(m.ended_at, m.started_at, pmws.created_at) >= b.start_ts
+      AND COALESCE(m.ended_at, m.started_at, pmws.created_at) <  b.end_ts
+      AND pmws.server_id IS NOT NULL
+      AND pmws.player_id IS NOT NULL
+      AND pmws.opponent_id IS NOT NULL
+      AND pmws.player_id <> pmws.opponent_id
+      AND pmws.kills > 0
+      AND NOT EXISTS (
+          SELECT 1
+          FROM player_killed pk
+          WHERE pk.created_at >= b.start_ts
+            AND pk.created_at <  b.end_ts
+            AND pk.match_id = pmws.match_id
+            AND pk.attacker_id = pmws.player_id
+            AND pk.victim_id = pmws.opponent_id
+      )
+
+    UNION ALL
+
+    SELECT
+        (COALESCE(m.ended_at, m.started_at, pmws.created_at) AT TIME ZONE 'Asia/Shanghai')::date AS stat_date,
+        pmws.server_id,
+        pmws.opponent_id AS player_id,
+        pmws.player_id AS opponent_id,
+        0 AS kills,
+        pmws.kills AS deaths
+    FROM player_match_weapon_stats pmws
+    JOIN matches m ON m.id = pmws.match_id
+    CROSS JOIN bounds b
+    WHERE COALESCE(m.ended_at, m.started_at, pmws.created_at) >= b.start_ts
+      AND COALESCE(m.ended_at, m.started_at, pmws.created_at) <  b.end_ts
+      AND pmws.server_id IS NOT NULL
+      AND pmws.player_id IS NOT NULL
+      AND pmws.opponent_id IS NOT NULL
+      AND pmws.player_id <> pmws.opponent_id
+      AND pmws.kills > 0
+      AND NOT EXISTS (
+          SELECT 1
+          FROM player_killed pk
+          WHERE pk.created_at >= b.start_ts
+            AND pk.created_at <  b.end_ts
+            AND pk.match_id = pmws.match_id
+            AND pk.attacker_id = pmws.player_id
+            AND pk.victim_id = pmws.opponent_id
+      )
+)
+INSERT INTO player_kill_daily_opponent_stats (
+    stat_date,
+    server_id,
+    player_id,
+    opponent_id,
+    kills,
+    deaths,
+    refreshed_at
+)
+SELECT
+    stat_date,
+    server_id,
+    player_id,
+    opponent_id,
+    SUM(kills)::int,
+    SUM(deaths)::int,
+    now()
+FROM events
+GROUP BY stat_date, server_id, player_id, opponent_id
+"""
+
+_INSERT_SQL = _INSERT_WEAPON_SQL + "\n\n" + _INSERT_OPPONENT_SQL
 
 
 def _today_shanghai() -> date:
@@ -150,21 +357,17 @@ def _today_shanghai() -> date:
 
 async def refresh_player_kill_daily_stats_window(start_day: date, end_day: date) -> None:
     """Rebuild player kill daily weapon/opponent stats for [start_day, end_day)."""
-    if end_day <= _PMWS_STATS_CUTOFF_DAY:
-        logger.warning(f"跳过玩家击杀日统计刷新: 窗口早于 player_match_weapon_stats 统计口径 {start_day}..{end_day}")
-        return
-    if start_day < _PMWS_STATS_CUTOFF_DAY:
-        logger.warning(f"玩家击杀日统计刷新窗口从 {start_day} 裁剪到 {_PMWS_STATS_CUTOFF_DAY}，保留既有历史统计")
-        start_day = _PMWS_STATS_CUTOFF_DAY
     if start_day >= end_day:
         logger.warning(f"跳过玩家击杀日统计刷新: 窗口无效 {start_day}..{end_day}")
         return
 
     async with _refresh_lock:
         async with in_transaction() as conn:
-            await conn.execute_query(_DELETE_SQL, [start_day, end_day])
-            await conn.execute_query(_INSERT_SQL, [start_day, end_day])
-    logger.info(f"已刷新 player_kill_daily_weapon_opponent_stats 窗口: {start_day}..{end_day}")
+            await conn.execute_query(_DELETE_WEAPON_SQL, [start_day, end_day])
+            await conn.execute_query(_DELETE_OPPONENT_SQL, [start_day, end_day])
+            await conn.execute_query(_INSERT_WEAPON_SQL, [start_day, end_day])
+            await conn.execute_query(_INSERT_OPPONENT_SQL, [start_day, end_day])
+    logger.info(f"已刷新玩家击杀日统计窗口: {start_day}..{end_day}")
 
 
 async def player_kill_daily_stats_refresh_task() -> None:

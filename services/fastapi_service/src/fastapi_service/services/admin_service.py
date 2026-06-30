@@ -1,6 +1,6 @@
 from typing import Any
 
-from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessOperation
+from shared_lib.models import Player, PlayerAccessNotice, PlayerAccessOperation
 from tortoise.expressions import F, Q
 
 from fastapi_service.core.cache import server_cache
@@ -17,7 +17,6 @@ def _normalize_exact_target(value: object | None) -> str:
 
 
 async def record_ban(player: Player, reason: str, operator_name: str) -> None:
-    await BanRecord.create(player=player, reason=reason, operator=operator_name)
     await Player.filter(id=player.id).update(ban_count=F("ban_count") + 1, status="banned")
     await player_access_service.ensure_uid_blacklist_rule(player, reason, operator_name)
 
@@ -68,8 +67,6 @@ async def list_bans(
         .order_by("-created_at", "-id")
         .prefetch_related("player")
     )
-    bans = await BanRecord.all().order_by("-created_at", "-id").prefetch_related("player")
-    kicked_players = await Player.filter(status="kicked").order_by("-updated_at", "-id")
     has_player_query, player_ids, exact_targets = await _exact_player_search(
         player_query,
         player_name=player_name,
@@ -78,11 +75,9 @@ async def list_bans(
     if has_player_query:
         operations = [operation for operation in operations if _operation_matches_exact_player(operation, player_ids=player_ids, exact_targets=exact_targets)]
         unban_operations = [operation for operation in unban_operations if _operation_matches_exact_player(operation, player_ids=player_ids, exact_targets=exact_targets)]
-        bans = [ban for ban in bans if _ban_matches_exact_player(ban, player_ids=player_ids)]
-        kicked_players = [player for player in kicked_players if player.id in player_ids]
 
     notice_by_operation_id = await _notice_by_operation_id([operation.id for operation in operations])
-    operation_rows = [
+    rows = [
         await _serialize_access_operation_row(
             operation,
             notice_by_operation_id.get(operation.id),
@@ -90,16 +85,6 @@ async def list_bans(
         )
         for operation in operations
     ]
-
-    rows = operation_rows
-    for ban in bans:
-        if _ban_has_access_operation(ban, operations):
-            continue
-        rows.append(await _serialize_legacy_ban_row(ban, is_admin=is_admin))
-    for player in kicked_players:
-        if _player_has_action_operation(player, "kick", operations):
-            continue
-        rows.append(await _serialize_legacy_kick_row(player, is_admin=is_admin))
 
     _apply_unban_resolution(rows, unban_operations)
     _suppress_duplicate_pending_kick_rows(rows)
@@ -288,10 +273,6 @@ def _operation_matches_exact_player(operation: PlayerAccessOperation, *, player_
     return bool(target and _normalize_exact_target(target) in exact_targets)
 
 
-def _ban_matches_exact_player(ban: BanRecord, *, player_ids: set[int]) -> bool:
-    return getattr(ban, "player_id", None) in player_ids
-
-
 def _operation_ip(operation: PlayerAccessOperation, notice: dict[str, Any] | None, player: Player | None) -> str | None:
     result = operation.result if isinstance(operation.result, dict) else {}
     player_ip = str(result.get("player_ip") or "").strip()
@@ -435,44 +416,6 @@ async def self_unban_player(
     return result, None
 
 
-async def _access_state(
-    player: Player | None,
-    *,
-    target_type: str,
-    target_value: str | None,
-    ip: str | None = None,
-    country: str | None = None,
-    region: str | None = None,
-) -> dict[str, Any]:
-    if player is not None:
-        effective_country = country if country is not None else player.country
-        effective_region = region if region is not None else player.region
-        return await player_access_service.evaluate_player_access(
-            uid=player.nucleus_id,
-            ip=ip if ip is not None else player.ip,
-            player=player,
-            country=effective_country,
-            region=effective_region,
-            reason_locale=player_access_service.reason_locale_from_geo(effective_country, effective_region),
-        )
-    reason_locale = player_access_service.reason_locale_from_geo(country, region)
-    if target_type == "uid" and target_value:
-        return await player_access_service.evaluate_player_access(
-            uid=target_value,
-            ip=ip,
-            country=country,
-            region=region,
-            reason_locale=reason_locale,
-        )
-    return await player_access_service.evaluate_player_access(
-        uid=None,
-        ip=ip,
-        country=country,
-        region=region,
-        reason_locale=reason_locale,
-    )
-
-
 async def _serialize_access_operation_row(
     operation: PlayerAccessOperation,
     notice: dict[str, Any] | None,
@@ -503,7 +446,6 @@ async def _serialize_access_operation_row(
         "source": "access_operation",
         "action": action,
         "operation_id": operation.id,
-        "ban_record_id": None,
         "target_type": operation.target_type,
         "target_value": target_value,
         "server_scope": operation.server_scope,
@@ -524,119 +466,6 @@ async def _serialize_access_operation_row(
         **resolution,
         "linked_rule_ids": operation.linked_rule_ids,
         "player": _player_payload(player, is_admin=is_admin, country=operation_country, region=operation_region, ip=operation_ip if is_admin else None),
-        "access": await _access_state(player, target_type=operation.target_type, target_value=target_value, ip=operation_ip, country=operation_country, region=operation_region),
     }
 
 
-async def _serialize_legacy_ban_row(ban: BanRecord, *, is_admin: bool) -> dict[str, Any]:
-    operation_ip = str(ban.player.ip or "").strip() or None
-    operation_country = ban.player.country
-    operation_region = ban.player.region
-    resolution = _resolution_payload("active") if ban.player.status == "banned" else _resolution_payload("resolved")
-    return {
-        "id": ban.id,
-        "source": "ban_record",
-        "action": "ban",
-        "operation_id": None,
-        "ban_record_id": ban.id,
-        "target_type": "player",
-        "target_value": str(ban.player.nucleus_id) if ban.player.nucleus_id is not None else None,
-        "server_scope": "global",
-        "server_id": None,
-        "reason": ban.reason,
-        "operator": ban.operator,
-        "remark": None,
-        "operation_ip": operation_ip if is_admin else None,
-        "operation_country": operation_country,
-        "operation_region": operation_region,
-        "country": operation_country,
-        "region": operation_region,
-        "operation_created_at": ban.created_at,
-        "created_at": ban.created_at,
-        "acknowledged_at": None,
-        "requires_ack": False,
-        "can_self_unban": False,
-        **resolution,
-        "linked_rule_ids": None,
-        "player": _player_payload(ban.player, is_admin=is_admin, country=operation_country, region=operation_region, ip=operation_ip if is_admin else None),
-        "access": await _access_state(
-            ban.player,
-            target_type="player",
-            target_value=str(ban.player.nucleus_id) if ban.player.nucleus_id is not None else None,
-            ip=operation_ip,
-            country=operation_country,
-            region=operation_region,
-        ),
-    }
-
-
-async def _serialize_legacy_kick_row(player: Player, *, is_admin: bool) -> dict[str, Any]:
-    operation_ip = str(player.ip or "").strip() or None
-    operation_country = player.country
-    operation_region = player.region
-    return {
-        "id": player.id,
-        "source": "player_status",
-        "action": "kick",
-        "operation_id": None,
-        "ban_record_id": None,
-        "target_type": "player",
-        "target_value": str(player.nucleus_id) if player.nucleus_id is not None else None,
-        "server_scope": "global",
-        "server_id": None,
-        "reason": None,
-        "operator": None,
-        "remark": None,
-        "operation_ip": operation_ip if is_admin else None,
-        "operation_country": operation_country,
-        "operation_region": operation_region,
-        "country": operation_country,
-        "region": operation_region,
-        "operation_created_at": player.updated_at,
-        "created_at": player.updated_at,
-        "acknowledged_at": None,
-        "requires_ack": False,
-        "can_self_unban": False,
-        **_resolution_payload("active"),
-        "linked_rule_ids": None,
-        "player": _player_payload(player, is_admin=is_admin, country=operation_country, region=operation_region, ip=operation_ip if is_admin else None),
-        "access": await _access_state(
-            player,
-            target_type="player",
-            target_value=str(player.nucleus_id) if player.nucleus_id is not None else None,
-            ip=operation_ip,
-            country=operation_country,
-            region=operation_region,
-        ),
-    }
-
-
-def _ban_has_access_operation(ban: BanRecord, operations: list[PlayerAccessOperation]) -> bool:
-    ban_player_id = getattr(ban, "player_id", None)
-    for operation in operations:
-        if operation.action != "ban":
-            continue
-        if getattr(operation, "player_id", None) != ban_player_id:
-            continue
-        if (operation.reason or "") != (ban.reason or ""):
-            continue
-        if (operation.operator or "") != (ban.operator or ""):
-            continue
-        if _is_close_datetime(operation.created_at, ban.created_at):
-            return True
-    return False
-
-
-def _player_has_action_operation(player: Player, action: str, operations: list[PlayerAccessOperation]) -> bool:
-    for operation in operations:
-        if operation.action == action and getattr(operation, "player_id", None) == player.id:
-            return True
-    return False
-
-
-def _is_close_datetime(left: Any, right: Any, *, seconds: int = 10) -> bool:
-    try:
-        delta = left - right
-    except TypeError:
-        delta = left.replace(tzinfo=None) - right.replace(tzinfo=None)
-    return abs(delta.total_seconds()) <= seconds

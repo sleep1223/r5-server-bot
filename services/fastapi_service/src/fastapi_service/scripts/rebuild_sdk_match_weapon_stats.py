@@ -190,7 +190,7 @@ async def rebuild_sdk_match_weapon_stats(
                 affected_end_day = affected_day + timedelta(days=1) if affected_end_day is None else max(affected_end_day, affected_day + timedelta(days=1))
 
     if apply and refresh_daily_stats and affected_start_day is not None and affected_end_day is not None:
-        logger.info(f"刷新 player_kill_daily_weapon_opponent_stats: {affected_start_day}..{affected_end_day}")
+        logger.info(f"刷新玩家击杀日统计: {affected_start_day}..{affected_end_day}")
         await refresh_player_kill_daily_stats_window(affected_start_day, affected_end_day)
 
     return summary
@@ -225,7 +225,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--server-id", type=int, help="Only rebuild reports for this Server.id.")
     parser.add_argument("--match-id", type=int, help="Only rebuild reports for this Match.id.")
     parser.add_argument("--batch-size", type=int, default=100, help="Reports to scan per batch.")
-    parser.add_argument("--refresh-daily-stats", action="store_true", help="Refresh player_kill_daily_weapon_opponent_stats for affected report dates after --apply.")
+    parser.add_argument("--refresh-daily-stats", action="store_true", help="Refresh player kill daily weapon/opponent stats for affected report dates after --apply.")
     parser.add_argument("--stop-on-error", action="store_true", help="Abort on the first failed report.")
     return parser
 

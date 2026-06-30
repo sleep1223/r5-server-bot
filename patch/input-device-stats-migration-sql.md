@@ -1,5 +1,7 @@
 # 输入设备统计迁移 SQL
 
+> 已废弃：当前代码已改为 `player_kill_daily_weapon_stats` + `player_kill_daily_opponent_stats` 拆表方案，不要再执行本文中的旧表迁移。请使用 `patch/collapse-daily-stats-opponent-dimension-sql.md`。
+
 用于把历史统计数据的输入设备统一标记为 `unknown`，并为 SDK 对局结束上报产生的新武器统计启用输入设备维度。
 
 ```sql

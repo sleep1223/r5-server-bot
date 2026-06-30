@@ -120,6 +120,18 @@ class PlayerDisconnected(BaseEvent):
         table = "player_disconnected"
 
 
+class PlayerKilled(BaseEvent):
+    weapon = fields.CharField(max_length=100)
+    attacker = fields.ForeignKeyField("models.Player", related_name="kills", null=True)
+    awarded_to = fields.ForeignKeyField("models.Player", related_name="awarded_kills", null=True)
+    match = fields.ForeignKeyField("models.Match", related_name="kill_events", null=True)
+    server = fields.ForeignKeyField("models.Server", related_name="kill_events", null=True)
+    victim = fields.ForeignKeyField("models.Player", related_name="deaths", null=True)
+
+    class Meta:
+        table = "player_killed"
+
+
 class PlayerMatchWeaponStat(models.Model):
     id = fields.IntField(pk=True)
     player = fields.ForeignKeyField("models.Player", related_name="match_weapon_stats")
@@ -174,6 +186,50 @@ class PlayerKillDailyWeaponOpponentStat(models.Model):
             ("stat_date", "weapon", "player_id"),
             ("stat_date", "input_device", "kills"),
             ("stat_date", "kills"),
+        )
+
+
+class PlayerKillDailyWeaponStat(models.Model):
+    id = fields.BigIntField(pk=True)
+    stat_date = fields.DateField(db_index=True)
+    player = fields.ForeignKeyField("models.Player", related_name="daily_weapon_stats")
+    server = fields.ForeignKeyField("models.Server", related_name="daily_weapon_stats")
+    weapon = fields.CharField(max_length=100, db_index=True)
+    kills = fields.IntField(default=0)
+    deaths = fields.IntField(default=0)
+    awarded_kills = fields.IntField(default=0)
+    input_device = fields.CharField(max_length=50, default="unknown", db_index=True)
+    refreshed_at = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "player_kill_daily_weapon_stats"
+        unique_together = (("stat_date", "server", "player", "weapon", "input_device"),)
+        indexes = (
+            ("player_id", "stat_date", "weapon"),
+            ("stat_date", "weapon", "player_id"),
+            ("stat_date", "input_device", "kills"),
+            ("stat_date", "kills"),
+            ("server_id", "stat_date", "player_id"),
+        )
+
+
+class PlayerKillDailyOpponentStat(models.Model):
+    id = fields.BigIntField(pk=True)
+    stat_date = fields.DateField(db_index=True)
+    player = fields.ForeignKeyField("models.Player", related_name="daily_opponent_stats")
+    opponent = fields.ForeignKeyField("models.Player", related_name="daily_as_opponent_stats")
+    server = fields.ForeignKeyField("models.Server", related_name="daily_opponent_stats")
+    kills = fields.IntField(default=0)
+    deaths = fields.IntField(default=0)
+    refreshed_at = fields.DatetimeField(auto_now=True)
+
+    class Meta:
+        table = "player_kill_daily_opponent_stats"
+        unique_together = (("stat_date", "server", "player", "opponent"),)
+        indexes = (
+            ("player_id", "stat_date", "opponent_id"),
+            ("server_id", "stat_date", "player_id"),
+            ("stat_date", "player_id"),
         )
 
 
@@ -292,8 +348,8 @@ class Donation(models.Model):
 class BanRecord(models.Model):
     id = fields.IntField(pk=True)
     player = fields.ForeignKeyField("models.Player", related_name="ban_records")
-    reason = fields.CharField(max_length=50)  # NO_COVER, BE_POLITE, CHEAT, RULES
-    operator = fields.CharField(max_length=255, null=True)  # Who performed the ban (e.g. "admin", "bot")
+    reason = fields.CharField(max_length=50)
+    operator = fields.CharField(max_length=255, null=True)
     created_at = fields.DatetimeField(auto_now_add=True)
 
     class Meta:
@@ -391,6 +447,20 @@ class PlayerAccessNotice(models.Model):
     class Meta:
         table = "player_access_notices"
         indexes = (("uid", "requires_ack", "acknowledged_at"), ("server_scope", "server_id", "requires_ack"))
+
+
+class SteamAuthLog(models.Model):
+    id = fields.IntField(pk=True)
+    steam_id = fields.BigIntField(db_index=True)
+    persona_name = fields.CharField(max_length=255, null=True)
+    server_endpoint = fields.CharField(max_length=255, null=True)
+    client_ip = fields.CharField(max_length=64, null=True, db_index=True)
+    success = fields.BooleanField(db_index=True)
+    error_code = fields.CharField(max_length=64, null=True)
+    created_at = fields.DatetimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        table = "steam_auth_log"
 
 
 class UserBinding(models.Model):

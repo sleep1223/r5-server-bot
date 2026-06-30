@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable, Literal, cast
 
 from loguru import logger
-from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server
+from shared_lib.models import Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server
 from tortoise.exceptions import IntegrityError
 from tortoise.expressions import Q
 
@@ -30,24 +30,28 @@ REASON_TEXTS = {
         "BE_POLITE": "言行不当",
         "CHEAT": "作弊",
         "RULES": "违反规则",
+        "NO_SPAM_CROUCH": "滥用AD蹲动画",
     },
     "en": {
         "NO_COVER": "No-cover rule violation",
         "BE_POLITE": "Inappropriate behavior",
         "CHEAT": "Cheating",
         "RULES": "Rule violation",
+        "NO_SPAM_CROUCH": "No spam crouch",
     },
     "ja": {
         "NO_COVER": "遮蔽物の撤去違反",
         "BE_POLITE": "不適切な言動",
         "CHEAT": "チート行為",
         "RULES": "ルール違反",
+        "NO_SPAM_CROUCH": "しゃがみ連打の悪用",
     },
     "ko": {
         "NO_COVER": "엄폐물 제거 규칙 위반",
         "BE_POLITE": "부적절한 언행",
         "CHEAT": "부정행위",
         "RULES": "규칙 위반",
+        "NO_SPAM_CROUCH": "앉기 스팸",
     },
 }
 GEO_POLICY_REASON_TEXTS = {
@@ -452,12 +456,12 @@ def _now() -> datetime:
 
 
 def _ban_rule_id(uid: str) -> str:
-    return f"legacy_ban:{uid}"
+    return f"ban:uid:{uid}"
 
 
 def _scoped_ban_rule_id(uid: str, server_id: str | None) -> str:
     if server_id:
-        return f"server_ban:{server_id}:{uid}"
+        return f"ban:server:{server_id}:uid:{uid}"
     return _ban_rule_id(uid)
 
 
@@ -543,21 +547,6 @@ def _rule_decision(rule: PlayerAccessRule, *, locale: str = DEFAULT_REASON_LOCAL
     }
 
 
-def _legacy_ban_decision(uid: str, reason: str | None, operator: str | None, *, locale: str = DEFAULT_REASON_LOCALE) -> dict[str, Any]:
-    reason_locale = _normalize_reason_locale(locale)
-    return {
-        "allow": False,
-        "reason": _ban_reason(reason, locale=reason_locale),
-        "reason_locale": reason_locale,
-        "rule_id": _ban_rule_id(uid),
-        "rule_type": "uid",
-        "server_scope": "global",
-        "server_id": None,
-        "source": "legacy_ban",
-        "operator": operator,
-    }
-
-
 def _notice_decision(notice: PlayerAccessNotice, *, locale: str = DEFAULT_REASON_LOCALE) -> dict[str, Any]:
     reason_locale = _normalize_reason_locale(locale)
     reason = action_reason_text(notice.action, notice.reason or notice.message, locale=reason_locale)
@@ -581,8 +570,6 @@ def action_from_access_decision(decision: dict[str, Any]) -> Literal["kick", "ba
         return None
     if decision.get("source") == "kick_notice":
         return "kick"
-    if decision.get("source") == "legacy_ban":
-        return "ban"
 
     rule = decision.get("rule") or {}
     source_action = str(rule.get("source_action") or "").strip().lower()
@@ -906,17 +893,6 @@ async def _matching_geo_deny_rule(
     return sorted(matches, key=lambda r: _scope_sort_key(r, server_id, server_keys=server_keys))[0]
 
 
-async def _legacy_ban_for_uid(uid: str, player: Player | None, *, locale: str = DEFAULT_REASON_LOCALE) -> dict[str, Any] | None:
-    player = player or await _find_player_for_uid(uid)
-    if not player or player.status != "banned":
-        return None
-
-    record = await BanRecord.filter(player=player).order_by("-created_at").first()
-    if record is None:
-        return _legacy_ban_decision(uid, "banned", None, locale=locale)
-    return _legacy_ban_decision(uid, record.reason, record.operator, locale=locale)
-
-
 async def _pending_notice_for_uid(
     uid: str,
     server_id: object | None = None,
@@ -983,10 +959,6 @@ async def evaluate_player_access(
         rule = await _first_exact_rule("uid", "deny", uid_text, server_id=server_id, server_keys=server_keys)
         if rule:
             return _rule_decision(rule, locale=await _rule_locale(rule, fallback=locale))
-
-        legacy_ban = await _legacy_ban_for_uid(uid_text, player, locale=locale)
-        if legacy_ban:
-            return legacy_ban
 
     if ip_text:
         rule = await _first_exact_rule(
@@ -1072,14 +1044,6 @@ async def trace_player_access(
             decision = _rule_decision(rule, locale=await _rule_locale(rule, fallback=reason_locale_from_geo(country, region)))
             return {"decision": decision, "checks": checks, "matched_rules": [decision]}
 
-        legacy_ban = await _legacy_ban_for_uid(uid_text, player)
-        checks.append({
-            "step": "legacy_ban",
-            "matched": legacy_ban is not None,
-            "decision": legacy_ban,
-        })
-        if legacy_ban:
-            return {"decision": legacy_ban, "checks": checks, "matched_rules": [legacy_ban]}
     else:
         checks.append(_trace_record("uid", False, note="uid_missing"))
 
@@ -1799,12 +1763,7 @@ async def create_access_notice(
 
 
 async def sync_legacy_access_records(*, batch_size: int = 5000) -> dict[str, int]:
-    """Backfill old ban/kick state into access-rule/notice tables.
-
-    Older admin paths wrote only players.status / ban_records / kick_count. The
-    SDK access pipeline now reads PlayerAccessRule and PlayerAccessNotice first,
-    so this keeps historical state visible and enforceable without migrations.
-    """
+    """Backfill old player status into access-rule/notice tables."""
     stats = {
         "banned_checked": 0,
         "ban_rules_created": 0,
@@ -1839,11 +1798,10 @@ async def sync_legacy_access_records(*, batch_size: int = 5000) -> dict[str, int
             if uid in existing_rule_values:
                 continue
 
-            record = await BanRecord.filter(player=player).order_by("-created_at", "-id").first()
             rule = await ensure_uid_blacklist_rule(
                 player,
-                record.reason if record else "RULES",
-                record.operator if record else "legacy_sync",
+                "RULES",
+                "legacy_sync",
                 source_action="ban",
             )
             if rule:

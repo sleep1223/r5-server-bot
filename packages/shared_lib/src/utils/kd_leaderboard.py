@@ -20,10 +20,9 @@ async def get_kd_leaderboard(player_name: str):
             p.name AS opponent_name,
             SUM(s.kills)::int AS kills,
             SUM(s.deaths)::int AS deaths
-        FROM player_kill_daily_weapon_opponent_stats s
+        FROM player_kill_daily_opponent_stats s
         LEFT JOIN players p ON p.id = s.opponent_id
         WHERE s.player_id = $1
-          AND s.opponent_id IS NOT NULL
         GROUP BY s.opponent_id, p.name
         HAVING SUM(s.kills) > 0 OR SUM(s.deaths) > 0
         """,
@@ -65,7 +64,7 @@ async def get_global_kill_leaderboard(limit: int = 20):
             s.player_id,
             p.name,
             SUM(s.kills)::int AS total_kills
-        FROM player_kill_daily_weapon_opponent_stats s
+        FROM player_kill_daily_weapon_stats s
         LEFT JOIN players p ON p.id = s.player_id
         GROUP BY s.player_id, p.name
         HAVING SUM(s.kills) > 0

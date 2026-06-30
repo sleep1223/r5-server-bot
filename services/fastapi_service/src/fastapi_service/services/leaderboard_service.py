@@ -11,7 +11,8 @@ from fastapi_service.core.utils import CN_TZ, calc_kd, get_date_range
 
 # ── Common helpers ──
 
-_DAILY_STATS_TABLE = "player_kill_daily_weapon_opponent_stats"
+_DAILY_WEAPON_STATS_TABLE = "player_kill_daily_weapon_stats"
+_DAILY_OPPONENT_STATS_TABLE = "player_kill_daily_opponent_stats"
 
 
 def _normalize_input_device(value: str | None) -> str | None:
@@ -139,13 +140,12 @@ async def _aggregate_kills_deaths_from_daily_stats(
         input_device=input_device,
         excluded_server_ids=excluded_server_ids,
     )
-
     sql = f"""
     SELECT
         player_id,
         SUM(kills)::int AS kills,
         SUM(deaths)::int AS deaths
-    FROM {_DAILY_STATS_TABLE} s
+    FROM {_DAILY_WEAPON_STATS_TABLE} s
     {where_sql}
     GROUP BY player_id
     HAVING SUM(kills) > 0 OR SUM(deaths) > 0
@@ -256,7 +256,7 @@ async def get_weapon_ranking(
             s.input_device,
             SUM(s.kills)::int AS kills,
             SUM(s.deaths)::int AS deaths
-        FROM {_DAILY_STATS_TABLE} s
+        FROM {_DAILY_WEAPON_STATS_TABLE} s
         {where_sql}
         GROUP BY s.weapon, s.player_id, s.input_device
         HAVING SUM(s.kills) > 0 OR SUM(s.deaths) > 0
@@ -351,29 +351,14 @@ async def get_player_vs_all(
     )
     where_sql = _extend_where_sql(where_sql, f"s.player_id = {_append_param(params, player_id)}")
 
-    total_rows = await connections.get("default").execute_query_dict(
-        f"""
-        SELECT
-            COALESCE(SUM(s.kills), 0)::int AS kills,
-            COALESCE(SUM(s.deaths), 0)::int AS deaths
-        FROM {_DAILY_STATS_TABLE} s
-        {where_sql}
-        """,
-        params,
-    )
-    total_row = total_rows[0] if total_rows else {"kills": 0, "deaths": 0}
-    total_kills = total_row["kills"] or 0
-    total_deaths = total_row["deaths"] or 0
-    opponent_where_sql = _extend_where_sql(where_sql, "s.opponent_id IS NOT NULL")
-
     rows = await connections.get("default").execute_query_dict(
         f"""
         SELECT
             s.opponent_id,
             SUM(s.kills)::int AS kills,
             SUM(s.deaths)::int AS deaths
-        FROM {_DAILY_STATS_TABLE} s
-        {opponent_where_sql}
+        FROM {_DAILY_OPPONENT_STATS_TABLE} s
+        {where_sql}
         GROUP BY s.opponent_id
         HAVING SUM(s.kills) > 0 OR SUM(s.deaths) > 0
         """,
@@ -383,6 +368,9 @@ async def get_player_vs_all(
     opponents_stats: dict[int, dict[str, int]] = {}
     for row in rows:
         opponents_stats[row["opponent_id"]] = {"kills": row["kills"] or 0, "deaths": row["deaths"] or 0}
+
+    total_kills = sum(data["kills"] for data in opponents_stats.values())
+    total_deaths = sum(data["deaths"] for data in opponents_stats.values())
 
     if not opponents_stats:
         return [], 0, _build_vs_all_summary(total_kills, total_deaths, None, None)
@@ -484,7 +472,7 @@ async def get_player_weapon_stats(
             s.input_device,
             SUM(s.kills)::int AS kills,
             SUM(s.deaths)::int AS deaths
-        FROM {_DAILY_STATS_TABLE} s
+        FROM {_DAILY_WEAPON_STATS_TABLE} s
         {where_sql}
         GROUP BY s.weapon, s.input_device
         HAVING SUM(s.kills) > 0 OR SUM(s.deaths) > 0

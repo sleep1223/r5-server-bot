@@ -16,12 +16,13 @@ kick_service = admin_service.create_subservice("kick")
 unban_service = admin_service.create_subservice("unban")
 alias_service = admin_service.create_subservice("alias")
 
-ALLOWED_REASONS = ["NO_COVER", "BE_POLITE", "CHEAT", "RULES"]
+ALLOWED_REASONS = ["NO_COVER", "BE_POLITE", "CHEAT", "RULES", "NO_SPAM_CROUCH"]
 REASON_CN = {
     "NO_COVER": "撤回掩体",
     "BE_POLITE": "言行不当",
     "CHEAT": "作弊",
     "RULES": "违反规则",
+    "NO_SPAM_CROUCH": "滥用AD蹲动画",
 }
 ERROR_CN = {
     "2001": "未找到该玩家",

@@ -4,7 +4,7 @@ from datetime import datetime
 from fastapi_service.api.v1 import admin as admin_api
 from fastapi_service.core.errors import ErrorCode
 from fastapi_service.services import admin_management_service, admin_service
-from shared_lib.models import BanRecord, Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, UserBinding
+from shared_lib.models import Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, UserBinding
 from tortoise import Tortoise
 
 TORTOISE_TEST_CONFIG = {
@@ -60,9 +60,8 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["source"], "access_operation")
         self.assertEqual(rows[0]["target_value"], "CN_Aeroese")
 
-    async def test_bans_exact_player_name_search_is_case_insensitive_for_legacy_bans(self) -> None:
-        player = await Player.create(nucleus_id=1009800111070, name="JP_Player", status="banned")
-        await BanRecord.create(player=player, reason="CHEAT", operator="unit-test")
+    async def test_bans_ignores_player_status_without_access_operation(self) -> None:
+        await Player.create(nucleus_id=1009800111070, name="JP_Player", status="banned")
 
         rows, total = await admin_service.list_bans(
             page_size=20,
@@ -71,9 +70,8 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
             player_name="jp_player",
         )
 
-        self.assertEqual(total, 1)
-        self.assertEqual(rows[0]["source"], "ban_record")
-        self.assertEqual(rows[0]["player"]["name"], "JP_Player")
+        self.assertEqual(total, 0)
+        self.assertEqual(rows, [])
 
     async def test_only_pending_kick_notice_can_self_unban(self) -> None:
         player = await Player.create(nucleus_id=1009800111071, name="Kick_Player", status="kicked")
@@ -156,7 +154,6 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
     async def test_bans_can_filter_acknowledged_notice_rows(self) -> None:
         pending_player = await Player.create(nucleus_id=1009800111080, name="Pending_Notice", status="kicked")
         confirmed_player = await Player.create(nucleus_id=1009800111081, name="Confirmed_Notice", status="offline")
-        legacy_player = await Player.create(nucleus_id=1009800111082, name="Legacy_Ban", status="banned")
         pending_operation = await PlayerAccessOperation.create(
             action="kick",
             target_type="player",
@@ -195,18 +192,17 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
             acknowledged_at=confirmed_at,
             operation=confirmed_operation,
         )
-        await BanRecord.create(player=legacy_player, reason="CHEAT", operator="unit-test")
 
         all_rows, all_total = await admin_service.list_bans(page_size=20, offset=0)
         pending_rows, pending_total = await admin_service.list_bans(page_size=20, offset=0, acknowledged=False)
         confirmed_rows, confirmed_total = await admin_service.list_bans(page_size=20, offset=0, acknowledged=True)
 
-        self.assertEqual(all_total, 3)
+        self.assertEqual(all_total, 2)
         self.assertEqual(pending_total, 1)
         self.assertEqual(pending_rows[0]["player"]["name"], "Pending_Notice")
         self.assertEqual(confirmed_total, 1)
         self.assertEqual(confirmed_rows[0]["player"]["name"], "Confirmed_Notice")
-        self.assertEqual({row["player"]["name"] for row in all_rows}, {"Pending_Notice", "Confirmed_Notice", "Legacy_Ban"})
+        self.assertEqual({row["player"]["name"] for row in all_rows}, {"Pending_Notice", "Confirmed_Notice"})
 
     async def test_unban_operation_marks_ban_row_resolved(self) -> None:
         player = await Player.create(nucleus_id=1009800111073, name="Unbanned_Player", status="offline")
@@ -360,7 +356,6 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
         uid_rule = await PlayerAccessRule.get(rule_type="uid", value=str(player.nucleus_id), source_action="ban")
         self.assertEqual(uid_rule.reason, "NO_COVER")
         self.assertEqual(await PlayerAccessRule.filter(rule_type="ip", source_action="ban", player=player).count(), 0)
-        self.assertEqual(await BanRecord.filter(player=player).count(), 1)
         await player.refresh_from_db()
         self.assertEqual(player.kick_count, 1)
         self.assertEqual(player.ban_count, 1)
@@ -389,7 +384,6 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
         assert first_data is not None
         assert second_data is not None
         self.assertEqual(await PlayerAccessOperation.filter(player=player, action="ban").count(), 1)
-        self.assertEqual(await BanRecord.filter(player=player).count(), 1)
         self.assertEqual(second_data["operation"]["id"], first_data["operation"]["id"])
         self.assertEqual(second_data["operation"]["reason"], "CHEAT")
         self.assertTrue(second_data["operation_reused"])
@@ -398,12 +392,10 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
 
         uid_rule = await PlayerAccessRule.get(rule_type="uid", value=str(player.nucleus_id), source_action="ban")
         ip_rule = await PlayerAccessRule.get(rule_type="ip", source_action="ban")
-        ban_record = await BanRecord.get(player=player)
         self.assertEqual(uid_rule.reason, "CHEAT")
         self.assertEqual(ip_rule.value, "203.0.113.88")
         self.assertEqual(ip_rule.reason, "CHEAT")
         self.assertEqual(getattr(ip_rule, "source_operation_id", None), second_data["operation"]["id"])
-        self.assertEqual(ban_record.reason, "CHEAT")
 
         await player.refresh_from_db()
         self.assertEqual(player.ban_count, 1)
