@@ -8,11 +8,15 @@ from typing import Any
 from shared_lib.models import Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, UserBinding
 from tortoise.expressions import F, Q
 
+from fastapi_service.core.cache import server_cache
 from fastapi_service.core.constants import ALLOWED_REASONS
 from fastapi_service.core.errors import ErrorCode
 from fastapi_service.core.response import error
 from fastapi_service.core.utils import CN_TZ
 from fastapi_service.services import admin_service, player_access_service, player_service
+
+_DISPLAY_STATUS_SCAN_BATCH_SIZE = 500
+_NON_ONLINE_DB_STATUSES = ("banned", "kicked")
 
 
 def _server_key(host: str | None, port: int | None) -> str | None:
@@ -768,6 +772,90 @@ async def _serialize_player_list_items(players: list[Player], access_server_id: 
     ]
 
 
+async def _serialize_player_list_items_with_access(players: list[Player], access_by_player_id: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
+    qq_by_player_id = await _players_qq_map(players)
+    return [
+        _serialize_player_list_item(
+            player,
+            qq=qq_by_player_id.get(player.id),
+            access=access_by_player_id.get(player.id) or player_access_service._default_allow(),
+        )
+        for player in players
+    ]
+
+
+def _display_status_from_online_ids(player: Player, online_nucleus_ids: set[str], access: dict[str, Any] | None) -> str:
+    access_action = _access_denied_action(access)
+    if player.status == "banned":
+        return "ban"
+    if access_action == "ban":
+        return "ban"
+    if player.status == "kicked":
+        return "kick"
+    if access_action == "kick":
+        return "kick"
+    if player.nucleus_id is not None and str(player.nucleus_id) in online_nucleus_ids:
+        return "online"
+    return "offline"
+
+
+def _online_nucleus_id_values() -> tuple[set[str], list[int]]:
+    online_nucleus_ids = {uid for uid in server_cache.get_online_nucleus_ids() if uid.isdigit()}
+    return online_nucleus_ids, [int(uid) for uid in online_nucleus_ids]
+
+
+def _display_status_candidate_query(query: Any, desired_status: str, online_nucleus_id_values: list[int]) -> tuple[Any, bool]:
+    if desired_status == "online":
+        if not online_nucleus_id_values:
+            return query, True
+        return query.exclude(status__in=_NON_ONLINE_DB_STATUSES).filter(nucleus_id__in=online_nucleus_id_values), False
+    if desired_status == "offline":
+        query = query.exclude(status__in=_NON_ONLINE_DB_STATUSES)
+        if online_nucleus_id_values:
+            query = query.exclude(nucleus_id__in=online_nucleus_id_values)
+    return query, False
+
+
+async def _list_players_by_display_status(
+    query: Any,
+    *,
+    desired_status: str,
+    access_server_id: str | None,
+    page_size: int,
+    offset: int,
+) -> tuple[list[dict[str, Any]], int]:
+    online_nucleus_ids, online_nucleus_id_values = _online_nucleus_id_values()
+    query, empty = _display_status_candidate_query(query, desired_status, online_nucleus_id_values)
+    if empty:
+        return [], 0
+
+    total = 0
+    page_players: list[Player] = []
+    page_access_by_player_id: dict[int, dict[str, Any]] = {}
+    last_id: int | None = None
+
+    while True:
+        batch_query = query.filter(id__lt=last_id) if last_id is not None else query
+        players = await batch_query.order_by("-id").limit(_DISPLAY_STATUS_SCAN_BATCH_SIZE)
+        if not players:
+            break
+
+        last_id = players[-1].id
+        access_by_player_id = await _players_access_state_map(players, access_server_id)
+        for player in players:
+            access = access_by_player_id.get(player.id) or player_access_service._default_allow()
+            if _display_status_from_online_ids(player, online_nucleus_ids, access) != desired_status:
+                continue
+
+            if total >= offset and len(page_players) < page_size:
+                page_players.append(player)
+                page_access_by_player_id[player.id] = access
+            total += 1
+
+    data = await _serialize_player_list_items_with_access(page_players, page_access_by_player_id)
+    return data, total
+
+
 async def list_players(
     *,
     q: str | None = None,
@@ -803,14 +891,13 @@ async def list_players(
         query = query.filter(is_admin=is_admin)
 
     if desired_status:
-        matched: list[dict[str, Any]] = []
-        players = await query.order_by("-id")
-        for start in range(0, len(players), page_size):
-            items = await _serialize_player_list_items(players[start : start + page_size], access_server_id)
-            for item in items:
-                if item["display_status"] == desired_status:
-                    matched.append(item)
-        return matched[offset : offset + page_size], len(matched)
+        return await _list_players_by_display_status(
+            query,
+            desired_status=desired_status,
+            access_server_id=access_server_id,
+            page_size=page_size,
+            offset=offset,
+        )
 
     total = await query.count()
     players = await query.order_by("-id").offset(offset).limit(page_size)
