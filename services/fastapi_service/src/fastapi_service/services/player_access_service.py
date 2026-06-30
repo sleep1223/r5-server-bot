@@ -180,6 +180,22 @@ def _append_unique_text(items: list[str], value: object | None) -> None:
         items.append(text)
 
 
+def _append_unique_int(items: list[int], value: object | None) -> None:
+    if value is None:
+        return
+    if isinstance(value, Server):
+        value = value.id
+    text = str(value).strip()
+    if not text:
+        return
+    try:
+        parsed = int(text)
+    except (TypeError, ValueError):
+        return
+    if parsed > 0 and parsed not in items:
+        items.append(parsed)
+
+
 def _server_address_key(server_ip: object | None, server_port: object | None) -> str | None:
     host = _normalize_server_identity_ip(server_ip) or None
     port = _safe_int(server_port, 0)
@@ -191,24 +207,24 @@ def _server_address_key(server_ip: object | None, server_port: object | None) ->
 def _normalize_server_keys(
     server_id: object | None = None,
     server_keys: Iterable[object] | object | None = None,
-) -> list[str]:
-    keys: list[str] = []
-    _append_unique_text(keys, server_id)
+) -> list[int]:
+    keys: list[int] = []
+    _append_unique_int(keys, server_id)
     if server_keys is None:
         return keys
 
     if isinstance(server_keys, str):
-        _append_unique_text(keys, server_keys)
+        _append_unique_int(keys, server_keys)
         return keys
 
     try:
         iterator = iter(server_keys)  # type: ignore[arg-type]
     except TypeError:
-        _append_unique_text(keys, server_keys)
+        _append_unique_int(keys, server_keys)
         return keys
 
     for key in iterator:
-        _append_unique_text(keys, key)
+        _append_unique_int(keys, key)
     return keys
 
 
@@ -459,7 +475,7 @@ def _ban_rule_id(uid: str) -> str:
     return f"ban:uid:{uid}"
 
 
-def _scoped_ban_rule_id(uid: str, server_id: str | None) -> str:
+def _scoped_ban_rule_id(uid: str, server_id: int | None) -> str:
     if server_id:
         return f"ban:server:{server_id}:uid:{uid}"
     return _ban_rule_id(uid)
@@ -473,14 +489,31 @@ def _kick_reason(reason: str | None, *, locale: str = DEFAULT_REASON_LOCALE) -> 
     return action_reason_text("kick", reason, locale=locale)
 
 
-def _normalize_server_scope(server_scope: object | None, server_id: object | None = None) -> tuple[str, str | None]:
+def _normalize_server_db_id(server_id: object | None) -> int | None:
+    if server_id is None:
+        return None
+    if isinstance(server_id, Server):
+        server_id = server_id.id
+    text = str(server_id).strip()
+    if not text:
+        return None
+    try:
+        parsed = int(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("server_scope=server 时必须提供有效的 server_db_id") from exc
+    if parsed <= 0:
+        raise ValueError("server_scope=server 时必须提供有效的 server_db_id")
+    return parsed
+
+
+def _normalize_server_scope(server_scope: object | None, server_id: object | None = None) -> tuple[str, int | None]:
     scope = str(server_scope or "global").strip().lower()
     if scope not in SERVER_SCOPES:
         raise ValueError("server_scope 必须是 global 或 server")
 
-    normalized_server_id = str(server_id or "").strip() or None
+    normalized_server_id = _normalize_server_db_id(server_id)
     if scope == "server" and not normalized_server_id:
-        raise ValueError("server_scope=server 时必须提供 server_id")
+        raise ValueError("server_scope=server 时必须提供 server_db_id")
     if scope == "global":
         normalized_server_id = None
     return scope, normalized_server_id
@@ -514,7 +547,7 @@ def _scope_sort_key(
 ) -> tuple[int, int, int, int]:
     normalized_server_keys = _normalize_server_keys(server_id, server_keys)
     key_rank = {key: index for index, key in enumerate(normalized_server_keys)}
-    matched_rank = key_rank.get(str(rule.server_id or "").strip(), len(key_rank))
+    matched_rank = key_rank.get(rule.server_id, len(key_rank))
     scope_rank = 0 if rule.server_scope == "server" and matched_rank < len(key_rank) else 1
     return scope_rank, rule.priority, matched_rank, rule.id
 
@@ -527,6 +560,7 @@ def _default_allow() -> dict[str, Any]:
         "rule_type": None,
         "server_scope": None,
         "server_id": None,
+        "server_db_id": None,
         "source": "default_allow",
     }
 
@@ -542,6 +576,7 @@ def _rule_decision(rule: PlayerAccessRule, *, locale: str = DEFAULT_REASON_LOCAL
         "rule_type": rule.rule_type,
         "server_scope": rule.server_scope,
         "server_id": rule.server_id,
+        "server_db_id": rule.server_id,
         "rule": serialize_access_rule(rule),
         "source": "player_access_rule",
     }
@@ -560,6 +595,7 @@ def _notice_decision(notice: PlayerAccessNotice, *, locale: str = DEFAULT_REASON
         "rule_type": "notice",
         "server_scope": notice.server_scope,
         "server_id": notice.server_id,
+        "server_db_id": notice.server_id,
         "source": "kick_notice",
         "notice": serialize_access_notice(notice),
     }
@@ -844,6 +880,7 @@ def _server_geo_policy_decision(
         "rule_type": config_rule.rule_type,
         "server_scope": config_rule.server_scope,
         "server_id": config_rule.server_id,
+        "server_db_id": config_rule.server_id,
         "rule": rule,
         "source": "server_geo_policy",
     }
@@ -922,7 +959,7 @@ async def _pending_notice_for_uid(
     key_rank = {key: index for index, key in enumerate(normalized_server_keys)}
 
     def _notice_sort_key(notice: PlayerAccessNotice) -> tuple[int, int, int]:
-        matched_rank = key_rank.get(str(notice.server_id or "").strip(), len(key_rank))
+        matched_rank = key_rank.get(notice.server_id, len(key_rank))
         scope_rank = 0 if notice.server_scope == "server" and matched_rank < len(key_rank) else 1
         return scope_rank, matched_rank, -notice.id
 
@@ -1151,7 +1188,7 @@ async def check_player_access(
     player_name: str | None,
     ip: object | None,
     port: int | None = None,
-    server_id: str | None = None,
+    server_id: int | None = None,
     server_ip: object | None = None,
     server_port: object | None = None,
     server_name: object | None = None,
@@ -1164,7 +1201,8 @@ async def check_player_access(
         has_status=False,
     )
     server_keys = identity["server_keys"]
-    scoped_server_id = identity["canonical_key"]
+    server = identity.get("server")
+    scoped_server_id = server.id if isinstance(server, Server) else None
     player = await upsert_access_player_snapshot(
         uid=uid,
         nucleus_id=nucleus_id,
@@ -1240,7 +1278,8 @@ async def process_online_players_report(
     )
     server_keys = identity["server_keys"]
     cache_server_id = identity["canonical_key"] or "unknown"
-    scoped_server_id = identity["canonical_key"]
+    server = identity.get("server")
+    scoped_server_id = server.id if isinstance(server, Server) else None
     server_country, server_region = await _resolve_server_geo(identity, report.get("serverIp"))
 
     reported_players = report.get("players") or []
@@ -1371,7 +1410,7 @@ async def ensure_uid_blacklist_rule(
 
 async def disable_uid_blacklist_rule(nucleus_id: int, *, server_id: object | None = None) -> None:
     uid = str(nucleus_id)
-    rule_id = _scoped_ban_rule_id(uid, str(server_id).strip() if server_id else None)
+    rule_id = _scoped_ban_rule_id(uid, _normalize_server_db_id(server_id))
     try:
         await PlayerAccessRule.filter(
             rule_id=rule_id,
@@ -1459,6 +1498,31 @@ def _serialize_access_player(player: Player | None) -> dict[str, Any] | None:
     }
 
 
+def _serialize_access_server(server: Server | None) -> dict[str, Any] | None:
+    if not server:
+        return None
+    label = server.short_name or server.name or f"{server.host}:{server.port}"
+    return {
+        "id": server.id,
+        "name": server.name,
+        "short_name": server.short_name,
+        "label": label,
+        "host": server.host,
+        "port": server.port,
+        "region": server.region,
+        "map": server.map,
+        "playlist": server.playlist,
+        "player_count": server.player_count,
+        "max_players": server.max_players,
+        "has_status": server.has_status,
+    }
+
+
+def _access_related_server(value: object) -> Server | None:
+    server = getattr(value, "server", None)
+    return server if isinstance(server, Server) else None
+
+
 async def _access_player_maps(
     *,
     player_ids: set[int] | None = None,
@@ -1509,6 +1573,7 @@ def _enrich_access_rule_payload(
     if not player and uid is not None:
         player = players_by_uid.get(uid)
     payload["player"] = _serialize_access_player(player)
+    payload["server"] = _serialize_access_server(_access_related_server(rule))
     return payload
 
 
@@ -1525,6 +1590,7 @@ def _enrich_access_operation_payload(
     if not player and uid is not None:
         player = players_by_uid.get(uid)
     payload["player"] = _serialize_access_player(player)
+    payload["server"] = _serialize_access_server(_access_related_server(operation))
     return payload
 
 
@@ -1536,6 +1602,8 @@ def serialize_access_rule(rule: PlayerAccessRule) -> dict[str, Any]:
         "value": rule.value,
         "server_scope": rule.server_scope,
         "server_id": rule.server_id,
+        "server_db_id": rule.server_id,
+        "server": _serialize_access_server(_access_related_server(rule)),
         "reason": rule.reason,
         "remark": rule.remark,
         "rule_id": rule.rule_id,
@@ -1560,6 +1628,8 @@ def serialize_access_operation(operation: PlayerAccessOperation) -> dict[str, An
         "normalized_target": operation.normalized_target,
         "server_scope": operation.server_scope,
         "server_id": operation.server_id,
+        "server_db_id": operation.server_id,
+        "server": _serialize_access_server(_access_related_server(operation)),
         "reason": operation.reason,
         "remark": operation.remark,
         "operator": operation.operator,
@@ -1581,6 +1651,8 @@ def serialize_access_notice(notice: PlayerAccessNotice) -> dict[str, Any]:
         "message_context": notice.message_context,
         "server_scope": notice.server_scope,
         "server_id": notice.server_id,
+        "server_db_id": notice.server_id,
+        "server": _serialize_access_server(_access_related_server(notice)),
         "requires_ack": notice.requires_ack,
         "acknowledged_at": notice.acknowledged_at,
         "expires_at": notice.expires_at,
@@ -1596,7 +1668,7 @@ async def list_access_rules(
     rule_type: str | None = None,
     action: str | None = None,
     server_scope: str | None = None,
-    server_id: str | None = None,
+    server_id: int | None = None,
     enabled: bool | None = None,
     page_size: int = 20,
     offset: int = 0,
@@ -1617,7 +1689,7 @@ async def list_access_rules(
 
     total = await query.count()
     rules = await (
-        query.select_related("player")
+        query.select_related("player", "server")
         .order_by("server_scope", "priority", "-updated_at")
         .offset(offset)
         .limit(page_size)
@@ -1632,7 +1704,7 @@ async def list_access_rules(
 
 
 async def get_access_rule(rule_id: int) -> PlayerAccessRule | None:
-    return await PlayerAccessRule.get_or_none(id=rule_id)
+    return await PlayerAccessRule.filter(id=rule_id).select_related("player", "server").first()
 
 
 async def create_access_rule(
@@ -1679,6 +1751,8 @@ async def create_access_rule(
 
 
 async def update_access_rule(rule: PlayerAccessRule, **updates: Any) -> PlayerAccessRule:
+    if "server_db_id" in updates and "server_id" not in updates:
+        updates["server_id"] = updates["server_db_id"]
     normalized: dict[str, Any] = {}
     if {"rule_type", "action", "value", "server_scope", "server_id"} & updates.keys():
         normalized = normalize_access_rule_payload(
@@ -1771,7 +1845,7 @@ async def list_access_operations(
     q: str | None = None,
     player_id: int | None = None,
     server_scope: str | None = None,
-    server_id: str | None = None,
+    server_id: int | None = None,
     page_size: int = 20,
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
@@ -1791,7 +1865,7 @@ async def list_access_operations(
 
     total = await query.count()
     operations = await (
-        query.select_related("player")
+        query.select_related("player", "server")
         .order_by("-created_at", "-id")
         .offset(offset)
         .limit(page_size)
@@ -1966,7 +2040,7 @@ async def list_access_notices(
     requires_ack: bool | None = None,
     acknowledged: bool | None = None,
     server_scope: str | None = None,
-    server_id: str | None = None,
+    server_id: int | None = None,
     page_size: int = 20,
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
@@ -1985,12 +2059,12 @@ async def list_access_notices(
         query = query.filter(server_id=server_id)
 
     total = await query.count()
-    notices = await query.order_by("-created_at", "-id").offset(offset).limit(page_size)
+    notices = await query.select_related("player", "server").order_by("-created_at", "-id").offset(offset).limit(page_size)
     return [serialize_access_notice(notice) for notice in notices], total
 
 
 async def get_access_notice(notice_id: int) -> PlayerAccessNotice | None:
-    return await PlayerAccessNotice.get_or_none(id=notice_id)
+    return await PlayerAccessNotice.filter(id=notice_id).select_related("player", "server").first()
 
 
 async def acknowledge_access_notice(notice: PlayerAccessNotice) -> PlayerAccessNotice:
@@ -2018,7 +2092,7 @@ async def release_linked_rules_for_uid(
 
     query = PlayerAccessRule.filter(rule_type="uid", value=uid_text, enabled=True)
     if server_id:
-        query = query.filter(server_scope="server", server_id=str(server_id).strip())
+        query = query.filter(server_scope="server", server_id=_normalize_server_db_id(server_id))
     else:
         query = query.filter(server_scope="global")
 

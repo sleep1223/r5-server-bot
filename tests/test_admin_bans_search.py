@@ -3,8 +3,8 @@ from datetime import datetime
 
 from fastapi_service.api.v1 import admin as admin_api
 from fastapi_service.core.errors import ErrorCode
-from fastapi_service.services import admin_management_service, admin_service, player_access_service
-from shared_lib.models import Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, UserBinding
+from fastapi_service.services import admin_management_service, admin_service, player_access_service, server_service
+from shared_lib.models import Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server, UserBinding
 from tortoise import Tortoise
 
 TORTOISE_TEST_CONFIG = {
@@ -276,6 +276,12 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_admin_action_prefers_address_server_key_over_legacy_server_id(self) -> None:
         player = await Player.create(nucleus_id=1009800111076, name="Scoped_Kick_Player")
+        server = await Server.create(
+            server_id="legacy-config-id",
+            host="1.2.3.4",
+            port=37015,
+            name="Scoped Test Server",
+        )
 
         data, err = await admin_management_service.apply_access_action(
             action="kick",
@@ -290,9 +296,49 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(err)
         assert data is not None
-        self.assertEqual(data["server_id"], "1.2.3.4:37015")
-        self.assertEqual(data["operation"]["server_id"], "1.2.3.4:37015")
-        self.assertEqual(data["notice"]["server_id"], "1.2.3.4:37015")
+        self.assertEqual(data["server_db_id"], server.id)
+        self.assertEqual(data["operation"]["server_db_id"], server.id)
+        self.assertEqual(data["notice"]["server_db_id"], server.id)
+
+    async def test_admin_server_options_only_include_self_hosted_servers(self) -> None:
+        visible_without_short_name = await Server.create(
+            server_id="visible-server",
+            host="10.0.0.1",
+            port=37015,
+            name="Alpha Self Hosted Server",
+            is_self_hosted=True,
+        )
+        visible_with_short_name = await Server.create(
+            server_id="visible-short-name-server",
+            host="10.0.0.2",
+            port=37015,
+            name="Beta Self Hosted Server",
+            short_name="短名服",
+            is_self_hosted=True,
+        )
+        await Server.create(
+            server_id="hidden-non-self-hosted",
+            host="10.0.0.3",
+            port=37015,
+            name="Hidden Test Server",
+            short_name="隐藏服",
+            is_self_hosted=False,
+        )
+        await Server.create(
+            server_id="hidden-empty-short-name",
+            host="10.0.0.4",
+            port=37015,
+            name="Empty Short Name Server",
+            short_name="",
+            is_self_hosted=False,
+        )
+
+        rows = await server_service.list_admin_server_options()
+        hidden_rows = await server_service.list_admin_server_options(q="Hidden")
+
+        self.assertEqual([row["id"] for row in rows], [visible_without_short_name.id, visible_with_short_name.id])
+        self.assertEqual(rows[0]["label"], "Alpha Self Hosted Server")
+        self.assertEqual(hidden_rows, [])
 
     async def test_admin_player_list_uses_id_order_and_bulk_fields(self) -> None:
         old_player = await Player.create(nucleus_id=1009800111090, name="Old_List_Player")

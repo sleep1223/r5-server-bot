@@ -42,6 +42,8 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         await Tortoise.init(config=TORTOISE_TEST_CONFIG)
         await Tortoise.generate_schemas()
+        self.cn_server: Server | None = None
+        self.hk_server: Server | None = None
         self._original_resolve_geo = access_service._resolve_geo
         access_service._resolve_geo = self._fake_resolve_geo
         server_cache.servers.clear()
@@ -60,6 +62,30 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
     async def _fake_resolve_geo(self, ip: str) -> tuple[str | None, str | None]:
         return self.GEO_BY_IP.get(ip, (None, None))
 
+    async def _test_server_for_key(self, server_key: str) -> Server:
+        if server_key == self.HK_SERVER_KEY:
+            if self.hk_server is None:
+                self.hk_server = await Server.get_or_none(host="122.10.126.55", port=37015) or await Server.create(
+                    server_id=None,
+                    host="122.10.126.55",
+                    port=37015,
+                    name="HK Test Server",
+                    region="HK",
+                    is_self_hosted=True,
+                )
+            return self.hk_server
+
+        if self.cn_server is None:
+            self.cn_server = await Server.get_or_none(host="119.188.164.105", port=37015) or await Server.create(
+                server_id=None,
+                host="119.188.164.105",
+                port=37015,
+                name="CN Test Server",
+                region="CN",
+                is_self_hosted=True,
+            )
+        return self.cn_server
+
     async def _deny_rule(
         self,
         *,
@@ -67,17 +93,22 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         value: str,
         reason: str,
         source_action: str = "ban",
-        server_id: str = CN_SERVER_KEY,
+        server_id: object | None = None,
         rule_id: str | None = None,
     ) -> PlayerAccessRule:
+        scope_server_id = server_id
+        if scope_server_id is None or scope_server_id == self.CN_SERVER_KEY:
+            scope_server_id = (await self._test_server_for_key(self.CN_SERVER_KEY)).id
+        elif scope_server_id == self.HK_SERVER_KEY:
+            scope_server_id = (await self._test_server_for_key(self.HK_SERVER_KEY)).id
         return await PlayerAccessRule.create(
             rule_type=rule_type,
             action="deny",
             value=value,
             server_scope="server",
-            server_id=server_id,
+            server_id=scope_server_id,
             reason=reason,
-            rule_id=rule_id or f"{server_id}:{rule_type}:{value}",
+            rule_id=rule_id or f"{scope_server_id}:{rule_type}:{value}",
             source_action=source_action,
             priority=10,
         )
@@ -261,6 +292,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision["source"], "default_allow")
 
     async def test_server_disabled_geo_policy_overrides_enabled_global_policy(self) -> None:
+        cn_server = await self._test_server_for_key(self.CN_SERVER_KEY)
         await PlayerAccessRule.create(
             rule_type=access_service.GEO_POLICY_RULE_TYPE,
             action="deny",
@@ -276,7 +308,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
             action="deny",
             value=access_service.GEO_POLICY_RULE_VALUE,
             server_scope="server",
-            server_id=self.CN_SERVER_KEY,
+            server_id=cn_server.id,
             rule_id="server_geo_policy:cn-address:disabled",
             reason=access_service.REGION_LOCK_REASON,
             source_action="kick",
@@ -294,6 +326,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision["source"], "default_allow")
 
     async def test_server_enabled_geo_policy_overrides_disabled_global_policy(self) -> None:
+        cn_server = await self._test_server_for_key(self.CN_SERVER_KEY)
         await PlayerAccessRule.create(
             rule_type=access_service.GEO_POLICY_RULE_TYPE,
             action="deny",
@@ -309,7 +342,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
             action="deny",
             value=access_service.GEO_POLICY_RULE_VALUE,
             server_scope="server",
-            server_id=self.CN_SERVER_KEY,
+            server_id=cn_server.id,
             rule_id="server_geo_policy:cn-address:enabled",
             reason=access_service.REGION_LOCK_REASON,
             source_action="kick",

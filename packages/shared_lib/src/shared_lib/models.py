@@ -363,7 +363,13 @@ class PlayerAccessOperation(models.Model):
     target_value = fields.CharField(max_length=255, db_index=True)
     normalized_target = fields.CharField(max_length=255, null=True, db_index=True)
     server_scope = fields.CharField(max_length=20, default="global", db_index=True)
-    server_id = fields.CharField(max_length=128, null=True, db_index=True)
+    server = fields.ForeignKeyField(
+        "models.Server",
+        related_name="access_operations",
+        null=True,
+        on_delete=fields.SET_NULL,
+    )
+    server_id: int | None
     reason = fields.CharField(max_length=50, null=True)
     remark = fields.TextField(null=True)
     operator = fields.CharField(max_length=255, null=True)
@@ -388,7 +394,13 @@ class PlayerAccessRule(models.Model):
     action = fields.CharField(max_length=10, db_index=True)  # allow, deny
     value = fields.CharField(max_length=255, db_index=True)
     server_scope = fields.CharField(max_length=20, default="global", db_index=True)  # global, server
-    server_id = fields.CharField(max_length=128, null=True, db_index=True)
+    server = fields.ForeignKeyField(
+        "models.Server",
+        related_name="access_rules",
+        null=True,
+        on_delete=fields.SET_NULL,
+    )
+    server_id: int | None
     reason = fields.CharField(max_length=255, null=True)
     remark = fields.TextField(null=True)
     rule_id = fields.CharField(max_length=100, null=True, unique=True)
@@ -431,7 +443,13 @@ class PlayerAccessNotice(models.Model):
     message = fields.TextField(null=True)
     message_context = fields.JSONField(null=True)
     server_scope = fields.CharField(max_length=20, default="global", db_index=True)
-    server_id = fields.CharField(max_length=128, null=True, db_index=True)
+    server = fields.ForeignKeyField(
+        "models.Server",
+        related_name="access_notices",
+        null=True,
+        on_delete=fields.SET_NULL,
+    )
+    server_id: int | None
     requires_ack = fields.BooleanField(default=True, db_index=True)
     acknowledged_at = fields.DatetimeField(null=True, db_index=True)
     expires_at = fields.DatetimeField(null=True, db_index=True)

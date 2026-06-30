@@ -5,7 +5,7 @@ import ipaddress
 from datetime import datetime, timedelta
 from typing import Any
 
-from shared_lib.models import Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, UserBinding
+from shared_lib.models import Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server, UserBinding
 from tortoise.expressions import F, Q
 
 from fastapi_service.core.cache import server_cache
@@ -32,20 +32,50 @@ def _normalize_scope(scope: str | None) -> str:
     return normalized
 
 
-def _rule_server_id(
+async def _rule_server_id(
     *,
     server_scope: str,
+    server_db_id: int | None = None,
     server_id: str | None = None,
     server_key: str | None = None,
     server_host: str | None = None,
     server_port: int | None = None,
-) -> str | None:
+) -> int | None:
     if server_scope == "global":
         return None
-    resolved = (server_key or "").strip() or _server_key(server_host, server_port) or (server_id or "").strip()
-    if not resolved:
-        raise ValueError("server_scope=server 时必须提供 server_id、server_key 或 server_host/server_port")
-    return resolved
+
+    if server_db_id:
+        server = await Server.get_or_none(id=server_db_id)
+        if not server:
+            raise ValueError(f"未找到服务器: {server_db_id}")
+        return server.id
+
+    resolved_key = str(server_key or "").strip() or str(server_id or "").strip()
+    host = (server_host or "").strip()
+    port = server_port
+    if not host and resolved_key and ":" in resolved_key:
+        host_part, _, port_part = resolved_key.rpartition(":")
+        if host_part and port_part.isdigit():
+            host = host_part
+            port = int(port_part)
+
+    query = Server.all()
+    if host and port:
+        server = await Server.get_or_none(host=host, port=port)
+        if server:
+            return server.id
+    if host:
+        matches = await Server.filter(host=host).limit(2).all()
+        if len(matches) == 1:
+            return matches[0].id
+    if resolved_key:
+        server = await query.filter(Q(server_id=resolved_key) | Q(netkey=resolved_key)).first()
+        if server:
+            return server.id
+    address_key = _server_key(host, port)
+    if address_key:
+        raise ValueError(f"未找到服务器: {address_key}")
+    raise ValueError("server_scope=server 时必须提供 server_db_id")
 
 
 def _access_denied_action(access: dict[str, Any] | None) -> str | None:
@@ -107,6 +137,7 @@ def _operation_result_payload(result: dict[str, Any]) -> dict[str, Any]:
     for key in (
         "server_scope",
         "server_id",
+        "server_db_id",
         "remark",
         "execution_mode",
         "sync_player_ip",
@@ -197,7 +228,7 @@ async def _update_access_operation_metadata(
     target_value: object,
     normalized_target: object | None,
     server_scope: str,
-    server_id: str | None,
+    server_id: int | None,
     reason: str | None,
     remark: str | None,
     operator_name: str | None,
@@ -221,7 +252,7 @@ async def _active_uid_action_rule(
     *,
     player: Player,
     server_scope: str,
-    server_id: str | None,
+    server_id: int | None,
     source_action: str,
 ) -> PlayerAccessRule | None:
     if not player.nucleus_id:
@@ -274,7 +305,7 @@ async def _ack_pending_kick_notices_for_ban(
     *,
     player: Player,
     server_scope: str,
-    server_id: str | None,
+    server_id: int | None,
 ) -> list[int]:
     uid = player_access_service.normalize_uid(player.nucleus_id)
     if not uid:
@@ -308,7 +339,7 @@ async def _create_synced_ip_rule(
     reason: str,
     operator_name: str,
     server_scope: str,
-    server_id: str | None,
+    server_id: int | None,
     remark: str | None,
     online_location: dict | None = None,
     expires_at: Any = None,
@@ -402,7 +433,7 @@ async def _pending_kick_notice_for_player(
     *,
     player: Player,
     server_scope: str,
-    server_id: str | None,
+    server_id: int | None,
 ) -> PlayerAccessNotice | None:
     if not player.nucleus_id:
         return None
@@ -435,7 +466,7 @@ async def _ban_for_second_kick(
     reason: str,
     operator_name: str,
     server_scope: str,
-    server_id: str | None,
+    server_id: int | None,
     remark: str | None,
     duration_seconds: int | None,
 ) -> tuple[dict | None, dict | None]:
@@ -444,7 +475,7 @@ async def _ban_for_second_kick(
         reason=reason,
         operator_name=operator_name,
         server_scope=server_scope,
-        server_id=server_id,
+        server_db_id=server_id,
         sync_player_ip=False,
         remark=remark,
         duration_seconds=duration_seconds,
@@ -482,7 +513,7 @@ async def _qq_player_ids(query: str) -> list[int]:
 async def serialize_player_detail(
     player: Player,
     *,
-    access_server_id: str | None = None,
+    access_server_id: int | None = None,
     include_history: bool = True,
 ) -> dict[str, Any]:
     online_location, _ = player_service.get_online_location(player)
@@ -531,21 +562,21 @@ async def serialize_player_detail(
     return payload
 
 
-def _notice_scope_sort_key(notice: PlayerAccessNotice, server_id: str | None) -> tuple[int, int, int]:
+def _notice_scope_sort_key(notice: PlayerAccessNotice, server_id: int | None) -> tuple[int, int, int]:
     normalized_server_keys = player_access_service._normalize_server_keys(server_id)
     key_rank = {key: index for index, key in enumerate(normalized_server_keys)}
-    matched_rank = key_rank.get(str(notice.server_id or "").strip(), len(key_rank))
+    matched_rank = key_rank.get(notice.server_id, len(key_rank))
     scope_rank = 0 if notice.server_scope == "server" and matched_rank < len(key_rank) else 1
     return scope_rank, matched_rank, -notice.id
 
 
-def _best_scoped_rule(rules: list[PlayerAccessRule], server_id: str | None) -> PlayerAccessRule | None:
+def _best_scoped_rule(rules: list[PlayerAccessRule], server_id: int | None) -> PlayerAccessRule | None:
     if not rules:
         return None
     return sorted(rules, key=lambda rule: player_access_service._scope_sort_key(rule, server_id))[0]
 
 
-async def _pending_notice_map(uids: set[str], server_id: str | None) -> dict[str, PlayerAccessNotice]:
+async def _pending_notice_map(uids: set[str], server_id: int | None) -> dict[str, PlayerAccessNotice]:
     if not uids:
         return {}
 
@@ -569,7 +600,7 @@ async def _pending_notice_map(uids: set[str], server_id: str | None) -> dict[str
     return notice_by_uid
 
 
-async def _exact_rule_map(rule_type: str, action: str, values: set[str], server_id: str | None) -> dict[str, PlayerAccessRule]:
+async def _exact_rule_map(rule_type: str, action: str, values: set[str], server_id: int | None) -> dict[str, PlayerAccessRule]:
     if not values:
         return {}
 
@@ -586,7 +617,7 @@ async def _exact_rule_map(rule_type: str, action: str, values: set[str], server_
     return {value: rule for value, rules_for_value in rules_by_value.items() if (rule := _best_scoped_rule(rules_for_value, server_id))}
 
 
-async def _active_rules(rule_type: str | list[str], action: str, server_id: str | None) -> list[PlayerAccessRule]:
+async def _active_rules(rule_type: str | list[str], action: str, server_id: int | None) -> list[PlayerAccessRule]:
     query = PlayerAccessRule.filter(
         player_access_service._scope_filter(server_id),
         player_access_service._active_rule_filter(),
@@ -599,7 +630,7 @@ async def _active_rules(rule_type: str | list[str], action: str, server_id: str 
     return await query.order_by("priority", "id")
 
 
-def _matching_cidr_rule(rules: list[PlayerAccessRule], ip: str, server_id: str | None) -> PlayerAccessRule | None:
+def _matching_cidr_rule(rules: list[PlayerAccessRule], ip: str, server_id: int | None) -> PlayerAccessRule | None:
     if not ip:
         return None
     try:
@@ -617,7 +648,7 @@ def _matching_cidr_rule(rules: list[PlayerAccessRule], ip: str, server_id: str |
     return _best_scoped_rule(matches, server_id)
 
 
-def _matching_geo_rule(rules: list[PlayerAccessRule], player: Player, server_id: str | None) -> PlayerAccessRule | None:
+def _matching_geo_rule(rules: list[PlayerAccessRule], player: Player, server_id: int | None) -> PlayerAccessRule | None:
     country_value = str(player.country or "").strip().lower()
     region_value = str(player.region or "").strip().lower()
     if not country_value and not region_value:
@@ -642,7 +673,7 @@ async def _rule_access_decision(rule: PlayerAccessRule, fallback_locale: str) ->
     return player_access_service._rule_decision(rule, locale=locale)
 
 
-async def _players_access_state_map(players: list[Player], server_id: str | None) -> dict[int, dict[str, Any]]:
+async def _players_access_state_map(players: list[Player], server_id: int | None) -> dict[int, dict[str, Any]]:
     if not players:
         return {}
 
@@ -757,7 +788,7 @@ def _serialize_player_list_item(player: Player, *, qq: str | None, access: dict[
     }
 
 
-async def _serialize_player_list_items(players: list[Player], access_server_id: str | None) -> list[dict[str, Any]]:
+async def _serialize_player_list_items(players: list[Player], access_server_id: int | None) -> list[dict[str, Any]]:
     qq_by_player_id, access_by_player_id = await asyncio.gather(
         _players_qq_map(players),
         _players_access_state_map(players, access_server_id),
@@ -820,7 +851,7 @@ async def _list_players_by_display_status(
     query: Any,
     *,
     desired_status: str,
-    access_server_id: str | None,
+    access_server_id: int | None,
     page_size: int,
     offset: int,
 ) -> tuple[list[dict[str, Any]], int]:
@@ -865,7 +896,7 @@ async def list_players(
     country: str | None = None,
     region: str | None = None,
     is_admin: bool | None = None,
-    access_server_id: str | None = None,
+    access_server_id: int | None = None,
     page_size: int = 20,
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
@@ -948,6 +979,7 @@ async def ban_player(
     reason: str,
     operator_name: str,
     server_scope: str = "global",
+    server_db_id: int | None = None,
     server_id: str | None = None,
     server_key: str | None = None,
     server_host: str | None = None,
@@ -966,8 +998,9 @@ async def ban_player(
         return None, err
 
     scope = _normalize_scope(server_scope)
-    access_server_id = _rule_server_id(
+    access_server_id = await _rule_server_id(
         server_scope=scope,
+        server_db_id=server_db_id,
         server_id=server_id,
         server_key=server_key,
         server_host=server_host,
@@ -1068,6 +1101,7 @@ async def ban_player(
         "player": await serialize_player_detail(player, access_server_id=access_server_id, include_history=False),
         "server_scope": scope,
         "server_id": access_server_id,
+        "server_db_id": access_server_id,
         "operation": player_access_service.serialize_access_operation(operation),
         "remark": remark,
         "execution_mode": "sdk_access",
@@ -1094,6 +1128,7 @@ async def unban_player(
     identifier: int | str,
     operator_name: str = "admin",
     server_scope: str = "global",
+    server_db_id: int | None = None,
     server_id: str | None = None,
     server_key: str | None = None,
     server_host: str | None = None,
@@ -1105,8 +1140,9 @@ async def unban_player(
         return None, err
 
     scope = _normalize_scope(server_scope)
-    access_server_id = _rule_server_id(
+    access_server_id = await _rule_server_id(
         server_scope=scope,
+        server_db_id=server_db_id,
         server_id=server_id,
         server_key=server_key,
         server_host=server_host,
@@ -1140,6 +1176,7 @@ async def unban_player(
         "player": await serialize_player_detail(player, access_server_id=access_server_id, include_history=False),
         "server_scope": scope,
         "server_id": access_server_id,
+        "server_db_id": access_server_id,
         "operation": player_access_service.serialize_access_operation(operation),
         "remark": remark,
         "execution_mode": "sdk_access",
@@ -1161,6 +1198,7 @@ async def kick_player(
     reason: str,
     operator_name: str,
     server_scope: str = "global",
+    server_db_id: int | None = None,
     server_id: str | None = None,
     server_key: str | None = None,
     server_host: str | None = None,
@@ -1177,8 +1215,9 @@ async def kick_player(
         return None, err
 
     scope = _normalize_scope(server_scope)
-    access_server_id = _rule_server_id(
+    access_server_id = await _rule_server_id(
         server_scope=scope,
+        server_db_id=server_db_id,
         server_id=server_id,
         server_key=server_key,
         server_host=server_host,
@@ -1230,6 +1269,7 @@ async def kick_player(
             "remark": remark,
             "server_scope": scope,
             "server_id": access_server_id,
+            "server_db_id": access_server_id,
             **operation_snapshot,
         },
         server_scope=scope,
@@ -1262,6 +1302,7 @@ async def kick_player(
         "player": await serialize_player_detail(player, access_server_id=access_server_id, include_history=False),
         "server_scope": scope,
         "server_id": access_server_id,
+        "server_db_id": access_server_id,
         "operation": player_access_service.serialize_access_operation(operation),
         "remark": remark,
         "execution_mode": "sdk_access",
@@ -1290,6 +1331,7 @@ async def apply_access_action(
     reason: str,
     operator_name: str,
     server_scope: str = "global",
+    server_db_id: int | None = None,
     server_id: str | None = None,
     server_key: str | None = None,
     server_host: str | None = None,
@@ -1311,6 +1353,7 @@ async def apply_access_action(
                 identifier=target_value,
                 operator_name=operator_name,
                 server_scope=server_scope,
+                server_db_id=server_db_id,
                 server_id=server_id,
                 server_key=server_key,
                 server_host=server_host,
@@ -1323,6 +1366,7 @@ async def apply_access_action(
                 reason=reason,
                 operator_name=operator_name,
                 server_scope=server_scope,
+                server_db_id=server_db_id,
                 server_id=server_id,
                 server_key=server_key,
                 server_host=server_host,
@@ -1336,6 +1380,7 @@ async def apply_access_action(
             reason=reason,
             operator_name=operator_name,
             server_scope=server_scope,
+            server_db_id=server_db_id,
             server_id=server_id,
             server_key=server_key,
             server_host=server_host,
@@ -1360,8 +1405,9 @@ async def apply_access_action(
         return None, error(ErrorCode.INVALID_REASON, "target_type 必须是 player、uid、ip、cidr、country 或 region")
 
     scope = _normalize_scope(server_scope)
-    access_server_id = _rule_server_id(
+    access_server_id = await _rule_server_id(
         server_scope=scope,
+        server_db_id=server_db_id,
         server_id=server_id,
         server_key=server_key,
         server_host=server_host,
@@ -1474,6 +1520,7 @@ async def apply_access_action(
         "notice": player_access_service.serialize_access_notice(notice) if notice else None,
         "server_scope": scope,
         "server_id": access_server_id,
+        "server_db_id": access_server_id,
         "remark": remark,
         "execution_mode": "sdk_access",
         "expires_at": expires_at,

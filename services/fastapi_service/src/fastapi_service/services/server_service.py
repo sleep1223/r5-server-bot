@@ -101,6 +101,42 @@ def get_server_info() -> list[dict]:
     return server_cache.get_online_server_statuses()
 
 
+def _admin_server_label(server: Server) -> str:
+    return server.short_name or server.name or _address_key(server.host, server.port) or f"server-{server.id}"
+
+
+def serialize_admin_server_option(server: Server) -> dict:
+    return {
+        "id": server.id,
+        "name": server.name,
+        "short_name": server.short_name,
+        "label": _admin_server_label(server),
+        "host": server.host,
+        "port": server.port,
+        "region": server.region,
+        "map": server.map,
+        "playlist": server.playlist,
+        "player_count": server.player_count,
+        "max_players": server.max_players,
+        "has_status": server.has_status,
+        "last_seen_at": server.last_seen_at,
+    }
+
+
+async def list_admin_server_options(*, q: str | None = None) -> list[dict]:
+    query = Server.filter(is_self_hosted=True)
+    keyword = str(q or "").strip()
+    if keyword:
+        query = query.filter(
+            Q(name__icontains=keyword)
+            | Q(short_name__icontains=keyword)
+            | Q(host__icontains=keyword)
+            | Q(region__icontains=keyword)
+        )
+    servers = await query.order_by("-has_status", "-player_count", "name", "host").limit(500)
+    return [serialize_admin_server_option(server) for server in servers]
+
+
 async def list_servers(
     *,
     server_name: str | None = None,
@@ -294,7 +330,7 @@ async def list_servers(
 
             if not simple:
                 player_list = []
-                access_server_id = status_key or key or status.get("_server") or status.get("server_id")
+                access_server_id = db_server.id if db_server else None
                 for p in players_data:
                     p_info = await player_access_service.build_online_player_info(
                         p,

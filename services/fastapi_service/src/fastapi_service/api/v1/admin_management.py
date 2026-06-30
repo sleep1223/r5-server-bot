@@ -8,7 +8,7 @@ from shared_lib.models import Player, UserBinding
 from fastapi_service.core.auth import is_admin_binding, is_super_admin_binding, verify_admin_app_key, verify_super_admin_app_key, verify_token
 from fastapi_service.core.errors import ErrorCode
 from fastapi_service.core.response import error, paginated, success
-from fastapi_service.services import admin_management_service, player_access_service, player_service
+from fastapi_service.services import admin_management_service, player_access_service, player_service, server_service
 
 from ..deps import Pagination, get_pagination
 
@@ -47,6 +47,7 @@ def _public_allow_access() -> dict[str, Any]:
         "rule_type": None,
         "server_scope": None,
         "server_id": None,
+        "server_db_id": None,
         "source": "default_allow",
     }
 
@@ -95,6 +96,7 @@ def _sanitize_player_payload_for_regular_admin(payload: dict[str, Any]) -> dict[
 
 class ScopedServerBody(BaseModel):
     server_scope: Literal["global", "server"] = "global"
+    server_db_id: int | None = None
     server_id: str | None = None
     server_key: str | None = None
     server_host: str | None = None
@@ -126,6 +128,7 @@ class AccessPreviewBody(BaseModel):
     player_identifier: int | str | None = None
     uid: int | str | None = None
     ip: str | None = None
+    server_db_id: int | None = None
     server_id: str | None = None
     country: str | None = None
     region: str | None = None
@@ -138,6 +141,7 @@ class AccessRuleCreateBody(BaseModel):
     action: Literal["allow", "deny"]
     value: str
     server_scope: Literal["global", "server"] = "global"
+    server_db_id: int | None = None
     server_id: str | None = None
     reason: str | None = None
     remark: str | None = None
@@ -156,6 +160,7 @@ class AccessRuleUpdateBody(BaseModel):
     action: Literal["allow", "deny"] | None = None
     value: str | None = None
     server_scope: Literal["global", "server"] | None = None
+    server_db_id: int | None = None
     server_id: str | None = None
     reason: str | None = None
     remark: str | None = None
@@ -176,7 +181,7 @@ async def admin_list_players(
     country: str | None = None,
     region: str | None = None,
     is_admin: bool | None = None,
-    access_server_id: str | None = None,
+    access_server_db_id: int | None = None,
     pg: Pagination = Depends(get_pagination),
     binding: UserBinding = Depends(verify_admin_app_key),
 ):
@@ -189,7 +194,7 @@ async def admin_list_players(
             country=country,
             region=region,
             is_admin=is_admin,
-            access_server_id=access_server_id,
+            access_server_id=access_server_db_id,
             page_size=pg.page_size,
             offset=pg.offset,
         )
@@ -201,14 +206,14 @@ async def admin_list_players(
 
 
 @router.get("/players/{identifier}")
-async def admin_get_player(identifier: int | str, access_server_id: str | None = None, binding: UserBinding = Depends(verify_admin_app_key)):
+async def admin_get_player(identifier: int | str, access_server_db_id: int | None = None, binding: UserBinding = Depends(verify_admin_app_key)):
     player, err = await player_service.get_player_by_identifier(identifier)
     if err:
         return err
     assert player is not None
     data = await admin_management_service.serialize_player_detail(
         player,
-        access_server_id=access_server_id,
+        access_server_id=access_server_db_id,
         include_history=True,
     )
     if not is_super_admin_binding(binding):
@@ -217,7 +222,7 @@ async def admin_get_player(identifier: int | str, access_server_id: str | None =
 
 
 @router.get("/players/{identifier}/access-matches")
-async def admin_get_player_access_matches(identifier: int | str, access_server_id: str | None = None, binding: UserBinding = Depends(verify_admin_app_key)):
+async def admin_get_player_access_matches(identifier: int | str, access_server_db_id: int | None = None, binding: UserBinding = Depends(verify_admin_app_key)):
     _require_super_admin(binding)
 
     player, err = await player_service.get_player_by_identifier(identifier)
@@ -227,7 +232,7 @@ async def admin_get_player_access_matches(identifier: int | str, access_server_i
     data = await player_access_service.trace_player_access(
         uid=player.nucleus_id,
         ip=player.ip,
-        server_id=access_server_id,
+        server_id=access_server_db_id,
         player=player,
         country=player.country,
         region=player.region,
@@ -248,6 +253,12 @@ async def admin_set_player_admin(identifier: int | str, body: PlayerAdminBody):
     return success(data=data, msg="玩家管理员标记已更新")
 
 
+@router.get("/servers")
+async def admin_list_servers(q: str | None = None, binding: UserBinding = Depends(verify_admin_app_key)):
+    items = await server_service.list_admin_server_options(q=q)
+    return success(data=items, msg="管理端服务器列表已获取")
+
+
 @router.post("/access-actions/{action}")
 async def admin_apply_access_action(action: Literal["ban", "kick", "unban"], body: AccessActionBody, binding: UserBinding = Depends(verify_admin_app_key)):
     if not is_super_admin_binding(binding) and (action != "kick" or body.target_type != "player" or body.sync_player_ip):
@@ -260,6 +271,7 @@ async def admin_apply_access_action(action: Literal["ban", "kick", "unban"], bod
         reason=body.reason,
         operator_name="admin",
         server_scope=body.server_scope,
+        server_db_id=body.server_db_id,
         server_id=body.server_id,
         server_key=body.server_key,
         server_host=body.server_host,
@@ -287,6 +299,7 @@ async def admin_bot_apply_access_action(action: Literal["ban", "kick", "unban"],
         reason=body.reason,
         operator_name=_bot_operator_name(binding),
         server_scope=body.server_scope,
+        server_db_id=body.server_db_id,
         server_id=body.server_id,
         server_key=body.server_key,
         server_host=body.server_host,
@@ -307,7 +320,7 @@ async def admin_list_access_rules(
     rule_type: Literal["uid", "ip", "cidr", "geo", "country", "region", "geo_policy"] | None = None,
     action: Literal["allow", "deny"] | None = None,
     server_scope: Literal["global", "server"] | None = None,
-    server_id: str | None = None,
+    server_db_id: int | None = None,
     enabled: bool | None = None,
     pg: Pagination = Depends(get_pagination),
     binding: UserBinding = Depends(verify_admin_app_key),
@@ -319,7 +332,7 @@ async def admin_list_access_rules(
         rule_type=rule_type,
         action=action,
         server_scope=server_scope,
-        server_id=server_id,
+        server_id=server_db_id,
         enabled=enabled,
         page_size=pg.page_size,
         offset=pg.offset,
@@ -338,7 +351,7 @@ async def admin_preview_access_rules(body: AccessPreviewBody):
     data = await player_access_service.trace_player_access(
         uid=body.uid if body.uid is not None else (player.nucleus_id if player else None),
         ip=body.ip if body.ip is not None else (player.ip if player else None),
-        server_id=body.server_id,
+        server_id=body.server_db_id,
         player=player,
         country=body.country if body.country is not None else (player.country if player else None),
         region=body.region if body.region is not None else (player.region if player else None),
@@ -360,7 +373,7 @@ async def admin_create_access_rule(body: AccessRuleCreateBody):
             action=body.action,
             value=body.value,
             server_scope=body.server_scope,
-            server_id=body.server_id,
+            server_id=body.server_db_id,
             reason=body.reason,
             remark=body.remark,
             rule_id=body.rule_id,
@@ -394,6 +407,8 @@ async def admin_update_access_rule(rule_db_id: int, body: AccessRuleUpdateBody):
         return error(ErrorCode.SERVER_NOT_FOUND, f"未找到准入规则: {rule_db_id}")
 
     updates = body.model_dump(exclude_unset=True)
+    if "server_db_id" in updates:
+        updates["server_id"] = updates.pop("server_db_id")
     try:
         updated = await player_access_service.update_access_rule(rule, **updates)
     except ValueError as exc:
@@ -418,7 +433,7 @@ async def admin_list_access_operations(
     q: str | None = None,
     player_id: int | None = None,
     server_scope: Literal["global", "server"] | None = None,
-    server_id: str | None = None,
+    server_db_id: int | None = None,
     pg: Pagination = Depends(get_pagination),
 ):
     items, total = await player_access_service.list_access_operations(
@@ -427,7 +442,7 @@ async def admin_list_access_operations(
         q=q,
         player_id=player_id,
         server_scope=server_scope,
-        server_id=server_id,
+        server_id=server_db_id,
         page_size=pg.page_size,
         offset=pg.offset,
     )
@@ -440,7 +455,7 @@ async def admin_list_access_notices(
     requires_ack: bool | None = None,
     acknowledged: bool | None = None,
     server_scope: Literal["global", "server"] | None = None,
-    server_id: str | None = None,
+    server_db_id: int | None = None,
     pg: Pagination = Depends(get_pagination),
 ):
     items, total = await player_access_service.list_access_notices(
@@ -448,7 +463,7 @@ async def admin_list_access_notices(
         requires_ack=requires_ack,
         acknowledged=acknowledged,
         server_scope=server_scope,
-        server_id=server_id,
+        server_id=server_db_id,
         page_size=pg.page_size,
         offset=pg.offset,
     )
