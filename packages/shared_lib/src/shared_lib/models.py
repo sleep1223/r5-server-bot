@@ -39,87 +39,6 @@ class BaseEvent(models.Model):
         abstract = True
 
 
-class CharacterSelected(BaseEvent):
-    player = fields.ForeignKeyField("models.Player", related_name="character_selections")
-    player_data = fields.JSONField()  # Store snapshot of player state at this event
-    match = fields.ForeignKeyField("models.Match", related_name="character_selections", null=True, db_index=True)
-    server = fields.ForeignKeyField("models.Server", related_name="character_selections", null=True, db_index=True)
-
-    class Meta:
-        table = "character_selected"
-
-
-class GameStateChanged(BaseEvent):
-    state = fields.CharField(max_length=100)
-    match = fields.ForeignKeyField("models.Match", related_name="game_state_events", null=True, db_index=True)
-    server = fields.ForeignKeyField("models.Server", related_name="game_state_events", null=True, db_index=True)
-
-    class Meta:
-        table = "game_state_changed"
-
-
-class InitEvent(BaseEvent):
-    game_version = fields.CharField(max_length=100)
-    api_version = fields.JSONField()
-    platform = fields.CharField(max_length=50)
-
-    class Meta:
-        table = "init_events"
-
-
-class MatchSetup(BaseEvent):
-    map_name = fields.CharField(max_length=100)
-    playlist_name = fields.CharField(max_length=100)
-    playlist_desc = fields.CharField(max_length=100)
-    datacenter = fields.JSONField()
-    aim_assist_on = fields.BooleanField()
-    # 上游服务器列表里的 server_id（字符串标识符，保留原值供审计）
-    server_id = fields.CharField(max_length=100)
-    # 业务 Match 聚合实体（server 可通过 match.server 反查）
-    match = fields.ForeignKeyField("models.Match", related_name="setup_events", null=True, db_index=True)
-
-    class Meta:
-        table = "match_setup"
-
-
-class MatchStateEnd(BaseEvent):
-    """SDK 在 `GameStateChanged=WinnerDetermined` 时发的独立事件（带 winners）。
-
-    注意：WinnerDetermined 状态**不会**以 GameStateChanged 的形式到达，SDK 把
-    它转成了 matchStateEnd 事件发送。这是最可靠的"一局结束"信号。
-    """
-
-    state = fields.CharField(max_length=100)  # 通常是 "WinnerDetermined"
-    winners = fields.JSONField(null=True)  # [{name, teamId, nucleusHash, ...}, ...]
-    match = fields.ForeignKeyField("models.Match", related_name="state_end_events", null=True, db_index=True)
-    server = fields.ForeignKeyField("models.Server", related_name="state_end_events", null=True, db_index=True)
-
-    class Meta:
-        table = "match_state_end"
-
-
-class PlayerConnected(BaseEvent):
-    player = fields.ForeignKeyField("models.Player", related_name="connections")
-    player_data = fields.JSONField()
-    match = fields.ForeignKeyField("models.Match", related_name="player_connections", null=True, db_index=True)
-    server = fields.ForeignKeyField("models.Server", related_name="player_connections", null=True, db_index=True)
-
-    class Meta:
-        table = "player_connected"
-
-
-class PlayerDisconnected(BaseEvent):
-    player = fields.ForeignKeyField("models.Player", related_name="disconnections")
-    player_data = fields.JSONField()
-    can_reconnect = fields.BooleanField(null=True)
-    is_alive = fields.BooleanField(null=True)
-    match = fields.ForeignKeyField("models.Match", related_name="player_disconnections", null=True, db_index=True)
-    server = fields.ForeignKeyField("models.Server", related_name="player_disconnections", null=True, db_index=True)
-
-    class Meta:
-        table = "player_disconnected"
-
-
 class PlayerKilled(BaseEvent):
     weapon = fields.CharField(max_length=100)
     attacker = fields.ForeignKeyField("models.Player", related_name="kills", null=True)
@@ -161,31 +80,6 @@ class PlayerMatchWeaponStat(models.Model):
             ("opponent_id", "weapon"),
             ("server_id", "weapon"),
             ("input_device", "weapon"),
-        )
-
-
-class PlayerKillDailyWeaponOpponentStat(models.Model):
-    id = fields.BigIntField(pk=True)
-    stat_date = fields.DateField(db_index=True)
-    player = fields.ForeignKeyField("models.Player", related_name="daily_weapon_opponent_stats")
-    opponent = fields.ForeignKeyField("models.Player", related_name="daily_opponent_weapon_stats", null=True)
-    server = fields.ForeignKeyField("models.Server", related_name="daily_weapon_opponent_stats")
-    weapon = fields.CharField(max_length=100, db_index=True)
-    kills = fields.IntField(default=0)
-    deaths = fields.IntField(default=0)
-    awarded_kills = fields.IntField(default=0)
-    input_device = fields.CharField(max_length=50, default="unknown", db_index=True)
-    refreshed_at = fields.DatetimeField(auto_now=True)
-
-    class Meta:
-        table = "player_kill_daily_weapon_opponent_stats"
-        unique_together = (("stat_date", "server", "player", "opponent", "weapon", "input_device"),)
-        indexes = (
-            ("player_id", "stat_date", "opponent_id"),
-            ("player_id", "stat_date", "weapon"),
-            ("stat_date", "weapon", "player_id"),
-            ("stat_date", "input_device", "kills"),
-            ("stat_date", "kills"),
         )
 
 
@@ -263,8 +157,8 @@ class Server(models.Model):
 class Match(models.Model):
     """一场对局的聚合实体。
 
-    MatchSetup 事件触发创建；下一次对局的 Prematch(has_entered_playing=True 前提下)、
-    新 MatchSetup、或 inactivity 超时触发关闭。
+    SDK match setup 触发创建；下一次对局的 Prematch(has_entered_playing=True 前提下)、
+    新 match setup、或 inactivity 超时触发关闭。
     status: active / completed / abandoned
     end_reason: prematch_cycle / new_match / inactivity
     """
@@ -282,12 +176,10 @@ class Match(models.Model):
     ended_at = fields.DatetimeField(null=True, db_index=True)
     status = fields.CharField(max_length=20, default="active", db_index=True)
     end_reason = fields.CharField(max_length=30, null=True)
-    current_state = fields.CharField(max_length=30, null=True)  # 最近一次 GameStateChanged.state
+    current_state = fields.CharField(max_length=30, null=True)  # 最近一次游戏状态
     has_entered_playing = fields.BooleanField(default=False)
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)
-
-    setup_events: fields.ReverseRelation["MatchSetup"]
 
     class Meta:
         table = "matches"
@@ -343,17 +235,6 @@ class Donation(models.Model):
 
     class Meta:
         table = "donations"
-
-
-class BanRecord(models.Model):
-    id = fields.IntField(pk=True)
-    player = fields.ForeignKeyField("models.Player", related_name="ban_records")
-    reason = fields.CharField(max_length=50)
-    operator = fields.CharField(max_length=255, null=True)
-    created_at = fields.DatetimeField(auto_now_add=True)
-
-    class Meta:
-        table = "ban_records"
 
 
 class PlayerAccessOperation(models.Model):
@@ -465,20 +346,6 @@ class PlayerAccessNotice(models.Model):
     class Meta:
         table = "player_access_notices"
         indexes = (("uid", "requires_ack", "acknowledged_at"), ("server_scope", "server_id", "requires_ack"))
-
-
-class SteamAuthLog(models.Model):
-    id = fields.IntField(pk=True)
-    steam_id = fields.BigIntField(db_index=True)
-    persona_name = fields.CharField(max_length=255, null=True)
-    server_endpoint = fields.CharField(max_length=255, null=True)
-    client_ip = fields.CharField(max_length=64, null=True, db_index=True)
-    success = fields.BooleanField(db_index=True)
-    error_code = fields.CharField(max_length=64, null=True)
-    created_at = fields.DatetimeField(auto_now_add=True, db_index=True)
-
-    class Meta:
-        table = "steam_auth_log"
 
 
 class UserBinding(models.Model):
