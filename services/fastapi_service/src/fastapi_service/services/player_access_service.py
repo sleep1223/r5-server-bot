@@ -58,7 +58,7 @@ GEO_POLICY_REASON_TEXTS = {
     "zh": {
         REGION_LOCK_REASON: "您的网络延迟过高，请选择延迟更低的服务器",
         GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "您的网络延迟过高，请前往香港服务器游玩",
-        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "您的网络延迟过高，请选择国内服务器游玩",
+        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "您的网络延迟过高，请使用加速器或者选择国内服务器游玩",
     },
     "en": {
         REGION_LOCK_REASON: "Your latency is too high. Please choose a lower-latency server",

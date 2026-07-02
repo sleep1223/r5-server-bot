@@ -255,7 +255,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(decision["allow"])
         self.assertEqual(decision["source"], "server_geo_policy")
         self.assertEqual(decision["reason_locale"], "zh")
-        self.assertEqual(decision["reason"], "您的网络延迟过高，请选择国内服务器游玩")
+        self.assertEqual(decision["reason"], "您的网络延迟过高，请使用加速器或者选择国内服务器游玩")
         self.assertEqual(access_service.action_from_access_decision(decision), "kick")
         self.assertEqual(decision["rule"]["value"], access_service.GEO_POLICY_RULE_VALUE)
         self.assertEqual(decision["rule"]["matched_policy"], "overseas_server_domestic_player")
