@@ -442,6 +442,7 @@ async def _pending_kick_notice_for_player(
     if not uid:
         return None
 
+    # Any historical kick notice counts as the first kick for escalation.
     return await (
         PlayerAccessNotice
         .filter(
@@ -449,10 +450,7 @@ async def _pending_kick_notice_for_player(
             action="kick",
             server_scope=server_scope,
             server_id=server_id,
-            requires_ack=True,
-            acknowledged_at__isnull=True,
         )
-        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=datetime.now(CN_TZ)))
         .order_by("-created_at", "-id")
         .first()
     )

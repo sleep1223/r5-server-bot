@@ -469,6 +469,46 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(player.ban_count, 1)
         self.assertEqual(player.status, "banned")
 
+    async def test_acknowledged_kick_notice_escalates_to_uid_ban_without_ip_rule(self) -> None:
+        player = await Player.create(nucleus_id=1009800111079, name="Acknowledged_Kick_Player", ip="203.0.113.79")
+        operation = await PlayerAccessOperation.create(
+            action="kick",
+            target_type="player",
+            target_value=str(player.nucleus_id),
+            normalized_target=str(player.nucleus_id),
+            server_scope="global",
+            reason="RULES",
+            operator="unit-test",
+            player=player,
+        )
+        notice = await PlayerAccessNotice.create(
+            player=player,
+            uid=str(player.nucleus_id),
+            action="kick",
+            reason="RULES",
+            requires_ack=False,
+            acknowledged_at=datetime.now(),
+            operation=operation,
+        )
+
+        data, err = await admin_management_service.apply_access_action(
+            action="kick",
+            target_type="player",
+            target_value=player.nucleus_id,
+            reason="NO_COVER",
+            operator_name="unit-test",
+        )
+
+        self.assertIsNone(err)
+        assert data is not None
+        self.assertEqual(await PlayerAccessOperation.filter(player=player, action="ban").count(), 1)
+        self.assertEqual(data["operation"]["action"], "ban")
+        self.assertTrue(data["action_escalated"])
+        self.assertEqual(data["previous_notice_id"], notice.id)
+        self.assertFalse(data["sync_player_ip"])
+        self.assertFalse(data["ip_synced"])
+        self.assertEqual(await PlayerAccessRule.filter(rule_type="ip", source_action="ban", player=player).count(), 0)
+
     async def test_pending_ban_action_is_overwritten_and_syncs_ip_without_duplicate_operation(self) -> None:
         player = await Player.create(nucleus_id=1009800111088, name="Pending_Ban_Player", ip="203.0.113.88")
 
