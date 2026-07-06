@@ -425,7 +425,7 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["player"]["country"], "United States")
         self.assertEqual(rows[0]["player"]["input_device"], "controller")
 
-    async def test_second_pending_kick_escalates_to_uid_ban_without_ip_rule(self) -> None:
+    async def test_second_pending_kick_updates_reason_without_escalating(self) -> None:
         player = await Player.create(nucleus_id=1009800111077, name="Pending_Kick_Player", ip="203.0.113.77")
 
         first_data, first_err = await admin_management_service.apply_access_action(
@@ -448,26 +448,58 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
         assert first_data is not None
         assert second_data is not None
         self.assertEqual(await PlayerAccessOperation.filter(player=player, action="kick").count(), 1)
-        self.assertEqual(await PlayerAccessOperation.filter(player=player, action="ban").count(), 1)
+        self.assertEqual(await PlayerAccessOperation.filter(player=player, action="ban").count(), 0)
         self.assertEqual(await PlayerAccessNotice.filter(player=player, action="kick").count(), 1)
-        self.assertEqual(await PlayerAccessNotice.filter(player=player, action="kick", requires_ack=True, acknowledged_at__isnull=True).count(), 0)
-        self.assertEqual(second_data["operation"]["action"], "ban")
+        self.assertEqual(await PlayerAccessNotice.filter(player=player, action="kick", requires_ack=True, acknowledged_at__isnull=True).count(), 1)
+        self.assertEqual(second_data["operation"]["id"], first_data["operation"]["id"])
+        self.assertEqual(second_data["operation"]["action"], "kick")
         self.assertEqual(second_data["operation"]["reason"], "NO_COVER")
-        self.assertTrue(second_data["action_escalated"])
-        self.assertEqual(second_data["escalated_from_action"], "kick")
-        self.assertEqual(second_data["escalated_to_action"], "ban")
-        self.assertEqual(second_data["previous_notice_id"], first_data["notice"]["id"])
-        self.assertIn(first_data["notice"]["id"], second_data["superseded_notice_ids"])
-        self.assertFalse(second_data["sync_player_ip"])
-        self.assertFalse(second_data["ip_synced"])
+        self.assertEqual(second_data["notice"]["id"], first_data["notice"]["id"])
+        self.assertEqual(second_data["notice"]["reason"], "NO_COVER")
+        self.assertFalse(second_data["action_escalated"])
+        self.assertTrue(second_data["pending_notice_reused"])
+        self.assertTrue(second_data["reason_updated"])
+        self.assertEqual(second_data["previous_reason"], "RULES")
 
-        uid_rule = await PlayerAccessRule.get(rule_type="uid", value=str(player.nucleus_id), source_action="ban")
-        self.assertEqual(uid_rule.reason, "NO_COVER")
+        self.assertFalse(await PlayerAccessRule.filter(rule_type="uid", value=str(player.nucleus_id), source_action="ban").exists())
         self.assertEqual(await PlayerAccessRule.filter(rule_type="ip", source_action="ban", player=player).count(), 0)
         await player.refresh_from_db()
         self.assertEqual(player.kick_count, 1)
-        self.assertEqual(player.ban_count, 1)
-        self.assertEqual(player.status, "banned")
+        self.assertEqual(player.ban_count, 0)
+        self.assertEqual(player.status, "offline")
+
+    async def test_second_pending_kick_same_reason_returns_existing_record_error(self) -> None:
+        player = await Player.create(nucleus_id=1009800111081, name="Pending_Kick_Same_Reason", ip="203.0.113.81")
+
+        first_data, first_err = await admin_management_service.apply_access_action(
+            action="kick",
+            target_type="player",
+            target_value=player.nucleus_id,
+            reason="RULES",
+            operator_name="unit-test",
+        )
+        second_data, second_err = await admin_management_service.apply_access_action(
+            action="kick",
+            target_type="player",
+            target_value=player.nucleus_id,
+            reason="RULES",
+            operator_name="unit-test",
+        )
+
+        self.assertIsNone(first_err)
+        assert first_data is not None
+        self.assertIsNone(second_data)
+        self.assertIsNotNone(second_err)
+        assert second_err is not None
+        self.assertEqual(second_err["code"], ErrorCode.INVALID_REASON)
+        self.assertIn("已有未确认 kick 记录", second_err["msg"])
+        self.assertEqual(second_err["data"]["notice"]["id"], first_data["notice"]["id"])
+        self.assertEqual(await PlayerAccessOperation.filter(player=player, action="kick").count(), 1)
+        self.assertEqual(await PlayerAccessOperation.filter(player=player, action="ban").count(), 0)
+        notice = await PlayerAccessNotice.get(player=player, action="kick")
+        self.assertEqual(notice.reason, "RULES")
+        self.assertTrue(notice.requires_ack)
+        self.assertIsNone(notice.acknowledged_at)
 
     async def test_acknowledged_kick_notice_escalates_to_uid_ban_without_ip_rule(self) -> None:
         player = await Player.create(nucleus_id=1009800111079, name="Acknowledged_Kick_Player", ip="203.0.113.79")

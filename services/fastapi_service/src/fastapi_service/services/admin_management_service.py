@@ -442,7 +442,6 @@ async def _pending_kick_notice_for_player(
     if not uid:
         return None
 
-    # Any historical kick notice counts as the first kick for escalation.
     return await (
         PlayerAccessNotice
         .filter(
@@ -450,10 +449,131 @@ async def _pending_kick_notice_for_player(
             action="kick",
             server_scope=server_scope,
             server_id=server_id,
+            requires_ack=True,
+            acknowledged_at__isnull=True,
+        )
+        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=datetime.now(CN_TZ)))
+        .order_by("-created_at", "-id")
+        .first()
+    )
+
+
+async def _confirmed_kick_notice_for_player(
+    *,
+    player: Player,
+    server_scope: str,
+    server_id: int | None,
+) -> PlayerAccessNotice | None:
+    if not player.nucleus_id:
+        return None
+
+    uid = player_access_service.normalize_uid(player.nucleus_id)
+    if not uid:
+        return None
+
+    return await (
+        PlayerAccessNotice
+        .filter(
+            uid=uid,
+            action="kick",
+            server_scope=server_scope,
+            server_id=server_id,
+            acknowledged_at__isnull=False,
         )
         .order_by("-created_at", "-id")
         .first()
     )
+
+
+async def _reuse_pending_kick_notice(
+    *,
+    player: Player,
+    notice: PlayerAccessNotice,
+    identifier: int | str,
+    reason: str,
+    operator_name: str,
+    server_scope: str,
+    server_id: int | None,
+    remark: str | None,
+) -> tuple[dict | None, dict | None]:
+    previous_reason = str(notice.reason or "").strip()
+    next_reason = str(reason or "").strip()
+    if previous_reason == next_reason:
+        return None, error(
+            ErrorCode.INVALID_REASON,
+            "已有未确认 kick 记录，请等待玩家确认后再操作",
+            data={"notice": player_access_service.serialize_access_notice(notice)},
+        )
+
+    notice_context = notice.message_context if isinstance(notice.message_context, dict) else {}
+    next_context = dict(notice_context)
+    next_context.update(
+        {
+            "pending_notice_reused": True,
+            "reason_updated": True,
+            "previous_reason": previous_reason or None,
+            "remark": remark,
+        }
+    )
+    await PlayerAccessNotice.filter(id=notice.id).update(
+        reason=next_reason or None,
+        message_context=next_context,
+        updated_at=datetime.now(CN_TZ),
+    )
+    notice.reason = next_reason or None  # type: ignore[assignment]
+    notice.message_context = next_context  # type: ignore[assignment]
+
+    operation = None
+    operation_id = getattr(notice, "operation_id", None)
+    if operation_id:
+        operation = await PlayerAccessOperation.get_or_none(id=operation_id)
+    if operation:
+        operation = await _update_access_operation_metadata(
+            operation,
+            target_value=identifier,
+            normalized_target=player.nucleus_id,
+            server_scope=server_scope,
+            server_id=server_id,
+            reason=next_reason,
+            remark=remark,
+            operator_name=operator_name,
+        )
+        operation_result = operation.result if isinstance(operation.result, dict) else {}
+        operation = await player_access_service.update_access_operation_result(
+            operation,
+            result=operation_result
+            | {
+                "pending_notice_reused": True,
+                "reason_updated": True,
+                "previous_reason": previous_reason or None,
+                "notice_id": notice.id,
+            },
+            linked_rule_ids=operation.linked_rule_ids or [f"kick_notice:{notice.id}"],
+        )
+        rules = await PlayerAccessRule.filter(source_operation_id=operation.id, source_action="kick", enabled=True).all()
+        for rule in rules:
+            await player_access_service.update_access_rule(
+                rule,
+                reason=next_reason,
+                remark=remark,
+                operator=operator_name,
+            )
+
+    return {
+        "player": await serialize_player_detail(player, access_server_id=server_id, include_history=False),
+        "server_scope": server_scope,
+        "server_id": server_id,
+        "server_db_id": server_id,
+        "operation": player_access_service.serialize_access_operation(operation) if operation else None,
+        "remark": remark,
+        "execution_mode": "sdk_access",
+        "notice": player_access_service.serialize_access_notice(notice),
+        "requested_action": "kick",
+        "action_escalated": False,
+        "pending_notice_reused": True,
+        "reason_updated": True,
+        "previous_reason": previous_reason or None,
+    }, None
 
 
 async def _ban_for_second_kick(
@@ -485,7 +605,7 @@ async def _ban_for_second_kick(
             "action_escalated": True,
             "escalated_from_action": "kick",
             "escalated_to_action": "ban",
-            "escalation_reason": "pending_kick",
+            "escalation_reason": "acknowledged_kick",
             "previous_notice_id": notice.id,
         }
         result.update(escalation_payload)
@@ -1227,9 +1347,26 @@ async def kick_player(
         server_id=access_server_id,
     )
     if existing_notice:
-        return await _ban_for_second_kick(
+        return await _reuse_pending_kick_notice(
             player=player,
             notice=existing_notice,
+            identifier=identifier,
+            reason=reason,
+            operator_name=operator_name,
+            server_scope=scope,
+            server_id=access_server_id,
+            remark=remark,
+        )
+
+    confirmed_notice = await _confirmed_kick_notice_for_player(
+        player=player,
+        server_scope=scope,
+        server_id=access_server_id,
+    )
+    if confirmed_notice:
+        return await _ban_for_second_kick(
+            player=player,
+            notice=confirmed_notice,
             identifier=identifier,
             reason=reason,
             operator_name=operator_name,
@@ -1440,9 +1577,26 @@ async def apply_access_action(
             server_id=access_server_id,
         )
         if existing_notice:
-            return await _ban_for_second_kick(
+            return await _reuse_pending_kick_notice(
                 player=player,
                 notice=existing_notice,
+                identifier=player.nucleus_id,
+                reason=reason,
+                operator_name=operator_name,
+                server_scope=scope,
+                server_id=access_server_id,
+                remark=remark,
+            )
+
+        confirmed_notice = await _confirmed_kick_notice_for_player(
+            player=player,
+            server_scope=scope,
+            server_id=access_server_id,
+        )
+        if confirmed_notice:
+            return await _ban_for_second_kick(
+                player=player,
+                notice=confirmed_notice,
                 identifier=player.nucleus_id,
                 reason=reason,
                 operator_name=operator_name,

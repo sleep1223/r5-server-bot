@@ -115,8 +115,14 @@ ACTION_DEFAULT_REASONS = {
 SELF_UNBAN_GUIDES = {
     "zh": f"请前往 {SELF_UNBAN_URL} 自助解封",
     "en": f"Visit {SELF_UNBAN_URL} to self-unban",
-    "ja": f"セルフ解除は {SELF_UNBAN_URL} にアクセスしてください",
+    "ja": f"セルフ解除は {SELF_UNBAN_URL}",
     "ko": f"셀프 해제는 {SELF_UNBAN_URL} 에서 할 수 있습니다",
+}
+BAN_DETAIL_GUIDES = {
+    "zh": f"请访问 {SELF_UNBAN_URL} 查看封禁详情",
+    "en": f"Visit {SELF_UNBAN_URL} for ban details",
+    "ja": f"詳細は {SELF_UNBAN_URL}",
+    "ko": f"차단 상세 내용은 {SELF_UNBAN_URL}",
 }
 SDK_ONLINE_ACTION_DEFAULT_REASONS = {
     "ban": "Banned by server policy",
@@ -565,12 +571,39 @@ def _default_allow() -> dict[str, Any]:
     }
 
 
+def _format_access_rule_time(value: object) -> str | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is not None:
+        value = value.astimezone(CN_TZ)
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _with_ban_details(reason: str, rule: PlayerAccessRule, *, locale: str = DEFAULT_REASON_LOCALE) -> str:
+    if SELF_UNBAN_URL not in reason:
+        reason_locale = _normalize_reason_locale(locale)
+        separator = "。" if reason_locale == "zh" else ". "
+        reason = f"{reason}{separator}{BAN_DETAIL_GUIDES[reason_locale]}"
+
+    if str(rule.rule_type or "").strip().lower() == "ip":
+        ip_text = str(rule.value or "").strip()
+        created_at = _format_access_rule_time(getattr(rule, "created_at", None))
+        if ip_text and f"Banned IP: {ip_text}" not in reason:
+            reason = f"{reason}. Banned IP: {ip_text}"
+        if created_at and f"Time: {created_at}" not in reason:
+            reason = f"{reason}. Time: {created_at}"
+    return reason
+
+
 def _rule_decision(rule: PlayerAccessRule, *, locale: str = DEFAULT_REASON_LOCALE) -> dict[str, Any]:
     reason_locale = _normalize_reason_locale(locale)
     allow = rule.action == "allow"
+    reason = None if allow else action_reason_text(rule.source_action, rule.reason, locale=reason_locale)
+    if reason and str(rule.source_action or "").strip().lower() == "ban":
+        reason = _with_ban_details(reason, rule, locale=reason_locale)
     return {
         "allow": allow,
-        "reason": None if allow else action_reason_text(rule.source_action, rule.reason, locale=reason_locale),
+        "reason": reason,
         "reason_locale": reason_locale,
         "rule_id": rule.rule_id or f"access_rule:{rule.id}",
         "rule_type": rule.rule_type,

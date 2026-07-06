@@ -485,6 +485,42 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["actions"][0]["reason"], decision["reason"])
         self.assertEqual(result["actions"][0]["reason"], f"Kicked: No-cover rule violation. Visit {access_service.SELF_UNBAN_URL} to self-unban")
 
+    async def test_online_report_japanese_no_cover_ban_includes_bans_url(self) -> None:
+        await self._deny_rule(
+            rule_type="ip",
+            value="203.0.113.8",
+            reason="NO_COVER",
+            source_action="ban",
+            rule_id="deny-ja-ip-no-cover",
+        )
+
+        result = await access_service.process_online_players_report(
+            server_id="cn-server",
+            report={
+                "serverId": "cn-server",
+                "serverIp": "::ffff:77bc:a469",
+                "serverPort": 37015,
+                "players": [
+                    {
+                        "uid": "1000000000042",
+                        "nucleusId": 1000000000042,
+                        "playerName": "japanese-ip-ban-player",
+                        "ip": "203.0.113.8",
+                        "port": 0,
+                        "userId": 1,
+                        "handle": 1,
+                        "signonState": 6,
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(len(result["actions"]), 1)
+        self.assertEqual(result["actions"][0]["action"], "ban")
+        self.assertTrue(result["actions"][0]["reason"].startswith(f"参加禁止: 遮蔽物の撤去違反. {access_service.BAN_DETAIL_GUIDES['ja']}"))
+        self.assertIn("Banned IP: 203.0.113.8", result["actions"][0]["reason"])
+        self.assertRegex(result["actions"][0]["reason"], r"Time: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
+
     async def test_reconnect_and_bans_use_operation_ip_locale_for_pending_kick(self) -> None:
         uid = "1000000000027"
         player = await Player.create(
@@ -552,7 +588,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(decision["allow"])
         self.assertEqual(decision["rule_type"], "uid")
         self.assertEqual(decision["reason_locale"], "ko")
-        self.assertEqual(decision["reason"], "차단됨: 부정행위")
+        self.assertEqual(decision["reason"], f"차단됨: 부정행위. {access_service.BAN_DETAIL_GUIDES['ko']}")
 
         await player.refresh_from_db()
         self.assertEqual(player.country, "中国")
@@ -1341,7 +1377,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(decision["allow"])
         self.assertEqual(decision["reason_locale"], "zh")
-        self.assertEqual(decision["reason"], "已被封禁: 撤回掩体")
+        self.assertEqual(decision["reason"], f"已被封禁: 撤回掩体。{access_service.BAN_DETAIL_GUIDES['zh']}")
         self.assertEqual(access_service.action_from_access_decision(decision), "ban")
         self.assertEqual(decision["rule"]["rule_id"], "deny-cn-hk")
 
@@ -1353,7 +1389,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(decision["allow"])
         self.assertEqual(decision["source"], "player_access_rule")
         self.assertEqual(decision["reason_locale"], "ja")
-        self.assertEqual(decision["reason"], "参加禁止: チート行為")
+        self.assertEqual(decision["reason"], f"参加禁止: チート行為. {access_service.BAN_DETAIL_GUIDES['ja']}")
 
     async def test_europe_uid_ban_returns_english_reason(self) -> None:
         await self._banned_player(uid="1000000000005", reason="BE_POLITE")
@@ -1363,7 +1399,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(decision["allow"])
         self.assertEqual(decision["source"], "player_access_rule")
         self.assertEqual(decision["reason_locale"], "en")
-        self.assertEqual(decision["reason"], "Banned: Inappropriate behavior")
+        self.assertEqual(decision["reason"], f"Banned: Inappropriate behavior. {access_service.BAN_DETAIL_GUIDES['en']}")
 
     async def test_chinese_uid_ban_returns_chinese_reason(self) -> None:
         await self._banned_player(uid="1000000000006", reason="CHEAT")
@@ -1373,7 +1409,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(decision["allow"])
         self.assertEqual(decision["source"], "player_access_rule")
         self.assertEqual(decision["reason_locale"], "zh")
-        self.assertEqual(decision["reason"], "已被封禁: 作弊")
+        self.assertEqual(decision["reason"], f"已被封禁: 作弊。{access_service.BAN_DETAIL_GUIDES['zh']}")
 
     async def test_exact_ip_rule_keeps_custom_reason_text(self) -> None:
         await self._deny_rule(rule_type="ip", value="8.8.4.4", reason="Custom maintenance block", source_action="kick", rule_id="deny-ip-custom")
@@ -1392,7 +1428,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(decision["allow"])
         self.assertEqual(decision["reason_locale"], "en")
-        self.assertEqual(decision["reason"], "Banned: Cheating")
+        self.assertEqual(decision["reason"], f"Banned: Cheating. {access_service.BAN_DETAIL_GUIDES['en']}")
         self.assertEqual(decision["rule"]["rule_type"], "cidr")
 
     async def test_cidr_rule_returns_korean_reason_for_korean_ip(self) -> None:
@@ -1402,7 +1438,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(decision["allow"])
         self.assertEqual(decision["reason_locale"], "ko")
-        self.assertEqual(decision["reason"], "차단됨: 부정행위")
+        self.assertEqual(decision["reason"], f"차단됨: 부정행위. {access_service.BAN_DETAIL_GUIDES['ko']}")
         self.assertEqual(decision["rule"]["rule_type"], "cidr")
 
     async def test_region_rule_returns_chinese_reason_for_hong_kong_ip(self) -> None:
