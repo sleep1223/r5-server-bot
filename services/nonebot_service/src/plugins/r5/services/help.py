@@ -30,6 +30,7 @@ def get_help_message() -> str:
         "\n"
         "🔍 查询\n"
         "  /状态 · /查询玩家 <名字或NID> · /docs · /文档\n"
+        "  /查地图 · /查顶猎 [PC/PS/Xbox/Switch]\n"
         "\n"
         "👥 组队\n"
         "  /组队 <1或2> · /组队列表 · /加入 <ID>\n"

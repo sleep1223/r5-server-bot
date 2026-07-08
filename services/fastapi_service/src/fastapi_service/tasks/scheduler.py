@@ -2,6 +2,7 @@ import asyncio
 
 from loguru import logger
 
+from .fetch_apex import fetch_apex_cache_task
 from .fetch_launcher_version import fetch_launcher_version_task
 from .fetch_servers import fetch_server_list_raw_once, fetch_server_list_raw_task
 from .refresh_player_kill_daily_stats import player_kill_daily_stats_refresh_task
@@ -25,6 +26,7 @@ class TaskScheduler:
             asyncio.create_task(ip_resolution_task()),
             asyncio.create_task(fetch_launcher_version_task()),
             asyncio.create_task(player_kill_daily_stats_refresh_task()),
+            asyncio.create_task(fetch_apex_cache_task()),
         ]
         logger.info(f"已启动 {len(self._tasks)} 个后台任务")
 

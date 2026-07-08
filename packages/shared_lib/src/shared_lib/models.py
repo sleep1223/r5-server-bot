@@ -127,6 +127,23 @@ class PlayerKillDailyOpponentStat(models.Model):
         )
 
 
+class ApexPlayerStatsSnapshot(models.Model):
+    id = fields.IntField(pk=True)
+    uid = fields.CharField(max_length=64, db_index=True)
+    player_name = fields.CharField(max_length=255, db_index=True)
+    platform = fields.CharField(max_length=20, db_index=True)
+    level = fields.IntField(default=0)
+    rank_score = fields.IntField(default=0)
+    rank_name = fields.CharField(max_length=64, null=True)
+    rank_div = fields.IntField(null=True)
+    payload = fields.JSONField(null=True)
+    created_at = fields.DatetimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        table = "apex_player_stats_snapshots"
+        indexes = (("uid", "platform", "created_at"), ("player_name", "platform", "created_at"))
+
+
 class Server(models.Model):
     id = fields.IntField(pk=True)
     server_id = fields.CharField(max_length=128, null=True, unique=True)

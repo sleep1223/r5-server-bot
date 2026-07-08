@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     launcher_github_repo: str = "sleep1223/r5r-cn-launcher"
     launcher_github_fetch_interval: int = 600
 
+    # Apex Legends Status API
+    apex_api_key: str = ""
+    apex_api_url: str = "https://api.apexlegendsstatus.com"
+    # 地图轮换 / 官方服务器状态 / 顶猎分数缓存刷新间隔（秒），默认 10 分钟
+    apex_cache_refresh_interval: int = 600
+
     # Match display settings
     # /对局：每场 top1 击杀数低于此值则不显示
     recent_match_top_kills_threshold: int = 50

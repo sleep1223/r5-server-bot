@@ -34,20 +34,24 @@ __plugin_meta__ = PluginMetadata(
        /ban <玩家名/ID> [原因] (超级用户)
        /unban <玩家名/ID> (超级用户)
 
-    6. 捐赠指令:
+    6. Apex 指令:
+       /查地图
+       /查顶猎 [PC/PS/Xbox/Switch]
+
+    7. 捐赠指令:
        捐赠查看
        捐赠新增 <名字> <金额> [备注] (管理员)
        捐赠删除 <序号> (管理员)
 
-    7. 个人武器 <玩家名/ID> [击杀/死亡/kd]
+    8. 个人武器 <玩家名/ID> [击杀/死亡/kd]
        查询指定玩家的武器击杀、死亡与KD
     """,
     config=Config,
 )
 
-from .services import admin, admin_group, binding, donation, friend, help, kd, match, query, status, team, weapons
+from .services import admin, admin_group, apex, binding, donation, friend, help, kd, match, query, status, team, weapons
 
 # Config
 plugin_config = get_plugin_config(Config)
 
-__all__ = ["admin", "admin_group", "binding", "donation", "friend", "help", "kd", "match", "query", "status", "team", "weapons"]
+__all__ = ["admin", "admin_group", "apex", "binding", "donation", "friend", "help", "kd", "match", "query", "status", "team", "weapons"]

@@ -38,3 +38,8 @@ class ErrorCode:
     TEAM_INVALID_SLOTS = "7005"
     TEAM_CANNOT_JOIN_OWN = "7006"
     TEAM_NOT_MEMBER = "7007"
+
+    # 8xxx — Apex Legends Status API
+    APEX_NOT_CONFIGURED = "8001"
+    APEX_API_ERROR = "8002"
+    APEX_INVALID_REQUEST = "8003"

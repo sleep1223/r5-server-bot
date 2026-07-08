@@ -267,6 +267,14 @@ class R5ApiClient:
         data = {"platform": platform, "platform_uid": platform_uid}
         return await self._request("POST", f"/teams/{team_id}/accept", json=data, timeout=timeout)
 
+    # ── Apex 缓存查询 ─────────────────────────────────────────
+
+    async def get_apex_map_rotation(self, timeout: float = 5.0) -> httpx.Response:
+        return await self._request("GET", "/apex/map-rotation", timeout=timeout)
+
+    async def get_apex_predator(self, timeout: float = 5.0) -> httpx.Response:
+        return await self._request("GET", "/apex/predator", timeout=timeout)
+
 
 # Global instance
 api_client = R5ApiClient()
