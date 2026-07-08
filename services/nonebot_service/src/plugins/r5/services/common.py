@@ -25,19 +25,7 @@ def range_label(range_type: str) -> str:
 
 
 def format_input_device(input_device: object | None) -> str:
-    text = str(input_device or "").strip().lower().replace("-", "_").replace(" ", "_")
-    labels = {
-        "keyboard_mouse": "键鼠",
-        "keyboard": "键鼠",
-        "mouse": "键鼠",
-        "kbm": "键鼠",
-        "mnk": "键鼠",
-        "controller": "手柄",
-        "gamepad": "手柄",
-        "pad": "手柄",
-        "unknown": "未知设备",
-    }
-    return labels.get(text, text or "未知设备")
+    return format_input_device_emoji(input_device)
 
 
 def format_input_device_emoji(input_device: object | None) -> str:
