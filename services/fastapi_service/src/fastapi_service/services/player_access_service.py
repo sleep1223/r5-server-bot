@@ -56,24 +56,16 @@ REASON_TEXTS = {
 }
 GEO_POLICY_REASON_TEXTS = {
     "zh": {
-        REGION_LOCK_REASON: "您的网络延迟过高，请选择延迟更低的服务器",
-        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "您的网络延迟过高，请前往香港服务器游玩",
-        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "您的网络延迟过高，请使用加速器或者选择国内服务器游玩",
+        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "此服务器仅面向中国大陆地区玩家开放，请选择其他服务器",
+        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "此服务器暂不对中国大陆地区玩家开放，请选择中国大陆服务器",
     },
     "en": {
-        REGION_LOCK_REASON: "Your latency is too high. Please choose a lower-latency server",
-        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "Your latency is too high. Please play on a Hong Kong server",
-        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "Your latency is too high. Please play on a mainland China server",
+        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "This server is available only to players in mainland China. Please choose another server",
+        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "This server is not available to players in mainland China. Please choose a mainland China server",
     },
     "ja": {
-        REGION_LOCK_REASON: "通信遅延が高すぎます。より低遅延のサーバーを選択してください",
-        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "通信遅延が高すぎます。香港サーバーでプレイしてください",
-        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "通信遅延が高すぎます。中国国内サーバーでプレイしてください",
-    },
-    "ko": {
-        REGION_LOCK_REASON: "네트워크 지연 시간이 너무 높습니다. 지연 시간이 더 낮은 서버를 선택해 주세요",
-        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "네트워크 지연 시간이 너무 높습니다. 홍콩 서버에서 플레이해 주세요",
-        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "네트워크 지연 시간이 너무 높습니다. 중국 본토 서버를 선택해 주세요",
+        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "このサーバーは中国本土のプレイヤー専用です。ほかのサーバーをお選びください",
+        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "このサーバーは中国本土からはご利用いただけません。中国本土のサーバーをお選びください",
     },
 }
 ACTION_REASON_PREFIXES = {
@@ -311,7 +303,7 @@ def action_reason_text(action: str | None, reason: str | None, *, locale: str = 
         text = token_reason
     elif text.lower() == "banned" and normalized_action == "ban":
         return default_reasons["ban"]
-    elif text in GEO_POLICY_REASON_TEXTS[reason_locale]:
+    elif text in GEO_POLICY_REASON_TEXTS.get(reason_locale, {}):
         return geo_policy_reason_text(text, locale=reason_locale)
     elif text not in REASON_TEXTS[reason_locale]:
         return text
@@ -323,8 +315,28 @@ def action_reason_text(action: str | None, reason: str | None, *, locale: str = 
 
 def geo_policy_reason_text(reason: str | None, *, locale: str = DEFAULT_REASON_LOCALE) -> str:
     reason_locale = _normalize_reason_locale(locale)
-    text = str(reason or "").strip() or REGION_LOCK_REASON
+    if reason_locale not in GEO_POLICY_REASON_TEXTS:
+        reason_locale = "en"
+    text = str(reason or "").strip()
     return GEO_POLICY_REASON_TEXTS[reason_locale].get(text, text)
+
+
+def update_geo_policy_reason_texts(locale: str, texts: dict[str, str]) -> dict[str, str]:
+    reason_locale = _normalize_reason_locale(locale)
+    if reason_locale not in GEO_POLICY_REASON_TEXTS:
+        raise ValueError(f"Unsupported region-lock locale: {locale}")
+    locale_texts = GEO_POLICY_REASON_TEXTS[reason_locale]
+    unknown_reasons = set(texts) - set(locale_texts)
+    if unknown_reasons:
+        raise ValueError(f"Unsupported region-lock reason: {sorted(unknown_reasons)}")
+
+    normalized_texts = {reason: str(text).strip() for reason, text in texts.items()}
+    empty_reasons = [reason for reason, text in normalized_texts.items() if not text]
+    if empty_reasons:
+        raise ValueError(f"Region-lock text cannot be empty: {sorted(empty_reasons)}")
+
+    locale_texts.update(normalized_texts)
+    return dict(locale_texts)
 
 
 def _with_self_unban_guide(reason: str, *, locale: str = DEFAULT_REASON_LOCALE) -> str:
@@ -595,6 +607,15 @@ def _with_ban_details(reason: str, rule: PlayerAccessRule, *, locale: str = DEFA
     return reason
 
 
+def _localized_reason_code(reason: object | None) -> str | None:
+    text = str(reason or "").strip()
+    _, token_reason = _split_reason_token(text)
+    if token_reason:
+        text = token_reason
+    supported_codes = set(REASON_TEXTS["en"]) | {GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON, GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON}
+    return text if text in supported_codes else None
+
+
 def _rule_decision(rule: PlayerAccessRule, *, locale: str = DEFAULT_REASON_LOCALE) -> dict[str, Any]:
     reason_locale = _normalize_reason_locale(locale)
     allow = rule.action == "allow"
@@ -604,6 +625,8 @@ def _rule_decision(rule: PlayerAccessRule, *, locale: str = DEFAULT_REASON_LOCAL
     return {
         "allow": allow,
         "reason": reason,
+        "reason_code": _localized_reason_code(rule.reason),
+        "action": str(rule.source_action or "").strip().lower() or None,
         "reason_locale": reason_locale,
         "rule_id": rule.rule_id or f"access_rule:{rule.id}",
         "rule_type": rule.rule_type,
@@ -623,6 +646,8 @@ def _notice_decision(notice: PlayerAccessNotice, *, locale: str = DEFAULT_REASON
     return {
         "allow": False,
         "reason": reason,
+        "reason_code": _localized_reason_code(notice.reason or notice.message),
+        "action": str(notice.action or "").strip().lower() or None,
         "reason_locale": reason_locale,
         "rule_id": f"kick_notice:{notice.id}",
         "rule_type": "notice",
@@ -908,6 +933,8 @@ def _server_geo_policy_decision(
     return {
         "allow": False,
         "reason": geo_policy_reason_text(reason, locale=reason_locale),
+        "reason_code": reason,
+        "action": source_action,
         "reason_locale": reason_locale,
         "rule_id": config_rule.rule_id or f"access_rule:{config_rule.id}",
         "rule_type": config_rule.rule_type,
@@ -1260,6 +1287,10 @@ async def check_player_access(
         reason_locale=reason_locale,
     )
     action = action_from_access_decision(decision)
+    if action:
+        decision["action"] = action
+        decision["ip"] = _normalize_ip(ip) or None
+        decision["processed_at"] = _format_access_rule_time(_now())
     log_message = (
         "单个玩家准入检测: "
         f"allow={bool(decision.get('allow'))}, "
@@ -1367,6 +1398,9 @@ async def process_online_players_report(
             "uid": uid_text,
             "action": action,
             "reason": _sdk_online_action_reason(action, decision.get("reason")),
+            "reasonCode": decision.get("reason_code"),
+            "ip": normalized_ip or None,
+            "processedAt": _format_access_rule_time(_now()),
             "ruleId": decision.get("rule_id"),
         }
         nucleus_id = _uid_to_int(uid_text)

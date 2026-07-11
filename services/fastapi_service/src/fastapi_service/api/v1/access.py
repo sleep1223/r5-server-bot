@@ -29,6 +29,9 @@ class PlayerAccessResponse(BaseModel):
     reason: str | None = None
     ruleId: str | None = None
     action: Literal["kick", "ban"] | None = None
+    reasonCode: str | None = None
+    ip: str | None = None
+    processedAt: str | None = None
     canSelfUnban: bool = False
 
 
@@ -67,6 +70,9 @@ class OnlinePlayerAction(BaseModel):
     action: Literal["kick", "ban"]
     nucleusId: int | None = None
     reason: str | None = None
+    reasonCode: str | None = None
+    ip: str | None = None
+    processedAt: str | None = None
     ruleId: str | None = None
 
 
@@ -107,6 +113,9 @@ async def check_player_access(
         reason=decision.get("reason"),
         ruleId=decision.get("rule_id"),
         action=player_access_service.action_from_access_decision(decision),
+        reasonCode=decision.get("reason_code"),
+        ip=decision.get("ip"),
+        processedAt=decision.get("processed_at"),
         canSelfUnban=decision.get("source") == "kick_notice",
     )
 

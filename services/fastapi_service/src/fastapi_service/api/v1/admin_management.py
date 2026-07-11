@@ -172,6 +172,13 @@ class AccessRuleUpdateBody(BaseModel):
     priority: int | None = Field(default=None, ge=0)
 
 
+class RegionLockTextsBody(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    locale: Literal["zh", "en", "ja"]
+    texts: dict[Literal["REGION_LOCK_TO_HK", "REGION_LOCK_TO_MAINLAND"], str] = Field(min_length=1)
+
+
 @router.get("/players")
 async def admin_list_players(
     q: str | None = None,
@@ -357,6 +364,15 @@ async def admin_preview_access_rules(body: AccessPreviewBody):
         region=body.region if body.region is not None else (player.region if player else None),
     )
     return success(data=data, msg="准入规则预览已生成")
+
+
+@router.patch("/region-lock-texts", dependencies=[Depends(verify_super_admin_app_key)])
+async def admin_update_region_lock_texts(body: RegionLockTextsBody):
+    try:
+        texts = player_access_service.update_geo_policy_reason_texts(body.locale, body.texts)
+    except ValueError as exc:
+        return error(ErrorCode.INVALID_REASON, str(exc))
+    return success(data={"locale": body.locale, "texts": texts}, msg="地区隔离文案已更新")
 
 
 @router.post("/access-rules", dependencies=[Depends(verify_super_admin_app_key)])
