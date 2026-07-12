@@ -46,13 +46,6 @@ REASON_TEXTS = {
         "RULES": "ルール違反",
         "NO_SPAM_CROUCH": "しゃがみ連打の悪用",
     },
-    "ko": {
-        "NO_COVER": "엄폐물 제거 규칙 위반",
-        "BE_POLITE": "부적절한 언행",
-        "CHEAT": "부정행위",
-        "RULES": "규칙 위반",
-        "NO_SPAM_CROUCH": "앉기 스팸",
-    },
 }
 GEO_POLICY_REASON_TEXTS = {
     "zh": {
@@ -70,11 +63,6 @@ GEO_POLICY_REASON_TEXTS = {
         GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "通信遅延が高すぎます。香港サーバーでプレイしてください",
         GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "通信遅延が高すぎます。中国国内サーバーでプレイしてください",
     },
-    "ko": {
-        REGION_LOCK_REASON: "네트워크 지연 시간이 너무 높습니다. 지연 시간이 더 낮은 서버를 선택해 주세요",
-        GEO_POLICY_FOREIGN_TO_DOMESTIC_REASON: "네트워크 지연 시간이 너무 높습니다. 홍콩 서버에서 플레이해 주세요",
-        GEO_POLICY_DOMESTIC_TO_OVERSEAS_REASON: "네트워크 지연 시간이 너무 높습니다. 중국 본토 서버를 선택해 주세요",
-    },
 }
 ACTION_REASON_PREFIXES = {
     "zh": {
@@ -88,10 +76,6 @@ ACTION_REASON_PREFIXES = {
     "ja": {
         "ban": "参加禁止",
         "kick": "キック",
-    },
-    "ko": {
-        "ban": "차단됨",
-        "kick": "퇴장됨",
     },
 }
 ACTION_DEFAULT_REASONS = {
@@ -107,22 +91,16 @@ ACTION_DEFAULT_REASONS = {
         "ban": "このサーバーへの参加は禁止されています",
         "kick": "参加する前にウェブサイトで確認してください",
     },
-    "ko": {
-        "ban": "이 서버에 참가할 수 없습니다",
-        "kick": "서버에 참가하기 전에 웹사이트에서 확인해 주세요",
-    },
 }
 SELF_UNBAN_GUIDES = {
     "zh": f"请前往 {SELF_UNBAN_URL} 自助解封",
     "en": f"Visit {SELF_UNBAN_URL} to self-unban",
     "ja": f"セルフ解除は {SELF_UNBAN_URL}",
-    "ko": f"셀프 해제는 {SELF_UNBAN_URL} 에서 할 수 있습니다",
 }
 BAN_DETAIL_GUIDES = {
     "zh": f"请访问 {SELF_UNBAN_URL} 查看封禁详情",
     "en": f"Visit {SELF_UNBAN_URL} for ban details",
     "ja": f"詳細は {SELF_UNBAN_URL}",
-    "ko": f"차단 상세 내용은 {SELF_UNBAN_URL}",
 }
 SDK_ONLINE_ACTION_DEFAULT_REASONS = {
     "ban": "Banned by server policy",
@@ -256,7 +234,7 @@ def _normalize_reason_locale(locale: str | None) -> str:
     if normalized.startswith("ja") or normalized.startswith("jp"):
         return "ja"
     if normalized.startswith("ko") or normalized.startswith("kr"):
-        return "ko"
+        return "en"
     if normalized.startswith("en"):
         return "en"
     return DEFAULT_REASON_LOCALE
@@ -270,7 +248,7 @@ def reason_locale_from_geo(country: str | None, region: str | None = None) -> st
     if any(marker in geo_text for marker in ("日本", "japan", " jp")) or country_text == "jp":
         return "ja"
     if any(marker in geo_text for marker in ("韩国", "韓國", "한국", "대한민국", "korea", "south korea")) or country_text == "kr":
-        return "ko"
+        return "en"
     if any(marker in geo_text for marker in ("中国", "china", "hong kong", "macau", "taiwan", "香港", "澳门", "澳門", "台湾", "台灣")):
         return "zh"
     if country_text in {"cn", "hk", "mo", "tw"}:
@@ -332,7 +310,7 @@ def _with_self_unban_guide(reason: str, *, locale: str = DEFAULT_REASON_LOCALE) 
         return reason
     reason_locale = _normalize_reason_locale(locale)
     guide = SELF_UNBAN_GUIDES[reason_locale]
-    separator = ". " if reason_locale in {"en", "ja", "ko"} else "。"
+    separator = ". " if reason_locale in {"en", "ja"} else "。"
     return f"{reason}{separator}{guide}"
 
 
@@ -562,6 +540,7 @@ def _default_allow() -> dict[str, Any]:
     return {
         "allow": True,
         "reason": None,
+        "reason_en": None,
         "rule_id": None,
         "rule_type": None,
         "server_scope": None,
@@ -599,11 +578,15 @@ def _rule_decision(rule: PlayerAccessRule, *, locale: str = DEFAULT_REASON_LOCAL
     reason_locale = _normalize_reason_locale(locale)
     allow = rule.action == "allow"
     reason = None if allow else action_reason_text(rule.source_action, rule.reason, locale=reason_locale)
+    reason_en = None if allow else action_reason_text(rule.source_action, rule.reason, locale="en")
     if reason and str(rule.source_action or "").strip().lower() == "ban":
         reason = _with_ban_details(reason, rule, locale=reason_locale)
+    if reason_en and str(rule.source_action or "").strip().lower() == "ban":
+        reason_en = _with_ban_details(reason_en, rule, locale="en")
     return {
         "allow": allow,
         "reason": reason,
+        "reason_en": reason_en,
         "reason_locale": reason_locale,
         "rule_id": rule.rule_id or f"access_rule:{rule.id}",
         "rule_type": rule.rule_type,
@@ -618,11 +601,14 @@ def _rule_decision(rule: PlayerAccessRule, *, locale: str = DEFAULT_REASON_LOCAL
 def _notice_decision(notice: PlayerAccessNotice, *, locale: str = DEFAULT_REASON_LOCALE) -> dict[str, Any]:
     reason_locale = _normalize_reason_locale(locale)
     reason = action_reason_text(notice.action, notice.reason or notice.message, locale=reason_locale)
+    reason_en = action_reason_text(notice.action, notice.reason or notice.message, locale="en")
     if str(notice.action or "").strip().lower() == "kick" and notice.requires_ack:
         reason = _with_self_unban_guide(reason, locale=reason_locale)
+        reason_en = _with_self_unban_guide(reason_en, locale="en")
     return {
         "allow": False,
         "reason": reason,
+        "reason_en": reason_en,
         "reason_locale": reason_locale,
         "rule_id": f"kick_notice:{notice.id}",
         "rule_type": "notice",
@@ -908,6 +894,7 @@ def _server_geo_policy_decision(
     return {
         "allow": False,
         "reason": geo_policy_reason_text(reason, locale=reason_locale),
+        "reason_en": geo_policy_reason_text(reason, locale="en"),
         "reason_locale": reason_locale,
         "rule_id": config_rule.rule_id or f"access_rule:{config_rule.id}",
         "rule_type": config_rule.rule_type,
@@ -1367,6 +1354,7 @@ async def process_online_players_report(
             "uid": uid_text,
             "action": action,
             "reason": _sdk_online_action_reason(action, decision.get("reason")),
+            "reasonEn": _sdk_online_action_reason(action, decision.get("reason_en")),
             "ruleId": decision.get("rule_id"),
         }
         nucleus_id = _uid_to_int(uid_text)

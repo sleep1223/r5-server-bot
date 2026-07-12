@@ -267,7 +267,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(access_service.action_reason_text("ban", reason, locale="zh"), "您的网络延迟过高，请前往香港服务器游玩")
         self.assertEqual(access_service.geo_policy_reason_text(reason, locale="en"), "Your latency is too high. Please play on a Hong Kong server")
         self.assertEqual(access_service.geo_policy_reason_text(reason, locale="ja"), "通信遅延が高すぎます。香港サーバーでプレイしてください")
-        self.assertEqual(access_service.geo_policy_reason_text(reason, locale="ko"), "네트워크 지연 시간이 너무 높습니다. 홍콩 서버에서 플레이해 주세요")
+        self.assertEqual(access_service.geo_policy_reason_text(reason, locale="ko"), "Your latency is too high. Please play on a Hong Kong server")
 
     async def test_global_geo_policy_can_be_disabled(self) -> None:
         await PlayerAccessRule.create(
@@ -587,8 +587,8 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(decision["allow"])
         self.assertEqual(decision["rule_type"], "uid")
-        self.assertEqual(decision["reason_locale"], "ko")
-        self.assertEqual(decision["reason"], f"차단됨: 부정행위. {access_service.BAN_DETAIL_GUIDES['ko']}")
+        self.assertEqual(decision["reason_locale"], "en")
+        self.assertEqual(decision["reason"], f"Banned: Cheating. {access_service.BAN_DETAIL_GUIDES['en']}")
 
         await player.refresh_from_db()
         self.assertEqual(player.country, "中国")
@@ -1431,14 +1431,14 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision["reason"], f"Banned: Cheating. {access_service.BAN_DETAIL_GUIDES['en']}")
         self.assertEqual(decision["rule"]["rule_type"], "cidr")
 
-    async def test_cidr_rule_returns_korean_reason_for_korean_ip(self) -> None:
+    async def test_cidr_rule_returns_english_reason_for_korean_ip(self) -> None:
         await self._deny_rule(rule_type="cidr", value="203.0.113.0/24", reason="CHEAT", source_action="ban", rule_id="deny-cidr-kr")
 
         decision = await self._check(uid="1000000000026", ip="203.0.113.9")
 
         self.assertFalse(decision["allow"])
-        self.assertEqual(decision["reason_locale"], "ko")
-        self.assertEqual(decision["reason"], f"차단됨: 부정행위. {access_service.BAN_DETAIL_GUIDES['ko']}")
+        self.assertEqual(decision["reason_locale"], "en")
+        self.assertEqual(decision["reason"], f"Banned: Cheating. {access_service.BAN_DETAIL_GUIDES['en']}")
         self.assertEqual(decision["rule"]["rule_type"], "cidr")
 
     async def test_region_rule_returns_chinese_reason_for_hong_kong_ip(self) -> None:

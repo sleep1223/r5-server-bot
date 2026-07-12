@@ -1,0 +1,13 @@
+[
+  {"id": "zh-001", "locale": "zh", "text": "测试", "note": "最短中文基线"},
+  {"id": "zh-002", "locale": "zh", "text": "延迟过高"},
+  {"id": "zh-003", "locale": "zh", "text": "网络延迟过高"},
+  {"id": "zh-004", "locale": "zh", "text": "网络延迟过高，请更换服务器"},
+  {"id": "zh-005", "locale": "zh", "text": "您的网络延迟过高，请选择延迟更低的服务器"},
+  {"id": "zh-006", "locale": "zh", "text": "您的网络延迟过高，请前往香港服务器游玩"},
+  {"id": "zh-007", "locale": "zh", "text": "您的网络延迟过高，请使用加速器或者选择国内服务器游玩"},
+  {"id": "ja-001", "locale": "ja", "text": "テスト"},
+  {"id": "ja-002", "locale": "ja", "text": "通信遅延が高すぎます"},
+  {"id": "en-001", "locale": "en", "text": "Test"},
+  {"id": "en-002", "locale": "en", "text": "Your latency is too high. Please choose a lower-latency server"}
+]
