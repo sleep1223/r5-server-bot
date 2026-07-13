@@ -2,6 +2,7 @@ import inspect
 import unittest
 from datetime import datetime, timezone
 
+from fastapi_service.api.v1.matches import MatchEndReport
 from fastapi_service.scripts.rebuild_sdk_match_weapon_stats import rebuild_sdk_match_weapon_stats
 from fastapi_service.services import leaderboard_service, match_service
 from fastapi_service.tasks import refresh_player_kill_daily_stats
@@ -209,6 +210,77 @@ class SdkMatchReportIngestTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["kill_events"], 0)
         self.assertEqual(result["weapon_stats"], 1)
         self.assertEqual(await PlayerMatchWeaponStat.all().count(), 1)
+
+    async def test_compact_match_end_payload_omits_metrics_and_tracker_but_keeps_empty_arrays(self) -> None:
+        ended_at = int(datetime.now(timezone.utc).timestamp())
+        raw_report = {
+            "serverName": "[CN(Quanzhou)] PWLA 1v1 Telecom 0.25AA",
+            "serverIp": "::ffff:27.150.128.85",
+            "serverPort": 37015,
+            "map": "mp_rr_arena_composite",
+            "playlist": "fs_1v1",
+            "sdkVersion": "VGameSDK020",
+            "tick": 14053,
+            "spawnCount": 1,
+            "endedAt": ended_at,
+            "numPlayers": 2,
+            "maxPlayers": 60,
+            "players": [
+                {
+                    "bot": False,
+                    "uid": "1009685108262",
+                    "team": 3,
+                    "handle": 1,
+                    "userId": 0,
+                    "connected": True,
+                    "lifeState": 0,
+                    "nucleusId": 1009685108262,
+                    "eliminated": False,
+                    "playerName": "wewewewewewewel",
+                    "inputDevice": "controller",
+                    "signonState": 8,
+                    "weaponKills": [],
+                    "weaponStats": [],
+                },
+                {
+                    "bot": False,
+                    "uid": "1016724082545",
+                    "team": 3,
+                    "handle": 1,
+                    "userId": 0,
+                    "connected": True,
+                    "lifeState": 0,
+                    "nucleusId": 1016724082545,
+                    "eliminated": False,
+                    "playerName": "WASD8899",
+                    "inputDevice": "keyboard_mouse",
+                    "signonState": 8,
+                    "weaponKills": [],
+                    "weaponStats": [],
+                },
+            ],
+            "killEvents": [],
+        }
+        report = MatchEndReport(**raw_report).model_dump(mode="json", exclude_unset=True)
+
+        self.assertNotIn("metrics", report["players"][0])
+        self.assertNotIn("tracker", report["players"][0])
+        self.assertEqual(report["players"][0]["weaponKills"], [])
+        self.assertEqual(report["players"][0]["weaponStats"], [])
+        self.assertEqual(report["killEvents"], [])
+
+        result = await match_service.process_match_end_report(report)
+
+        self.assertEqual(result["players"], 2)
+        self.assertEqual(result["kill_events"], 0)
+        report_row = await SdkMatchEndReport.first()
+        self.assertIsNotNone(report_row)
+        assert report_row is not None
+        self.assertNotIn("metrics", report_row.payload["players"][0])
+        self.assertNotIn("tracker", report_row.payload["players"][0])
+        self.assertEqual(report_row.payload["players"][0]["weaponKills"], [])
+        self.assertEqual(report_row.payload["players"][0]["weaponStats"], [])
+        self.assertEqual(report_row.payload["killEvents"], [])
 
     def test_daily_refresh_sql_includes_sdk_weapon_stats_without_opponent(self) -> None:
         self.assertIn("INSERT INTO player_kill_daily_weapon_stats", refresh_player_kill_daily_stats._INSERT_SQL)

@@ -129,7 +129,7 @@ async def report_match_end(
     """接收 SDK 在 GameShutdown 后发送的对局结算报告。"""
     _verify_optional_sdk_token(credentials)
     try:
-        result = await match_service.process_match_end_report(payload.model_dump(mode="json"))
+        result = await match_service.process_match_end_report(payload.model_dump(mode="json", exclude_unset=True))
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return success(data=result, msg="对局结算已接收")
