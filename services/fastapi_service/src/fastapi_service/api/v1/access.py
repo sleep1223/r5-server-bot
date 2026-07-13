@@ -76,6 +76,13 @@ class OnlinePlayersResponse(BaseModel):
     actions: list[OnlinePlayerAction] = []
 
 
+def _client_disconnect_reason(text: str | None) -> str | None:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return None
+    return normalized if normalized.endswith(".") else f"{normalized}."
+
+
 def _verify_optional_access_token(credentials: HTTPAuthorizationCredentials | None) -> None:
     if not credentials:
         return
@@ -106,8 +113,8 @@ async def check_player_access(
     )
     return PlayerAccessResponse(
         allow=bool(decision["allow"]),
-        reason=decision.get("reason"),
-        reasonEn=decision.get("reason_en"),
+        reason=_client_disconnect_reason(decision.get("reason")),
+        reasonEn=_client_disconnect_reason(decision.get("reason_en")),
         ruleId=decision.get("rule_id"),
         action=player_access_service.action_from_access_decision(decision),
         canSelfUnban=decision.get("source") == "kick_notice",
@@ -125,5 +132,14 @@ async def report_online_players(
         report=payload.model_dump(),
     )
     return OnlinePlayersResponse(
-        actions=[OnlinePlayerAction(**action) for action in result["actions"]],
+        actions=[
+            OnlinePlayerAction(
+                **{
+                    **action,
+                    "reason": _client_disconnect_reason(action.get("reason")),
+                    "reasonEn": _client_disconnect_reason(action.get("reasonEn")),
+                }
+            )
+            for action in result["actions"]
+        ],
     )
