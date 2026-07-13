@@ -46,7 +46,7 @@ async def bind_player(platform: str, platform_uid: str, player_query: str) -> tu
         return None, "绑定失败，请稍后重试"
 
     assert player is not None
-    is_super_admin = str(platform_uid or "") == "1259332131"
+    is_super_admin = is_super_admin_binding(binding)
     return {
         "id": binding.id,
         "platform": binding.platform,

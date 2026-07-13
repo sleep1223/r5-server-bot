@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     fastapi_port: int = 8000
     fastapi_cors_origins: list[str] = ["*"]
     fastapi_access_tokens: list[str] = []
+    super_admin_platform_uids: list[int] = []
     # Granian TCP backlog / backpressure。workers 固定 1（ASGI 单事件循环）。
     fastapi_backlog: int = 1024
     fastapi_backpressure: int = 128

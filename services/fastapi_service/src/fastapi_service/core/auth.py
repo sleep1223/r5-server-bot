@@ -4,7 +4,6 @@ from shared_lib.config import settings
 from shared_lib.models import UserBinding
 
 security_scheme = HTTPBearer(auto_error=False)
-SUPER_ADMIN_PLATFORM_UID = "1259332131"
 
 
 async def verify_token(credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme)):
@@ -48,7 +47,7 @@ async def verify_app_key(x_app_key: str = Header(..., description="用户 AppKey
 
 
 def is_super_admin_binding(binding: UserBinding) -> bool:
-    return str(binding.platform_uid or "") == SUPER_ADMIN_PLATFORM_UID
+    return str(binding.platform_uid or "") in {str(uid) for uid in settings.super_admin_platform_uids}
 
 
 def is_admin_binding(binding: UserBinding) -> bool:
