@@ -109,6 +109,7 @@ class SdkMatchReportIngestTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(weapon_stat.shots, 10)
         self.assertEqual(weapon_stat.hits, 5)
         self.assertEqual(weapon_stat.kills, 2)
+        self.assertEqual(weapon_stat.accuracy, 0.5)
         self.assertEqual(weapon_stat.accuracy_percent, 50.0)
         self.assertEqual(weapon_stat.input_device, "controller")
 
@@ -151,6 +152,9 @@ class SdkMatchReportIngestTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(report_row)
         assert match is not None
         assert report_row is not None
+        stored_weapon_stat = report_row.payload["players"][0]["weaponStats"][0]
+        self.assertEqual(stored_weapon_stat["accuracy"], 0.5)
+        self.assertEqual(stored_weapon_stat["accuracyPercent"], 50.0)
         await match.fetch_related("server")
         await PlayerMatchWeaponStat.create(
             player=attacker,
