@@ -9,7 +9,7 @@ dependencies = [
     "tortoise-orm[asyncpg]>=0.25.3,<1.0.0",
     "aiosqlite>=0.17.0",
     "loguru>=0.7.3",
-    "qqwry-py3>=1.2.1"
+    "py-ip2region>=3.0.4"
 ]
 
 [build-system]

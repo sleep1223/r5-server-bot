@@ -5,6 +5,7 @@ from typing import Any, cast
 
 from loguru import logger
 from shared_lib.models import Match, Player, PlayerMatchWeaponStat, SdkMatchEndReport, Server
+from shared_lib.utils.coercion import to_int
 from tortoise import connections
 from tortoise.expressions import Q
 from tortoise.functions import Sum
@@ -22,7 +23,7 @@ def _normalized_weapon_key(value: object) -> str:
 def _add_match_player_count(target: dict[int, dict[int, int]], match_id: object, player_id: object, count: object) -> None:
     if match_id is None or player_id is None:
         return
-    parsed_count = _safe_int(count, 0)
+    parsed_count = to_int(count)
     if parsed_count <= 0:
         return
     match_bucket = target.setdefault(int(cast(Any, match_id)), {})
@@ -80,13 +81,6 @@ async def _aggregate_match_player_kills_deaths(
     return kills_by_match, deaths_by_match
 
 
-def _safe_int(value: object | None, default: int = 0) -> int:
-    try:
-        return int(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return default
-
-
 def _safe_float(value: object | None, default: float = 0.0) -> float:
     try:
         return float(value)  # type: ignore[arg-type]
@@ -118,7 +112,7 @@ def _input_device_from_payload(payload: dict[str, Any]) -> str | None:
 
 
 def _timestamp_to_dt(value: object) -> datetime:
-    timestamp = _safe_int(value, 0)
+    timestamp = to_int(value)
     if timestamp <= 0:
         return datetime.now(timezone.utc)
     return datetime.fromtimestamp(timestamp, tz=timezone.utc)
@@ -297,12 +291,12 @@ async def _save_sdk_weapon_stats(
 
         for stat in _weapon_stats_from_payload(player_payload):
             weapon = str(stat.get("weapon") or "").strip() or "unknown"
-            shots = max(_safe_int(stat.get("shots"), 0), 0)
-            hits = max(_safe_int(stat.get("hits"), 0), 0)
+            shots = max(to_int(stat.get("shots")), 0)
+            hits = max(to_int(stat.get("hits")), 0)
             bullets_hit = max(_safe_float(stat.get("bulletsHit"), 0.0), 0.0)
             damage = max(_safe_float(stat.get("damage"), 0.0), 0.0)
-            headshots = max(_safe_int(stat.get("headshots"), 0), 0)
-            kills = max(_safe_int(stat.get("kills"), 0), 0)
+            headshots = max(to_int(stat.get("headshots")), 0)
+            kills = max(to_int(stat.get("kills")), 0)
 
             accuracy = _safe_float(stat.get("accuracy"), -1.0)
             if accuracy < 0.0:
@@ -418,15 +412,15 @@ async def process_match_end_report(report: dict[str, Any]) -> dict[str, Any]:
         "match_id": match.id,
         "server_identifier": server_identifier,
         "server_ip": str(report.get("serverIp") or "") or None,
-        "server_port": _safe_int(report.get("serverPort"), 0) or None,
+        "server_port": to_int(report.get("serverPort")) or None,
         "map_name": str(report.get("map") or "") or None,
         "playlist_name": str(report.get("playlist") or "") or None,
         "sdk_version": str(report.get("sdkVersion") or "") or None,
-        "tick": _safe_int(report.get("tick"), 0) or None,
-        "spawn_count": _safe_int(report.get("spawnCount"), 0),
+        "tick": to_int(report.get("tick")) or None,
+        "spawn_count": to_int(report.get("spawnCount")),
         "ended_at": ended_at,
-        "num_players": _safe_int(report.get("numPlayers"), len(players)),
-        "max_players": _safe_int(report.get("maxPlayers"), 0),
+        "num_players": to_int(report.get("numPlayers"), len(players)),
+        "max_players": to_int(report.get("maxPlayers")),
         "payload": report,
     }
     existing_report = await SdkMatchEndReport.filter(

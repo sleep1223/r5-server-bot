@@ -7,6 +7,7 @@ from typing import Any, Iterable, Literal, cast
 
 from loguru import logger
 from shared_lib.models import Player, PlayerAccessNotice, PlayerAccessOperation, PlayerAccessRule, Server
+from shared_lib.utils.coercion import to_int
 from tortoise.exceptions import IntegrityError
 from tortoise.expressions import Q
 
@@ -151,13 +152,6 @@ def _normalize_server_identity_ip(ip: object | None) -> str:
     return host
 
 
-def _safe_int(value: object | None, default: int = 0) -> int:
-    try:
-        return int(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return default
-
-
 def _append_unique_text(items: list[str], value: object | None) -> None:
     text = str(value or "").strip()
     if text and text not in items:
@@ -182,7 +176,7 @@ def _append_unique_int(items: list[int], value: object | None) -> None:
 
 def _server_address_key(server_ip: object | None, server_port: object | None) -> str | None:
     host = _normalize_server_identity_ip(server_ip) or None
-    port = _safe_int(server_port, 0)
+    port = to_int(server_port)
     if not host or not port:
         return None
     return f"{host}:{port}"
@@ -334,7 +328,7 @@ async def upsert_sdk_server_snapshot(
     has_status: bool = False,
 ) -> Server | None:
     host = _normalize_server_identity_ip(server_ip) or None
-    port = _safe_int(server_port, 0) or 37015
+    port = to_int(server_port) or 37015
     reported_name = str(server_name or "").strip() or None
     fallback_name = f"{host}:{port}" if host and port else None
 
@@ -362,8 +356,8 @@ async def upsert_sdk_server_snapshot(
                 port=port,
                 name=reported_name or fallback_name or f"server-{host}",
                 map=str(map_name or "") or None,
-                player_count=_safe_int(num_players, 0),
-                max_players=_safe_int(max_players, 0),
+                player_count=to_int(num_players),
+                max_players=to_int(max_players),
                 is_self_hosted=True,
                 has_status=has_status,
                 last_seen_at=now,
@@ -392,9 +386,9 @@ async def upsert_sdk_server_snapshot(
     if map_name is not None:
         updates["map"] = str(map_name or "") or None
     if num_players is not None:
-        updates["player_count"] = _safe_int(num_players, 0)
+        updates["player_count"] = to_int(num_players)
     if max_players is not None:
-        updates["max_players"] = _safe_int(max_players, 0)
+        updates["max_players"] = to_int(max_players)
     if not server.is_self_hosted:
         updates["is_self_hosted"] = True
     if has_status and not server.has_status:
@@ -429,7 +423,7 @@ async def resolve_access_server_identity(
     )
 
     reported_host = _normalize_server_identity_ip(server_ip) or None
-    reported_port = _safe_int(server_port, 0) or None
+    reported_port = to_int(server_port) or None
     reported_address_key = _server_address_key(reported_host, reported_port)
     reported_name = str(server_name or "").strip() or None
     reported_name_key = f"name:{reported_name.casefold()}" if reported_name else None

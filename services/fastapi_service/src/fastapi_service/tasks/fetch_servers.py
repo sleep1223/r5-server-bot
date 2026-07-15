@@ -7,16 +7,10 @@ import httpx
 from loguru import logger
 from shared_lib.config import settings
 from shared_lib.models import IpInfo, Server
+from shared_lib.utils.coercion import to_int
 
 from fastapi_service.core.cache import server_cache
 from fastapi_service.core.utils import get_local_ping, parse_short_name
-
-
-def _safe_int(val: object, default: int = 0) -> int:
-    try:
-        return int(val)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return default
 
 
 def _raw_server_identifier(raw: dict) -> str:
@@ -107,7 +101,7 @@ async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
             if not ip and not server_identifier:
                 continue
 
-            port = _safe_int(raw.get("port"), 37015)
+            port = to_int(raw.get("port"), 37015)
             full_name = raw.get("name") or f"server-{ip or server_identifier}"
             short_name = parse_short_name(full_name) or None
             raw_netkey = _raw_server_netkey(raw)
@@ -117,6 +111,8 @@ async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
                 server = await Server.filter(name=full_name).exclude(server_id=server_identifier).exclude(server_id__isnull=True).order_by("-last_seen_at", "-id").first()
                 if server:
                     logger.info(f"CN 服务器 server_id 已按名称更新: name={full_name}, old={server.server_id}, new={server_identifier}")
+            if not ip and server is not None:
+                port = server.port
             if not ip and server is None:
                 logger.debug(f"跳过缺少 host 的原始服务器: server_id={server_identifier}")
                 continue
@@ -133,9 +129,9 @@ async def _upsert_servers_from_raw(raw_list: list[dict]) -> None:
                 "region": raw.get("region"),
                 "playlist": raw.get("playlist"),
                 "map": raw.get("map"),
-                "player_count": _safe_int(raw.get("playerCount") or raw.get("numPlayers")),
-                "max_players": _safe_int(raw.get("maxPlayers")),
-                "ping": _safe_int(raw.get("ping")),
+                "player_count": to_int(raw.get("playerCount") or raw.get("numPlayers")),
+                "max_players": to_int(raw.get("maxPlayers")),
+                "ping": to_int(raw.get("ping")),
                 "has_status": True,
                 "last_seen_at": now,
             }

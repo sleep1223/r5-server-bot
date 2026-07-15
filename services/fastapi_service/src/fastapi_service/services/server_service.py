@@ -97,10 +97,6 @@ def _status_address_key(status: dict | None) -> str:
     return _address_key(status.get("ip"), status.get("port"))
 
 
-def get_server_info() -> list[dict]:
-    return server_cache.get_online_server_statuses()
-
-
 def _admin_server_label(server: Server) -> str:
     return server.short_name or server.name or _address_key(server.host, server.port) or f"server-{server.id}"
 

@@ -57,6 +57,28 @@ class AccessReasonPeriodTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.actions[0].reason, "キック: ルール違反。.")
         self.assertEqual(response.actions[0].reasonEn, "Kicked: Rule violation.")
 
+    @patch.object(access.player_access_service, "process_online_players_report", new_callable=AsyncMock)
+    async def test_online_request_preserves_player_ping(self, report_mock: AsyncMock) -> None:
+        report_mock.return_value = {"actions": []}
+        payload = access.OnlinePlayersRequest(
+            players=[
+                access.OnlinePlayer(
+                    uid="1000000000001",
+                    nucleusId=1000000000001,
+                    playerName="ping-test",
+                    ping=42,
+                )
+            ]
+        )
+
+        await access.report_online_players(payload, None)
+
+        report_mock.assert_awaited_once()
+        call_args = report_mock.await_args
+        self.assertIsNotNone(call_args)
+        assert call_args is not None
+        self.assertEqual(call_args.kwargs["report"]["players"][0]["ping"], 42)
+
 
 if __name__ == "__main__":
     unittest.main()

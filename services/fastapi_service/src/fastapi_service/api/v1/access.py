@@ -44,6 +44,7 @@ class OnlinePlayer(BaseModel):
     userId: int | None = None
     handle: int | None = None
     signonState: int | None = None
+    ping: int | None = None
     country: str | None = None
     region: str | None = None
     inputDevice: str | None = None

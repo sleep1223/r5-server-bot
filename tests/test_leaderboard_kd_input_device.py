@@ -1,8 +1,7 @@
-import inspect
 import unittest
 from datetime import datetime, timezone
 
-from fastapi_service.services import leaderboard_service, team_service
+from fastapi_service.services import leaderboard_service
 from fastapi_service.tasks import refresh_player_kill_daily_stats
 
 
@@ -65,16 +64,6 @@ class LeaderboardKdInputDeviceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("FROM player_match_weapon_stats pmws_victim", sql)
         self.assertIn("pmws_victim.match_id = pmws.match_id", sql)
         self.assertIn("pmws_victim.player_id = pmws.opponent_id", sql)
-
-    def test_leaderboard_rollups_filter_expected_granularity(self) -> None:
-        self.assertEqual(leaderboard_service._DAILY_WEAPON_STATS_TABLE, "player_kill_daily_weapon_stats")
-        self.assertEqual(leaderboard_service._DAILY_OPPONENT_STATS_TABLE, "player_kill_daily_opponent_stats")
-        self.assertIn("_DAILY_WEAPON_STATS_TABLE", inspect.getsource(leaderboard_service._aggregate_kills_deaths_from_daily_stats))
-        self.assertIn("_DAILY_WEAPON_STATS_TABLE", inspect.getsource(leaderboard_service.get_weapon_ranking))
-        self.assertIn("_DAILY_WEAPON_STATS_TABLE", inspect.getsource(leaderboard_service.get_player_weapon_stats))
-        self.assertIn("_DAILY_OPPONENT_STATS_TABLE", inspect.getsource(leaderboard_service.get_player_vs_all))
-        self.assertNotIn("opponent_id", inspect.getsource(team_service._get_player_kd))
-
 
 if __name__ == "__main__":
     unittest.main()

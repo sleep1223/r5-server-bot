@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     player_kill_daily_stats_refresh_lookback_days: int = 2
 
     # Data settings
-    qqwry_path: str = "services/fastapi_service/data/qqwry.dat"
+    ip2region_path: str = "services/fastapi_service/data/ip2region_v4.xdb"
     launcher_config_path: str = "services/fastapi_service/data/launcher_config.toml"
     launcher_update_path: str = "services/fastapi_service/data/launcher_update.toml"
     # 启动器最新版本号优先来源：GitHub Releases。失败或未配置时回退到 launcher_update.toml 的 latest

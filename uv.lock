@@ -384,6 +384,15 @@ wheels = [
 ]
 
 [[package]]
+name = "py-ip2region"
+version = "3.0.4"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/60/b8/c8b934effe827e5d159b51912dc8366f5a490d7383943e982a801f5c3591/py_ip2region-3.0.4.tar.gz", hash = "sha256:a8b818ed502a17feb998bdcf7c7748466aff368bcc75592c443aedf4eb6987f7" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/86/04/ef28263025ef08ec581875468f7ba08df6803fc729a0d464c3ad2161c1c7/py_ip2region-3.0.4-py3-none-any.whl", hash = "sha256:7668e3756bc941045cf317a2116fe8359b0a70d88cee326decb836caa14bd77d" },
+]
+
+[[package]]
 name = "pycryptodomex"
 version = "3.23.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -541,12 +550,6 @@ wheels = [
 ]
 
 [[package]]
-name = "qqwry-py3"
-version = "1.2.1"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/af/61/6c5ed0a589cc76cd8ac3ced4f90742c8fc8e6baffc4600c08cc6c47b5339/qqwry-py3-1.2.1.tar.gz", hash = "sha256:805060289974c8830c548da5b35030686943ce2054438457b20379a804e41dca" }
-
-[[package]]
 name = "schedule"
 version = "1.2.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -562,9 +565,9 @@ source = { editable = "packages/shared_lib" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "loguru" },
+    { name = "py-ip2region" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "qqwry-py3" },
     { name = "tortoise-orm", extra = ["asyncpg"] },
 ]
 
@@ -572,9 +575,9 @@ dependencies = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.17.0" },
     { name = "loguru", specifier = ">=0.7.3" },
+    { name = "py-ip2region", specifier = ">=3.0.4" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
-    { name = "qqwry-py3", specifier = ">=1.2.1" },
     { name = "tortoise-orm", extras = ["asyncpg"], specifier = ">=0.25.3,<1.0.0" },
 ]
 

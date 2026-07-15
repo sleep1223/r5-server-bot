@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from shared_lib.config import settings
 
 from fastapi_service.core.auth import security_scheme, verify_token
+from fastapi_service.core.cache import server_cache
 from fastapi_service.core.errors import ErrorCode
 from fastapi_service.core.response import error, success
 from fastapi_service.core.utils import check_is_admin
@@ -42,7 +43,7 @@ async def get_server_list(
 
 @router.get("/server/info", dependencies=[Depends(verify_token)])
 async def get_server_info():
-    results = server_service.get_server_info()
+    results = server_cache.get_online_server_statuses()
     return success(data=results, msg="服务器信息已获取")
 
 
