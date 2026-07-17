@@ -47,11 +47,11 @@ async def verify_app_key(x_app_key: str = Header(..., description="用户 AppKey
 
 
 def is_super_admin_binding(binding: UserBinding) -> bool:
-    return str(binding.platform_uid or "") in {str(uid) for uid in settings.super_admin_platform_uids}
+    return bool(binding.is_super_admin)
 
 
 def is_admin_binding(binding: UserBinding) -> bool:
-    return is_super_admin_binding(binding) or bool(getattr(binding.player, "is_admin", False))
+    return is_super_admin_binding(binding) or bool(binding.is_admin)
 
 
 async def verify_admin_app_key(binding: UserBinding = Depends(verify_app_key)) -> UserBinding:

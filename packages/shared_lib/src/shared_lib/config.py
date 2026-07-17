@@ -15,7 +15,14 @@ class Settings(BaseSettings):
     fastapi_port: int = 8000
     fastapi_cors_origins: list[str] = ["*"]
     fastapi_access_tokens: list[str] = []
-    super_admin_platform_uids: list[int] = []
+    configured_admin_qqs: list[int] = []
+    configured_super_admin_qqs: list[int] = []
+    milky_api_base_url: str = ""
+    milky_access_token: str = ""
+    milky_admin_group_id: int = 0
+    milky_admin_sync_interval_seconds: int = 86400
+    milky_request_timeout_seconds: float = 10.0
+    milky_admin_group_grant_excluded_qqs: list[int] = []
     # Granian TCP backlog / backpressure。workers 固定 1（ASGI 单事件循环）。
     fastapi_backlog: int = 1024
     fastapi_backpressure: int = 128

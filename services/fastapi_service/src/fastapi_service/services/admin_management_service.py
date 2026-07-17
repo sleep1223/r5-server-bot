@@ -13,7 +13,7 @@ from fastapi_service.core.constants import ALLOWED_REASONS
 from fastapi_service.core.errors import ErrorCode
 from fastapi_service.core.response import error
 from fastapi_service.core.utils import CN_TZ
-from fastapi_service.services import admin_service, player_access_service, player_service
+from fastapi_service.services import admin_service, binding_role_service, player_access_service, player_service
 
 _DISPLAY_STATUS_SCAN_BATCH_SIZE = 500
 _NON_ONLINE_DB_STATUSES = ("banned", "kicked")
@@ -409,24 +409,21 @@ async def _uid_rules(player: Player) -> list[dict[str, Any]]:
     return [player_access_service.serialize_access_rule(rule) for rule in rules]
 
 
-async def _player_qq(player: Player) -> str | None:
-    binding = await UserBinding.filter(player_id=player.id, platform="qq").order_by("id").first()
-    return binding.platform_uid if binding else None
+async def _player_bindings(player: Player) -> list[dict[str, Any]]:
+    bindings = await UserBinding.filter(player_id=player.id).select_related("player").order_by("id")
+    return [binding_role_service.serialize_binding(binding) for binding in bindings]
 
 
-async def _players_qq_map(players: list[Player]) -> dict[int, str]:
+async def _players_binding_map(players: list[Player]) -> dict[int, list[dict[str, Any]]]:
     player_ids = [player.id for player in players]
     if not player_ids:
         return {}
 
-    rows = await UserBinding.filter(player_id__in=player_ids, platform="qq").order_by("id").values("player_id", "platform_uid")
-    qq_by_player_id: dict[int, str] = {}
-    for row in rows:
-        player_id = row.get("player_id")
-        platform_uid = str(row.get("platform_uid") or "").strip()
-        if player_id is not None and platform_uid and int(player_id) not in qq_by_player_id:
-            qq_by_player_id[int(player_id)] = platform_uid
-    return qq_by_player_id
+    bindings = await UserBinding.filter(player_id__in=player_ids).select_related("player").order_by("id")
+    bindings_by_player_id: dict[int, list[dict[str, Any]]] = {}
+    for binding in bindings:
+        bindings_by_player_id.setdefault(binding.player.id, []).append(binding_role_service.serialize_binding(binding))
+    return bindings_by_player_id
 
 
 async def _pending_kick_notice_for_player(
@@ -507,14 +504,12 @@ async def _reuse_pending_kick_notice(
 
     notice_context = notice.message_context if isinstance(notice.message_context, dict) else {}
     next_context = dict(notice_context)
-    next_context.update(
-        {
-            "pending_notice_reused": True,
-            "reason_updated": True,
-            "previous_reason": previous_reason or None,
-            "remark": remark,
-        }
-    )
+    next_context.update({
+        "pending_notice_reused": True,
+        "reason_updated": True,
+        "previous_reason": previous_reason or None,
+        "remark": remark,
+    })
     await PlayerAccessNotice.filter(id=notice.id).update(
         reason=next_reason or None,
         message_context=next_context,
@@ -656,8 +651,7 @@ async def serialize_player_detail(
         "ban_count": player.ban_count,
         "hardware_name": player.hardware_name,
         "input_device": player.input_device,
-        "qq": await _player_qq(player),
-        "is_admin": player.is_admin,
+        "bindings": await _player_bindings(player),
         "total_playtime_seconds": player.total_playtime_seconds,
         "online_at": player.online_at,
         "created_at": player.created_at,
@@ -795,16 +789,8 @@ async def _players_access_state_map(players: list[Player], server_id: int | None
     if not players:
         return {}
 
-    uid_by_player_id = {
-        player.id: uid
-        for player in players
-        if (uid := player_access_service.normalize_uid(player.nucleus_id))
-    }
-    ip_by_player_id = {
-        player.id: ip
-        for player in players
-        if (ip := player_access_service._normalize_ip(player.ip))
-    }
+    uid_by_player_id = {player.id: uid for player in players if (uid := player_access_service.normalize_uid(player.nucleus_id))}
+    ip_by_player_id = {player.id: ip for player in players if (ip := player_access_service._normalize_ip(player.ip))}
     uids = set(uid_by_player_id.values())
     ips = set(ip_by_player_id.values())
 
@@ -874,7 +860,7 @@ async def _players_access_state_map(players: list[Player], server_id: int | None
     return access_by_player_id
 
 
-def _serialize_player_list_item(player: Player, *, qq: str | None, access: dict[str, Any]) -> dict[str, Any]:
+def _serialize_player_list_item(player: Player, *, bindings: list[dict[str, Any]], access: dict[str, Any]) -> dict[str, Any]:
     online_location, _ = player_service.get_online_location(player)
     cached_ban_location = player_service.get_cached_ban_location(player.nucleus_id) if player.nucleus_id else None
     display_status = _display_status(player, online_location, access)
@@ -893,8 +879,7 @@ def _serialize_player_list_item(player: Player, *, qq: str | None, access: dict[
         "ban_count": player.ban_count,
         "hardware_name": player.hardware_name,
         "input_device": player.input_device,
-        "qq": qq,
-        "is_admin": player.is_admin,
+        "bindings": bindings,
         "total_playtime_seconds": player.total_playtime_seconds,
         "online_at": player.online_at,
         "created_at": player.created_at,
@@ -907,14 +892,14 @@ def _serialize_player_list_item(player: Player, *, qq: str | None, access: dict[
 
 
 async def _serialize_player_list_items(players: list[Player], access_server_id: int | None) -> list[dict[str, Any]]:
-    qq_by_player_id, access_by_player_id = await asyncio.gather(
-        _players_qq_map(players),
+    bindings_by_player_id, access_by_player_id = await asyncio.gather(
+        _players_binding_map(players),
         _players_access_state_map(players, access_server_id),
     )
     return [
         _serialize_player_list_item(
             player,
-            qq=qq_by_player_id.get(player.id),
+            bindings=bindings_by_player_id.get(player.id, []),
             access=access_by_player_id.get(player.id) or player_access_service._default_allow(),
         )
         for player in players
@@ -922,11 +907,11 @@ async def _serialize_player_list_items(players: list[Player], access_server_id: 
 
 
 async def _serialize_player_list_items_with_access(players: list[Player], access_by_player_id: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
-    qq_by_player_id = await _players_qq_map(players)
+    bindings_by_player_id = await _players_binding_map(players)
     return [
         _serialize_player_list_item(
             player,
-            qq=qq_by_player_id.get(player.id),
+            bindings=bindings_by_player_id.get(player.id, []),
             access=access_by_player_id.get(player.id) or player_access_service._default_allow(),
         )
         for player in players
@@ -1013,7 +998,6 @@ async def list_players(
     ip: str | None = None,
     country: str | None = None,
     region: str | None = None,
-    is_admin: bool | None = None,
     access_server_id: int | None = None,
     page_size: int = 20,
     offset: int = 0,
@@ -1036,9 +1020,6 @@ async def list_players(
         query = query.filter(country__icontains=country)
     if region:
         query = query.filter(region__icontains=region)
-    if is_admin is not None:
-        query = query.filter(is_admin=is_admin)
-
     if desired_status:
         return await _list_players_by_display_status(
             query,
@@ -1052,43 +1033,6 @@ async def list_players(
     players = await query.order_by("-id").offset(offset).limit(page_size)
     data = await _serialize_player_list_items(players, access_server_id)
     return data, total
-
-
-async def set_player_admin(
-    *,
-    identifier: int | str,
-    is_admin: bool,
-    operator_name: str,
-    remark: str | None = None,
-) -> tuple[dict | None, dict | None]:
-    player, err = await _player_or_error(identifier)
-    if err or not player:
-        return None, err
-
-    if is_admin:
-        has_qq_binding = await UserBinding.filter(player_id=player.id, platform="qq").exists()
-        if not has_qq_binding:
-            return None, error(ErrorCode.BINDING_NOT_FOUND, "设置管理员前需要先绑定 QQ")
-
-    await Player.filter(id=player.id).update(is_admin=is_admin)
-    player.is_admin = is_admin  # type: ignore[assignment]
-
-    operation = await player_access_service.create_access_operation(
-        action="admin_set",
-        target_type="player",
-        target_value=identifier,
-        normalized_target=player.nucleus_id,
-        reason="ADMIN",
-        remark=remark,
-        operator=operator_name,
-        player=player,
-        result={"is_admin": is_admin},
-    )
-
-    return {
-        "player": await serialize_player_detail(player, include_history=False),
-        "operation": player_access_service.serialize_access_operation(operation),
-    }, None
 
 
 async def ban_player(

@@ -4,6 +4,7 @@ from shared_lib.models import Player, UserBinding
 from tortoise.exceptions import IntegrityError
 
 from fastapi_service.core.auth import is_admin_binding, is_super_admin_binding
+from fastapi_service.services.binding_role_service import configured_flags_for
 
 
 async def _find_player(query: str) -> tuple[Player | None, str | None]:
@@ -31,6 +32,7 @@ async def bind_player(platform: str, platform_uid: str, player_query: str) -> tu
     if err:
         return None, err
     app_key = secrets.token_urlsafe(32)
+    is_admin, is_super_admin = configured_flags_for(platform, platform_uid)
 
     try:
         binding = await UserBinding.create(
@@ -38,6 +40,8 @@ async def bind_player(platform: str, platform_uid: str, player_query: str) -> tu
             platform_uid=platform_uid,
             player=player,
             app_key=app_key,
+            is_admin=is_admin,
+            is_super_admin=is_super_admin,
         )
     except IntegrityError:
         existing = await UserBinding.filter(platform=platform, platform_uid=platform_uid).prefetch_related("player").first()
@@ -46,53 +50,16 @@ async def bind_player(platform: str, platform_uid: str, player_query: str) -> tu
         return None, "绑定失败，请稍后重试"
 
     assert player is not None
-    is_super_admin = is_super_admin_binding(binding)
     return {
         "id": binding.id,
         "platform": binding.platform,
         "platform_uid": binding.platform_uid,
         "player_id": player.id,
         "player_name": player.name,
-        "is_admin": is_super_admin or bool(player.is_admin),
-        "is_super_admin": is_super_admin,
-        "app_key": binding.app_key,
-    }, None
-
-
-def _admin_grant_payload(binding: UserBinding, status: str) -> dict:
-    player = binding.player
-    return {
-        "status": status,
-        "platform": binding.platform,
-        "platform_uid": binding.platform_uid,
-        "player_id": player.id,
-        "player_name": player.name,
         "is_admin": is_admin_binding(binding),
         "is_super_admin": is_super_admin_binding(binding),
-    }
-
-
-async def grant_admin_by_platform(platform: str, platform_uid: str) -> tuple[dict, str | None]:
-    """将已绑定的平台账号对应玩家标记为管理员；未绑定时返回 not_bound，便于批量同步。"""
-    normalized_platform_uid = str(platform_uid or "").strip()
-    binding = await UserBinding.filter(platform=platform, platform_uid=normalized_platform_uid).prefetch_related("player").first()
-    if not binding:
-        return {
-            "status": "not_bound",
-            "platform": platform,
-            "platform_uid": normalized_platform_uid,
-            "is_admin": False,
-            "is_super_admin": False,
-        }, None
-
-    if is_super_admin_binding(binding):
-        return _admin_grant_payload(binding, "skipped_super_admin"), None
-    if is_admin_binding(binding):
-        return _admin_grant_payload(binding, "already_admin"), None
-
-    await Player.filter(id=binding.player.id).update(is_admin=True)
-    binding.player.is_admin = True  # type: ignore[assignment]
-    return _admin_grant_payload(binding, "granted"), None
+        "app_key": binding.app_key,
+    }, None
 
 
 async def unbind(platform: str, platform_uid: str) -> bool:

@@ -17,7 +17,6 @@ class Player(models.Model):
     ban_count = fields.IntField(default=0)
     hardware_name = fields.CharField(max_length=100, null=True)
     input_device = fields.CharField(max_length=50, null=True, db_index=True)
-    is_admin = fields.BooleanField(default=False, db_index=True)
     total_playtime_seconds = fields.BigIntField(default=0)
     online_at = fields.DatetimeField(null=True)
     created_at = fields.DatetimeField(auto_now_add=True)
@@ -371,6 +370,8 @@ class UserBinding(models.Model):
     platform_uid = fields.CharField(max_length=64)  # 平台用户ID(如QQ号)
     player = fields.ForeignKeyField("models.Player", related_name="bindings")
     app_key = fields.CharField(max_length=64, unique=True)  # 前端认证用
+    is_admin = fields.BooleanField(default=False, db_index=True)
+    is_super_admin = fields.BooleanField(default=False, db_index=True)
     created_at = fields.DatetimeField(auto_now_add=True)
 
     class Meta:

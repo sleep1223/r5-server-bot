@@ -358,7 +358,7 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(total, 2)
         self.assertEqual([row["id"] for row in rows], [new_player.id, old_player.id])
-        self.assertEqual(rows[0]["qq"], "20001")
+        self.assertEqual(rows[0]["bindings"][0]["platform_uid"], "20001")
         self.assertFalse(rows[0]["access"]["allow"])
         self.assertEqual(rows[0]["access"]["rule_id"], "ban:uid:list-new")
         self.assertEqual(rows[0]["display_status"], "ban")

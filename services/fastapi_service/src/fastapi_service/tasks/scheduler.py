@@ -2,11 +2,14 @@ import asyncio
 
 from loguru import logger
 
+from fastapi_service.services.binding_role_service import apply_configured_roles
+
 from .fetch_apex import fetch_apex_cache_task
 from .fetch_launcher_version import fetch_launcher_version_task
 from .fetch_servers import fetch_server_list_raw_once, fetch_server_list_raw_task
 from .refresh_player_kill_daily_stats import player_kill_daily_stats_refresh_task
 from .resolve_ips import ip_resolution_task
+from .sync_milky_admins import milky_admin_sync_task
 
 
 class TaskScheduler:
@@ -16,6 +19,8 @@ class TaskScheduler:
         self._tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
+        configured_role_summary = await apply_configured_roles()
+        logger.info(f"已应用配置管理员 QQ: {configured_role_summary}")
         logger.info("启动后台任务前先拉取初始服务器列表")
         initial_server_count = await fetch_server_list_raw_once()
         if initial_server_count is None:
@@ -27,6 +32,7 @@ class TaskScheduler:
             asyncio.create_task(fetch_launcher_version_task()),
             asyncio.create_task(player_kill_daily_stats_refresh_task()),
             asyncio.create_task(fetch_apex_cache_task()),
+            asyncio.create_task(milky_admin_sync_task()),
         ]
         logger.info(f"已启动 {len(self._tasks)} 个后台任务")
 

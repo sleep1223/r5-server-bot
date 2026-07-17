@@ -8,7 +8,7 @@ from shared_lib.models import Player, UserBinding
 from fastapi_service.core.auth import is_admin_binding, is_super_admin_binding, verify_admin_app_key, verify_super_admin_app_key, verify_token
 from fastapi_service.core.errors import ErrorCode
 from fastapi_service.core.response import error, paginated, success
-from fastapi_service.services import admin_management_service, player_access_service, player_service, server_service
+from fastapi_service.services import admin_management_service, binding_role_service, player_access_service, player_service, server_service
 
 from ..deps import Pagination, get_pagination
 
@@ -103,8 +103,8 @@ class ScopedServerBody(BaseModel):
     server_port: int | None = None
 
 
-class PlayerAdminBody(BaseModel):
-    is_admin: bool
+class BindingRoleBody(BaseModel):
+    role: Literal["user", "admin", "super_admin"]
     remark: str | None = None
 
 
@@ -172,6 +172,42 @@ class AccessRuleUpdateBody(BaseModel):
     priority: int | None = Field(default=None, ge=0)
 
 
+@router.get("/user-bindings", dependencies=[Depends(verify_super_admin_app_key)])
+async def admin_list_user_bindings(
+    q: str | None = None,
+    platform: str | None = None,
+    role: Literal["user", "admin", "super_admin"] | None = None,
+    pg: Pagination = Depends(get_pagination),
+):
+    items, total = await binding_role_service.list_bindings(
+        q=q,
+        platform=platform,
+        role=role,
+        page_size=pg.page_size,
+        offset=pg.offset,
+    )
+    return paginated(data=items, total=total, msg="用户绑定权限列表已获取")
+
+
+@router.patch("/user-bindings/{binding_id}/role")
+async def admin_set_user_binding_role(
+    binding_id: int,
+    body: BindingRoleBody,
+    operator: UserBinding = Depends(verify_super_admin_app_key),
+):
+    data, err = await binding_role_service.set_binding_role(
+        binding_id=binding_id,
+        role=body.role,
+        operator=operator,
+        remark=body.remark,
+    )
+    if err:
+        if err == "未找到绑定记录":
+            return error(ErrorCode.BINDING_NOT_FOUND, err)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=err)
+    return success(data=data, msg="绑定权限已更新")
+
+
 @router.get("/players")
 async def admin_list_players(
     q: str | None = None,
@@ -180,7 +216,6 @@ async def admin_list_players(
     ip: str | None = None,
     country: str | None = None,
     region: str | None = None,
-    is_admin: bool | None = None,
     access_server_db_id: int | None = None,
     pg: Pagination = Depends(get_pagination),
     binding: UserBinding = Depends(verify_admin_app_key),
@@ -193,7 +228,6 @@ async def admin_list_players(
             ip=ip,
             country=country,
             region=region,
-            is_admin=is_admin,
             access_server_id=access_server_db_id,
             page_size=pg.page_size,
             offset=pg.offset,
@@ -238,19 +272,6 @@ async def admin_get_player_access_matches(identifier: int | str, access_server_d
         region=player.region,
     )
     return success(data=data, msg="玩家准入匹配结果已获取")
-
-
-@router.patch("/players/{identifier}/admin", dependencies=[Depends(verify_super_admin_app_key)])
-async def admin_set_player_admin(identifier: int | str, body: PlayerAdminBody):
-    data, err = await admin_management_service.set_player_admin(
-        identifier=identifier,
-        is_admin=body.is_admin,
-        operator_name="super_admin",
-        remark=body.remark,
-    )
-    if err:
-        return err
-    return success(data=data, msg="玩家管理员标记已更新")
 
 
 @router.get("/servers")
