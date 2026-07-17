@@ -677,7 +677,7 @@ async def serialize_player_detail(
 def _notice_scope_sort_key(notice: PlayerAccessNotice, server_id: int | None) -> tuple[int, int, int]:
     normalized_server_keys = player_access_service._normalize_server_keys(server_id)
     key_rank = {key: index for index, key in enumerate(normalized_server_keys)}
-    matched_rank = key_rank.get(notice.server_id, len(key_rank))
+    matched_rank = key_rank.get(notice.server_id, len(key_rank)) if notice.server_id is not None else len(key_rank)
     scope_rank = 0 if notice.server_scope == "server" and matched_rank < len(key_rank) else 1
     return scope_rank, matched_rank, -notice.id
 

@@ -139,7 +139,7 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
             player_name=f"player-{uid}",
             ip=ip,
             port=0,
-            server_id=server_id,
+            server_id=server_id,  # pyright: ignore[reportArgumentType] -- SDK server identifiers may be non-numeric.
             server_ip=server_ip,
             server_port=37015,
         )

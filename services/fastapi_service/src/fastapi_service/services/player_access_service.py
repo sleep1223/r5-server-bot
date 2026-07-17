@@ -525,7 +525,7 @@ def _scope_sort_key(
 ) -> tuple[int, int, int, int]:
     normalized_server_keys = _normalize_server_keys(server_id, server_keys)
     key_rank = {key: index for index, key in enumerate(normalized_server_keys)}
-    matched_rank = key_rank.get(rule.server_id, len(key_rank))
+    matched_rank = key_rank.get(rule.server_id, len(key_rank)) if rule.server_id is not None else len(key_rank)
     scope_rank = 0 if rule.server_scope == "server" and matched_rank < len(key_rank) else 1
     return scope_rank, rule.priority, matched_rank, rule.id
 
@@ -973,7 +973,7 @@ async def _pending_notice_for_uid(
     key_rank = {key: index for index, key in enumerate(normalized_server_keys)}
 
     def _notice_sort_key(notice: PlayerAccessNotice) -> tuple[int, int, int]:
-        matched_rank = key_rank.get(notice.server_id, len(key_rank))
+        matched_rank = key_rank.get(notice.server_id, len(key_rank)) if notice.server_id is not None else len(key_rank)
         scope_rank = 0 if notice.server_scope == "server" and matched_rank < len(key_rank) else 1
         return scope_rank, matched_rank, -notice.id
 
@@ -1582,8 +1582,9 @@ def _enrich_access_rule_payload(
     players_by_uid: dict[int, Player],
 ) -> dict[str, Any]:
     player = getattr(rule, "player", None)
-    if not player and getattr(rule, "player_id", None):
-        player = players_by_id.get(rule.player_id)
+    player_id = getattr(rule, "player_id", None)
+    if not player and isinstance(player_id, int):
+        player = players_by_id.get(player_id)
     uid = _access_rule_uid(rule)
     if not player and uid is not None:
         player = players_by_uid.get(uid)
@@ -1599,8 +1600,9 @@ def _enrich_access_operation_payload(
     players_by_uid: dict[int, Player],
 ) -> dict[str, Any]:
     player = getattr(operation, "player", None)
-    if not player and getattr(operation, "player_id", None):
-        player = players_by_id.get(operation.player_id)
+    player_id = getattr(operation, "player_id", None)
+    if not player and isinstance(player_id, int):
+        player = players_by_id.get(player_id)
     uid = _access_operation_uid(operation)
     if not player and uid is not None:
         player = players_by_uid.get(uid)
@@ -1704,7 +1706,7 @@ async def list_access_rules(
 
     total = await query.count()
     rules = await query.select_related("player", "server").order_by("server_scope", "priority", "-updated_at").offset(offset).limit(page_size)
-    player_ids = {rule.player_id for rule in rules if getattr(rule, "player_id", None)}
+    player_ids = {player_id for rule in rules if isinstance((player_id := getattr(rule, "player_id", None)), int)}
     uids = {uid for uid in (_access_rule_uid(rule) for rule in rules) if uid is not None}
     players_by_id, players_by_uid = await _access_player_maps(player_ids=player_ids, uids=uids)
     return [_enrich_access_rule_payload(rule, serialize_access_rule(rule), players_by_id, players_by_uid) for rule in rules], total
@@ -1872,7 +1874,7 @@ async def list_access_operations(
 
     total = await query.count()
     operations = await query.select_related("player", "server").order_by("-created_at", "-id").offset(offset).limit(page_size)
-    player_ids = {operation.player_id for operation in operations if getattr(operation, "player_id", None)}
+    player_ids = {player_id for operation in operations if isinstance((player_id := getattr(operation, "player_id", None)), int)}
     uids = {uid for uid in (_access_operation_uid(operation) for operation in operations) if uid is not None}
     players_by_id, players_by_uid = await _access_player_maps(player_ids=player_ids, uids=uids)
     return [_enrich_access_operation_payload(operation, serialize_access_operation(operation), players_by_id, players_by_uid) for operation in operations], total
