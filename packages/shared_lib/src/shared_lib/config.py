@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     launcher_github_repo: str = "sleep1223/r5r-cn-launcher"
     launcher_github_fetch_interval: int = 600
 
+    # Launcher community game configuration presets
+    game_config_upload_enabled: bool = True
+    game_config_max_content_bytes: int = 16384
+
     # Apex Legends Status API
     apex_api_key: str = ""
     apex_api_url: str = "https://api.apexlegendsstatus.com"

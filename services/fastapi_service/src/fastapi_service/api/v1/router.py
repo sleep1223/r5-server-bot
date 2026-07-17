@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from . import access, admin, admin_management, apex, donations, launcher, leaderboard, matches, player_stats, players, server, teams, user
+from . import access, admin, admin_management, apex, donations, game_configs, launcher, leaderboard, matches, player_stats, players, server, teams, user
 
 router = APIRouter(prefix="/r5", tags=["r5"])
 
@@ -16,5 +16,6 @@ router.include_router(matches.router)
 router.include_router(player_stats.router)
 router.include_router(donations.router)
 router.include_router(launcher.router)
+router.include_router(game_configs.router)
 router.include_router(user.router)
 router.include_router(teams.router)

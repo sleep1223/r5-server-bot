@@ -379,6 +379,35 @@ class UserBinding(models.Model):
         unique_together = (("platform", "platform_uid"),)
 
 
+class GameConfigPreset(models.Model):
+    id = fields.IntField(pk=True)
+    creator = fields.OneToOneField(
+        "models.UserBinding",
+        related_name="game_config_preset",
+        on_delete=fields.CASCADE,
+    )
+    creator_id: int
+    name = fields.CharField(max_length=64)
+    remark = fields.CharField(max_length=500, null=True)
+    source_game = fields.CharField(max_length=8, db_index=True)
+    content = fields.TextField()
+    has_mouse = fields.BooleanField(default=False, db_index=True)
+    has_controller = fields.BooleanField(default=False, db_index=True)
+    has_fov = fields.BooleanField(default=False, db_index=True)
+    schema_version = fields.IntField(default=1)
+    created_at = fields.DatetimeField(auto_now_add=True)
+    updated_at = fields.DatetimeField(auto_now=True, db_index=True)
+
+    class Meta:
+        table = "game_config_preset"
+        indexes = (
+            ("source_game", "updated_at"),
+            ("has_mouse", "updated_at"),
+            ("has_controller", "updated_at"),
+            ("has_fov", "updated_at"),
+        )
+
+
 class TeamPost(models.Model):
     id = fields.IntField(pk=True)
     creator = fields.ForeignKeyField("models.UserBinding", related_name="created_teams")
