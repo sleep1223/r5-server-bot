@@ -222,10 +222,6 @@ class R5ApiClient:
         data = {"platform": platform, "platform_uid": platform_uid, "player_query": player_query}
         return await self._request("POST", "/user/admin/bind", json=data, timeout=timeout)
 
-    async def grant_admin_by_platform(self, platform: str, platform_uid: str, timeout: float = 5.0) -> httpx.Response:
-        data = {"platform": platform, "platform_uid": platform_uid}
-        return await self._request("POST", "/user/admin/grant", json=data, timeout=timeout)
-
     async def unbind_player(self, platform: str, platform_uid: str, timeout: float = 5.0) -> httpx.Response:
         params = {"platform": platform, "platform_uid": platform_uid}
         return await self._request("DELETE", "/user/bind", params=params, timeout=timeout)
