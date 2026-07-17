@@ -31,8 +31,8 @@ __plugin_meta__ = PluginMetadata(
 
     5. 管理指令:
        /kick <玩家名/ID> [原因]
-       /ban <玩家名/ID> [原因] (超级用户)
-       /unban <玩家名/ID> (超级用户)
+       /ban <玩家名/ID> [原因] (后端超级管理员)
+       /unban <玩家名/ID> (NoneBot 超级用户)
 
     6. Apex 指令:
        /查地图

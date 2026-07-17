@@ -1,5 +1,8 @@
 import unittest
+from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
+from fastapi_service.api.v1 import admin_management
 from fastapi_service.services import binding_role_service, binding_service
 from shared_lib.config import settings
 from shared_lib.models import Player, UserBinding
@@ -88,6 +91,29 @@ class BindingRoleTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(data)
         self.assertEqual(err, "不能降级最后一个超级管理员")
+
+    async def test_bot_kick_uses_binding_admin_role_and_ban_requires_super_admin(self) -> None:
+        player = await Player.create(nucleus_id=1007, name="bot-operator")
+        binding = await UserBinding.create(platform="qq", platform_uid="2007", player=player, app_key="app-key-2007", is_admin=True)
+        body = admin_management.BotAccessActionBody(operator_uid="2007", target_type="player", target_value="target-player", reason="RULES")
+
+        with patch.object(admin_management.admin_management_service, "apply_access_action", new=AsyncMock(return_value=({"operation": {"action": "kick"}}, None))) as apply_action:
+            result = await admin_management.admin_bot_apply_access_action("kick", body)
+
+        self.assertEqual(result["code"], "0000")
+        apply_action.assert_awaited_once()
+
+        with self.assertRaises(HTTPException) as context:
+            await admin_management.admin_bot_apply_access_action("ban", body)
+        self.assertEqual(context.exception.status_code, 403)
+
+        binding.is_super_admin = True
+        await binding.save(update_fields=["is_super_admin"])
+        with patch.object(admin_management.admin_management_service, "apply_access_action", new=AsyncMock(return_value=({"operation": {"action": "ban"}}, None))) as apply_action:
+            result = await admin_management.admin_bot_apply_access_action("ban", body)
+
+        self.assertEqual(result["code"], "0000")
+        apply_action.assert_awaited_once()
 
 
 if __name__ == "__main__":

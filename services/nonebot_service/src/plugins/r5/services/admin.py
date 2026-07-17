@@ -97,10 +97,7 @@ def _access_submit_summary(data: dict, action_label: str) -> str:
 
 @cmd_ban.handle()
 @ban_service.patch_handler()
-async def handle_ban(bot: Bot, event: Event, args: Message = CommandArg()) -> None:
-    if not await _is_superuser(bot, event):
-        await cmd_ban.finish("⛔ NoneBot 端不再向普通管理员开放 /ban，请使用 /kick。")
-
+async def handle_ban(event: Event, args: Message = CommandArg()) -> None:
     text = args.extract_plain_text().strip()
     parts = text.split()
 
