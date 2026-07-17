@@ -76,12 +76,7 @@ def _format_map_mode(mode_key: str, mode: dict[str, Any]) -> str:
     current_name = _display_text(current.get("map"), current.get("map_zh"))
     next_name = _display_text(next_map.get("map"), next_map.get("map_zh"))
     remaining = current.get("remainingTimer") or "未知"
-    return (
-        f"🎮 {_MAP_MODE_LABELS.get(mode_key, mode_key)}\n"
-        f"  当前: {current_name}\n"
-        f"  下张: {next_name}\n"
-        f"  剩余: {remaining}"
-    )
+    return f"🎮 {_MAP_MODE_LABELS.get(mode_key, mode_key)}\n  当前: {current_name}\n  下张: {next_name}\n  剩余: {remaining}"
 
 
 def _format_map_message(cache_payload: dict[str, Any]) -> str:
@@ -105,11 +100,7 @@ def _parse_platform_filter(text: str) -> str | None:
 
 
 def _format_predator_row(platform: str, info: dict[str, Any]) -> str:
-    return (
-        f"🏹 {_PLATFORM_LABELS.get(platform, platform)}\n"
-        f"  底分: {info.get('val', 0)} RP\n"
-        f"  大师+顶猎: {info.get('total_masters', 0)}"
-    )
+    return f"🏹 {_PLATFORM_LABELS.get(platform, platform)}\n  底分: {info.get('val', 0)} RP\n  大师+顶猎: {info.get('total_masters', 0)}"
 
 
 def _format_predator_message(cache_payload: dict[str, Any], platform_filter: str | None = None) -> str:

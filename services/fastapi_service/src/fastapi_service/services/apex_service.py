@@ -133,11 +133,7 @@ async def _fetch(endpoint: str, params: dict[str, Any] | None = None) -> dict[st
             timeout=30.0,
             trust_env=False,
             headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
+                "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
             },
         ) as client:
             response = await client.get(f"{_base_url()}/{endpoint.lstrip('/')}", params=payload)

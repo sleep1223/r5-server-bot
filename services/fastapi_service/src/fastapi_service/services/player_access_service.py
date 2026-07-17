@@ -1703,19 +1703,11 @@ async def list_access_rules(
         query = query.filter(enabled=enabled)
 
     total = await query.count()
-    rules = await (
-        query.select_related("player", "server")
-        .order_by("server_scope", "priority", "-updated_at")
-        .offset(offset)
-        .limit(page_size)
-    )
+    rules = await query.select_related("player", "server").order_by("server_scope", "priority", "-updated_at").offset(offset).limit(page_size)
     player_ids = {rule.player_id for rule in rules if getattr(rule, "player_id", None)}
     uids = {uid for uid in (_access_rule_uid(rule) for rule in rules) if uid is not None}
     players_by_id, players_by_uid = await _access_player_maps(player_ids=player_ids, uids=uids)
-    return [
-        _enrich_access_rule_payload(rule, serialize_access_rule(rule), players_by_id, players_by_uid)
-        for rule in rules
-    ], total
+    return [_enrich_access_rule_payload(rule, serialize_access_rule(rule), players_by_id, players_by_uid) for rule in rules], total
 
 
 async def get_access_rule(rule_id: int) -> PlayerAccessRule | None:
@@ -1879,19 +1871,11 @@ async def list_access_operations(
         query = query.filter(server_id=server_id)
 
     total = await query.count()
-    operations = await (
-        query.select_related("player", "server")
-        .order_by("-created_at", "-id")
-        .offset(offset)
-        .limit(page_size)
-    )
+    operations = await query.select_related("player", "server").order_by("-created_at", "-id").offset(offset).limit(page_size)
     player_ids = {operation.player_id for operation in operations if getattr(operation, "player_id", None)}
     uids = {uid for uid in (_access_operation_uid(operation) for operation in operations) if uid is not None}
     players_by_id, players_by_uid = await _access_player_maps(player_ids=player_ids, uids=uids)
-    return [
-        _enrich_access_operation_payload(operation, serialize_access_operation(operation), players_by_id, players_by_uid)
-        for operation in operations
-    ], total
+    return [_enrich_access_operation_payload(operation, serialize_access_operation(operation), players_by_id, players_by_uid) for operation in operations], total
 
 
 async def create_access_notice(

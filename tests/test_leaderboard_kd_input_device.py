@@ -65,5 +65,6 @@ class LeaderboardKdInputDeviceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("pmws_victim.match_id = pmws.match_id", sql)
         self.assertIn("pmws_victim.player_id = pmws.opponent_id", sql)
 
+
 if __name__ == "__main__":
     unittest.main()

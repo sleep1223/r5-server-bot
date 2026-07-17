@@ -119,11 +119,7 @@ async def _rebuild_one_report(
             player_map=player_map,
         )
 
-    logger.info(
-        f"已重建 sdk_match_end_report id={report.id}: "
-        f"match_id={match.id}, old_weapon_rows={old_rows}, new_weapon_rows={new_rows}, "
-        f"kill_events={saved_kill_events}/{len(kill_events)}"
-    )
+    logger.info(f"已重建 sdk_match_end_report id={report.id}: match_id={match.id}, old_weapon_rows={old_rows}, new_weapon_rows={new_rows}, kill_events={saved_kill_events}/{len(kill_events)}")
     return True, old_rows, new_rows, len(kill_events), saved_kill_events, _to_shanghai_date(report.ended_at)
 
 

@@ -123,12 +123,7 @@ async def list_admin_server_options(*, q: str | None = None) -> list[dict]:
     query = Server.filter(is_self_hosted=True)
     keyword = str(q or "").strip()
     if keyword:
-        query = query.filter(
-            Q(name__icontains=keyword)
-            | Q(short_name__icontains=keyword)
-            | Q(host__icontains=keyword)
-            | Q(region__icontains=keyword)
-        )
+        query = query.filter(Q(name__icontains=keyword) | Q(short_name__icontains=keyword) | Q(host__icontains=keyword) | Q(region__icontains=keyword))
     servers = await query.order_by("-has_status", "-player_count", "name", "host").limit(500)
     return [serialize_admin_server_option(server) for server in servers]
 

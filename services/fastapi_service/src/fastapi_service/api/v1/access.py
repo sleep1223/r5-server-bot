@@ -134,13 +134,11 @@ async def report_online_players(
     )
     return OnlinePlayersResponse(
         actions=[
-            OnlinePlayerAction(
-                **{
-                    **action,
-                    "reason": _client_disconnect_reason(action.get("reason")),
-                    "reasonEn": _client_disconnect_reason(action.get("reasonEn")),
-                }
-            )
+            OnlinePlayerAction(**{
+                **action,
+                "reason": _client_disconnect_reason(action.get("reason")),
+                "reasonEn": _client_disconnect_reason(action.get("reasonEn")),
+            })
             for action in result["actions"]
         ],
     )

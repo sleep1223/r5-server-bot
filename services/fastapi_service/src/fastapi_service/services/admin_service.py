@@ -467,5 +467,3 @@ async def _serialize_access_operation_row(
         "linked_rule_ids": operation.linked_rule_ids,
         "player": _player_payload(player, is_admin=is_admin, country=operation_country, region=operation_region, ip=operation_ip if is_admin else None),
     }
-
-
