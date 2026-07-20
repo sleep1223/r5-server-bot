@@ -7,7 +7,7 @@ from nonebot.adapters.onebot.v11 import Bot, FriendAddNoticeEvent, FriendRequest
 from nonebot.rule import is_type
 
 from ..config import Config
-from .help import get_help_message
+from .help import DOCS_MESSAGE, get_help_message
 
 auto_request = on_request(priority=5, block=False)
 friend_added = on_notice(is_type(FriendAddNoticeEvent), priority=5, block=False)
@@ -92,6 +92,8 @@ def _build_group_welcome_message(user_id: int) -> Message:
         "\n"
         "我是 R5 Bot，可以查询服务器状态、KD/武器统计、玩家在线和组队信息。\n"
         "建议先添加我为好友，然后私信发送: /绑定 <游戏昵称或NID>\n"
+        "\n"
+        f"{DOCS_MESSAGE}\n"
         "\n"
         "常用指令:\n"
         "  /kd 今日 · 查看今日 KD 榜\n"
