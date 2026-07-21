@@ -700,6 +700,8 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
                         "nucleusId": uid,
                         "playerName": "named-server-player",
                         "inputDevice": "keyboard_mouse",
+                        "ping": 42,
+                        "loss": 3,
                     }
                 ],
             },
@@ -714,6 +716,8 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["server"]["short_name"], "[CN(Jinan)]")
         self.assertEqual(rows[0]["server"]["host"], "119.188.164.105")
         self.assertEqual(rows[0]["server"]["port"], 37015)
+        self.assertEqual(rows[0]["ping"], 42)
+        self.assertEqual(rows[0]["loss"], 3)
 
     async def test_access_report_preserves_player_online_at_between_heartbeats(self) -> None:
         uid = 1000000000022

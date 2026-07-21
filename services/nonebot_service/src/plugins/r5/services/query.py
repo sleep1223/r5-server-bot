@@ -49,6 +49,7 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
             server = item.get("server")
             is_online = item.get("is_online")
             ping = item.get("ping", 0)
+            loss = item.get("loss", 0)
 
             status_str = p.get("status", "unknown")
             ban_count = p.get("ban_count", 0)
@@ -86,7 +87,7 @@ async def handle_player_query(args: Message = CommandArg()) -> None:
                 msg += f"🕐 总游玩 {total_playtime // 60} 分钟\n"
 
             if is_online:
-                msg += f"📶 {ping}ms\n"
+                msg += f"📶 延迟 {ping}ms | 丢包率 {loss}%\n"
                 if server:
                     server_name = server.get("short_name") or server.get("name")
                     msg += f"🖥️ {server_name}\n"

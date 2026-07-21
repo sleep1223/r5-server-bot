@@ -168,6 +168,7 @@ async def query_players(q: str, *, page_size: int = 20, offset: int = 0) -> list
         duration = None
         server_info = None
         ping = 0
+        loss = 0
 
         if target_loc:
             is_online = target_loc_source == "live"
@@ -195,6 +196,7 @@ async def query_players(q: str, *, page_size: int = 20, offset: int = 0) -> list
 
             if is_online:
                 ping = target_loc.get("ping", 0)
+                loss = target_loc.get("loss", 0)
                 online_at = target_loc.get("online_at")
                 if online_at:
                     duration = (datetime.now(CN_TZ) - online_at).total_seconds()
@@ -202,6 +204,7 @@ async def query_players(q: str, *, page_size: int = 20, offset: int = 0) -> list
         if not is_online and player.status == "online":
             is_online = True
             ping = player.ping
+            loss = player.loss
             if player.online_at:
                 duration = (datetime.now(CN_TZ) - player.online_at).total_seconds()
 
@@ -225,6 +228,7 @@ async def query_players(q: str, *, page_size: int = 20, offset: int = 0) -> list
             "duration_seconds": int(duration) if duration is not None else 0,
             "total_playtime_seconds": total_playtime,
             "ping": ping,
+            "loss": loss,
             "access": access,
             "player": {
                 "name": player.name,
