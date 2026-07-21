@@ -53,10 +53,6 @@ icon = "🚫"
 text = "禁止利用掩体/卡头皮"
 
 [[rules]]
-icon = "🚫"
-text = "滥用AD蹲动画"
-
-[[rules]]
 icon = "💬"
 text = "请文明用语"
 
