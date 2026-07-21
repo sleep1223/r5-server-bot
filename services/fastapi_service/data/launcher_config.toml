@@ -16,15 +16,30 @@ docs_url = "https://af3mroq0w3.feishu.cn/wiki/WgIhwpiOwi6aYgkEJrQcGc4snHg"
 force_update = true
 
 # 当前游戏版本
-game_version = "v2.6.42"
+game_version = "v2.6.51-live"
 
 # 版本补丁地址列表（从某个版本到某个版本之间的补丁）
 [[patches]]
-from_version = "v2.6.41" # 或你的客户端本地实际保存值
+from_version = "2.6.41-live" # 或你的客户端本地实际保存值
 to_version = "2.6.42-live"
-url = "https://r5r-patch.sleep0.de/r5r-patch-.41-to-2.6.42-live.zip"
+url = "https://r5r-patch.sleep0.de/r5r-patch-2.6.41-live-to-2.6.42-live.zip"
 checksum = "5e4e88908d7119017e6f859583ac0f678ff8649726e5de6415b403b5acb4459a"
 size = 303051
+
+[[patches]]
+from_version = "2.6.41-live"
+to_version = "2.6.51-live"
+url = "https://r5r-patch.sleep0.de/r5r-patch-2.6.41-live-to-2.6.51-live.zip"
+checksum = "4f22bf8653c00f9da7ef5777d625db83a9f40f1962c172e41fd78f803815d779"
+size = 8750436
+
+[[patches]]
+from_version = "2.6.42-live" # 或你的客户端本地实际保存值
+to_version = "2.6.51-live"
+url = "https://r5r-patch.sleep0.de/r5r-patch-2.6.42-live-to-2.6.51-live.zip"
+checksum = "6c404ef39f2b21a8d0e0e6d5ac70373146b5a555ed1badfb09857b19124385d3"
+size = 8447551
+
 
 # 公告
 [announcement]
