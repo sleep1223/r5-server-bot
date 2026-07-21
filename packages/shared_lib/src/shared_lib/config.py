@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     # 启动器最新版本号优先来源：GitHub Releases。失败或未配置时回退到 launcher_update.toml 的 latest
     launcher_github_repo: str = "sleep1223/r5r-cn-launcher"
     launcher_github_fetch_interval: int = 600
+    # R5 Reloaded 游戏版本号同步与 QQ 私聊提醒
+    launcher_game_version_url: str = "https://cdn-r5r-org.sleep0.de/launcher/live_game/version.txt"
+    launcher_game_version_fetch_interval: int = 3600
+    launcher_game_version_request_timeout_seconds: float = 10.0
+    launcher_game_version_notify_qq: int = 1259332131
 
     # Launcher community game configuration presets
     game_config_upload_enabled: bool = True

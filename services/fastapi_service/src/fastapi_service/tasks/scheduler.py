@@ -9,6 +9,7 @@ from .fetch_launcher_version import fetch_launcher_version_task
 from .fetch_servers import fetch_server_list_raw_once, fetch_server_list_raw_task
 from .refresh_player_kill_daily_stats import player_kill_daily_stats_refresh_task
 from .resolve_ips import ip_resolution_task
+from .sync_game_version import sync_game_version_task
 from .sync_milky_admins import milky_admin_sync_task
 
 
@@ -33,6 +34,7 @@ class TaskScheduler:
             asyncio.create_task(player_kill_daily_stats_refresh_task()),
             asyncio.create_task(fetch_apex_cache_task()),
             asyncio.create_task(milky_admin_sync_task()),
+            asyncio.create_task(sync_game_version_task()),
         ]
         logger.info(f"已启动 {len(self._tasks)} 个后台任务")
 
