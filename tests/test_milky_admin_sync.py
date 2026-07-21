@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from fastapi_service.services import milky_service
 from fastapi_service.tasks import sync_milky_admins
 from shared_lib.config import settings
 from shared_lib.models import Player, UserBinding
@@ -69,7 +70,7 @@ class MilkyAdminSyncTest(unittest.IsolatedAsyncioTestCase):
             "data": {"members": [{"user_id": 4001, "role": "member"}, {"user_id": 4001, "role": "admin"}]},
         }
 
-        with patch.object(sync_milky_admins.httpx, "AsyncClient", _FakeClient):
+        with patch.object(milky_service.httpx, "AsyncClient", _FakeClient):
             summary = await sync_milky_admins.sync_milky_admins_once()
 
         await binding.refresh_from_db()
@@ -85,12 +86,29 @@ class MilkyAdminSyncTest(unittest.IsolatedAsyncioTestCase):
         binding = await UserBinding.create(platform="qq", platform_uid="4002", player=player, app_key="app-key-4002")
         _FakeClient.payload = {"status": "failed", "retcode": -403, "message": "offline"}
 
-        with patch.object(sync_milky_admins.httpx, "AsyncClient", _FakeClient):
+        with patch.object(milky_service.httpx, "AsyncClient", _FakeClient):
             with self.assertRaises(ValueError):
                 await sync_milky_admins.sync_milky_admins_once()
 
         await binding.refresh_from_db()
         self.assertFalse(binding.is_admin)
+
+    async def test_send_private_message_uses_text_segment(self) -> None:
+        _FakeClient.payload = {"status": "ok", "retcode": 0, "data": {"message_id": 123}}
+
+        with patch.object(milky_service.httpx, "AsyncClient", _FakeClient):
+            result = await milky_service.send_private_message(1259332131, "消息内容")
+
+        assert _FakeClient.last_request is not None
+        self.assertEqual(result, {"message_id": 123})
+        self.assertEqual(_FakeClient.last_request["url"], "http://milky.local/milky/api/send_private_message")
+        self.assertEqual(
+            _FakeClient.last_request["json"],
+            {
+                "user_id": 1259332131,
+                "message": [{"type": "text", "data": {"text": "消息内容"}}],
+            },
+        )
 
 
 if __name__ == "__main__":
