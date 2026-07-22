@@ -670,6 +670,30 @@ async def _first_exact_rule(
         return None
 
 
+async def _first_exact_admin_ban_rule(
+    value: str,
+    *,
+    server_id: object | None = None,
+    server_keys: Iterable[object] | object | None = None,
+) -> PlayerAccessRule | None:
+    try:
+        rules = await PlayerAccessRule.filter(
+            _scope_filter(server_id, server_keys=server_keys),
+            _active_rule_filter(),
+            rule_type="uid",
+            action="deny",
+            value=value,
+            source_action="ban",
+            source_operation_id__isnull=False,
+        ).order_by("priority", "id")
+        if not rules:
+            return None
+        return sorted(rules, key=lambda r: _scope_sort_key(r, server_id, server_keys=server_keys))[0]
+    except Exception as exc:
+        logger.warning(f"玩家准入管理封禁规则查询失败: {exc}")
+        return None
+
+
 async def _matching_cidr_rule(
     action: str,
     ip: str,
@@ -993,7 +1017,7 @@ async def evaluate_player_access(
     server_region: str | None = None,
     reason_locale: str = DEFAULT_REASON_LOCALE,
 ) -> dict[str, Any]:
-    """Evaluate access using the SDK document's fixed priority order."""
+    """Evaluate access using the SDK priority order, with explicit admin bans ahead of UID allows."""
     uid_text = normalize_uid(uid)
     ip_text = _normalize_ip(ip)
     locale = _normalize_reason_locale(reason_locale)
@@ -1002,6 +1026,10 @@ async def evaluate_player_access(
         notice = await _pending_notice_for_uid(uid_text, server_id=server_id, server_keys=server_keys)
         if notice:
             return _notice_decision(notice, locale=await _notice_locale(notice, fallback=locale))
+
+        rule = await _first_exact_admin_ban_rule(uid_text, server_id=server_id, server_keys=server_keys)
+        if rule:
+            return _rule_decision(rule, locale=await _rule_locale(rule, fallback=locale))
 
         rule = await _first_exact_rule("uid", "allow", uid_text, server_id=server_id, server_keys=server_keys)
         if rule:
@@ -1081,6 +1109,12 @@ async def trace_player_access(
         checks.append(_trace_record("kick_notice", notice is not None, notice))
         if notice:
             decision = _notice_decision(notice, locale=await _notice_locale(notice, fallback=reason_locale_from_geo(country, region)))
+            return {"decision": decision, "checks": checks, "matched_rules": [decision]}
+
+        rule = await _first_exact_admin_ban_rule(uid_text, server_id=server_id, server_keys=server_keys)
+        checks.append(_trace_record("uid_admin_ban", rule is not None, rule))
+        if rule:
+            decision = _rule_decision(rule, locale=await _rule_locale(rule, fallback=reason_locale_from_geo(country, region)))
             return {"decision": decision, "checks": checks, "matched_rules": [decision]}
 
         rule = await _first_exact_rule("uid", "allow", uid_text, server_id=server_id, server_keys=server_keys)
@@ -2091,7 +2125,13 @@ async def release_linked_rules_for_uid(
     if not uid_text:
         return []
 
-    query = PlayerAccessRule.filter(rule_type="uid", value=uid_text, enabled=True)
+    query = PlayerAccessRule.filter(
+        rule_type="uid",
+        action="deny",
+        value=uid_text,
+        source_action="ban",
+        enabled=True,
+    )
     if server_id:
         query = query.filter(server_scope="server", server_id=_normalize_server_db_id(server_id))
     else:
@@ -2113,6 +2153,8 @@ async def release_linked_rules_for_uid(
         linked_rules = await PlayerAccessRule.filter(
             source_operation_id__in=operation_ids,
             rule_type__in=["ip"],
+            action="deny",
+            source_action="ban",
             enabled=True,
         )
         if linked_rules:

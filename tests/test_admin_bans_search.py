@@ -274,6 +274,87 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
         assert unban_data is not None
         self.assertGreaterEqual(len(unban_data["released_rules"]), 1)
 
+    async def test_whitelisted_player_supports_full_access_action_lifecycle(self) -> None:
+        player = await Player.create(nucleus_id=1021977259236, name="Whitelisted_Player")
+        allow_rule = await PlayerAccessRule.create(
+            rule_type="uid",
+            action="allow",
+            value=str(player.nucleus_id),
+            server_scope="global",
+            rule_id="allow:uid:1021977259236",
+            priority=100,
+            player=player,
+        )
+
+        initial_access = await player_access_service.get_player_access_state(player=player)
+        self.assertTrue(initial_access["allow"])
+        self.assertEqual(initial_access["rule_id"], allow_rule.rule_id)
+
+        kick_data, kick_err = await admin_management_service.apply_access_action(
+            action="kick",
+            target_type="player",
+            target_value=player.nucleus_id,
+            reason="RULES",
+            operator_name="unit-test",
+        )
+        self.assertIsNone(kick_err)
+        assert kick_data is not None
+        kicked_access = await player_access_service.get_player_access_state(player=player)
+        self.assertFalse(kicked_access["allow"])
+        self.assertEqual(player_access_service.action_from_access_decision(kicked_access), "kick")
+
+        self_unban_data, self_unban_err = await admin_service.self_unban_player(
+            nucleus_id=player.nucleus_id,
+            operation_id=kick_data["operation"]["id"],
+            confirmation_text=admin_service.SELF_UNBAN_CONFIRMATION_TEXT,
+        )
+        self.assertIsNone(self_unban_err)
+        assert self_unban_data is not None
+        self.assertTrue(self_unban_data["self_unban"])
+        access_after_self_unban = await player_access_service.get_player_access_state(player=player)
+        self.assertTrue(access_after_self_unban["allow"])
+        self.assertEqual(access_after_self_unban["rule_id"], allow_rule.rule_id)
+
+        ban_data, ban_err = await admin_management_service.apply_access_action(
+            action="ban",
+            target_type="player",
+            target_value=player.nucleus_id,
+            reason="CHEAT",
+            operator_name="unit-test",
+        )
+        self.assertIsNone(ban_err)
+        assert ban_data is not None
+        banned_access = await player_access_service.get_player_access_state(player=player)
+        self.assertFalse(banned_access["allow"])
+        self.assertEqual(player_access_service.action_from_access_decision(banned_access), "ban")
+        self.assertEqual(banned_access["rule_id"], f"ban:uid:{player.nucleus_id}")
+
+        access_trace = await player_access_service.trace_player_access(uid=player.nucleus_id)
+        self.assertEqual(access_trace["checks"][1]["step"], "uid_admin_ban")
+        self.assertTrue(access_trace["checks"][1]["matched"])
+
+        rows, total = await admin_management_service.list_players(page_size=10, offset=0)
+        self.assertEqual(total, 1)
+        self.assertFalse(rows[0]["access"]["allow"])
+        self.assertEqual(rows[0]["display_status"], "ban")
+
+        unban_data, unban_err = await admin_management_service.apply_access_action(
+            action="unban",
+            target_type="player",
+            target_value=player.nucleus_id,
+            reason="RULES",
+            operator_name="unit-test",
+        )
+        self.assertIsNone(unban_err)
+        assert unban_data is not None
+        self.assertNotIn(allow_rule.rule_id, {rule["rule_id"] for rule in unban_data["released_rules"]})
+
+        await allow_rule.refresh_from_db()
+        self.assertTrue(allow_rule.enabled)
+        access_after_unban = await player_access_service.get_player_access_state(player=player)
+        self.assertTrue(access_after_unban["allow"])
+        self.assertEqual(access_after_unban["rule_id"], allow_rule.rule_id)
+
     async def test_admin_action_prefers_address_server_key_over_legacy_server_id(self) -> None:
         player = await Player.create(nucleus_id=1009800111076, name="Scoped_Kick_Player")
         server = await Server.create(

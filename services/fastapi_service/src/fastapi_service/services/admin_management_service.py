@@ -729,6 +729,25 @@ async def _exact_rule_map(rule_type: str, action: str, values: set[str], server_
     return {value: rule for value, rules_for_value in rules_by_value.items() if (rule := _best_scoped_rule(rules_for_value, server_id))}
 
 
+async def _exact_admin_ban_rule_map(values: set[str], server_id: int | None) -> dict[str, PlayerAccessRule]:
+    if not values:
+        return {}
+
+    rules = await PlayerAccessRule.filter(
+        player_access_service._scope_filter(server_id),
+        player_access_service._active_rule_filter(),
+        rule_type="uid",
+        action="deny",
+        value__in=list(values),
+        source_action="ban",
+        source_operation_id__isnull=False,
+    ).order_by("priority", "id")
+    rules_by_value: dict[str, list[PlayerAccessRule]] = {}
+    for rule in rules:
+        rules_by_value.setdefault(rule.value, []).append(rule)
+    return {value: rule for value, rules_for_value in rules_by_value.items() if (rule := _best_scoped_rule(rules_for_value, server_id))}
+
+
 async def _active_rules(rule_type: str | list[str], action: str, server_id: int | None) -> list[PlayerAccessRule]:
     query = PlayerAccessRule.filter(
         player_access_service._scope_filter(server_id),
@@ -795,6 +814,7 @@ async def _players_access_state_map(players: list[Player], server_id: int | None
     ips = set(ip_by_player_id.values())
 
     pending_notices = await _pending_notice_map(uids, server_id)
+    uid_admin_ban_rules = await _exact_admin_ban_rule_map(uids, server_id)
     uid_allow_rules = await _exact_rule_map("uid", "allow", uids, server_id)
     uid_deny_rules = await _exact_rule_map("uid", "deny", uids, server_id)
     ip_allow_rules = await _exact_rule_map("ip", "allow", ips, server_id)
@@ -813,6 +833,10 @@ async def _players_access_state_map(players: list[Player], server_id: int | None
         if uid and (notice := pending_notices.get(uid)):
             notice_locale = await player_access_service._notice_locale(notice, fallback=locale)
             access_by_player_id[player.id] = player_access_service._notice_decision(notice, locale=notice_locale)
+            continue
+
+        if uid and (rule := uid_admin_ban_rules.get(uid)):
+            access_by_player_id[player.id] = await _rule_access_decision(rule, locale)
             continue
 
         if uid and (rule := uid_allow_rules.get(uid)):
