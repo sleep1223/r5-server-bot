@@ -122,18 +122,23 @@ async def list_players(
 
     total = await query.count()
     players = await query.limit(page_size).offset(offset).values()
-    if status == "online":
-        for player in players:
-            nucleus_id = player.get("nucleus_id")
-            loc = server_cache.get_online_location(nucleus_id) if nucleus_id else None
-            if not loc:
-                continue
-            player["status"] = "online"
-            player["online_at"] = loc.get("online_at")
-            player["ip"] = loc.get("player_ip") or player.get("ip")
-            player["country"] = loc.get("player_country") or player.get("country")
-            player["region"] = loc.get("player_region") or player.get("region")
-            player["input_device"] = loc.get("input_device") or player.get("input_device") or "unknown"
+    for player in players:
+        player["ping"] = 0
+        player["loss"] = 0
+        if status != "online":
+            continue
+        nucleus_id = player.get("nucleus_id")
+        loc = server_cache.get_online_location(nucleus_id) if nucleus_id else None
+        if not loc:
+            continue
+        player["status"] = "online"
+        player["online_at"] = loc.get("online_at")
+        player["ip"] = loc.get("player_ip") or player.get("ip")
+        player["country"] = loc.get("player_country") or player.get("country")
+        player["region"] = loc.get("player_region") or player.get("region")
+        player["input_device"] = loc.get("input_device") or player.get("input_device") or "unknown"
+        player["ping"] = loc.get("ping", 0)
+        player["loss"] = loc.get("loss", 0)
     return players, total
 
 
@@ -203,8 +208,6 @@ async def query_players(q: str, *, page_size: int = 20, offset: int = 0) -> list
 
         if not is_online and player.status == "online":
             is_online = True
-            ping = player.ping
-            loss = player.loss
             if player.online_at:
                 duration = (datetime.now(CN_TZ) - player.online_at).total_seconds()
 

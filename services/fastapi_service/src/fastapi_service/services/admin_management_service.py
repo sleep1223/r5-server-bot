@@ -644,8 +644,8 @@ async def serialize_player_detail(
         "ip": player.ip,
         "country": player.country,
         "region": player.region,
-        "ping": player.ping,
-        "loss": player.loss,
+        "ping": online_location.get("ping", 0) if online_location else 0,
+        "loss": online_location.get("loss", 0) if online_location else 0,
         "status": player.status,
         "kick_count": player.kick_count,
         "ban_count": player.ban_count,
@@ -888,6 +888,8 @@ def _serialize_player_list_item(player: Player, *, bindings: list[dict[str, Any]
     online_location, _ = player_service.get_online_location(player)
     cached_ban_location = player_service.get_cached_ban_location(player.nucleus_id) if player.nucleus_id else None
     display_status = _display_status(player, online_location, access)
+    ping = online_location.get("ping", 0) if online_location else 0
+    loss = online_location.get("loss", 0) if online_location else 0
     return {
         "id": player.id,
         "name": player.name,
@@ -896,8 +898,8 @@ def _serialize_player_list_item(player: Player, *, bindings: list[dict[str, Any]
         "ip": player.ip,
         "country": player.country,
         "region": player.region,
-        "ping": player.ping,
-        "loss": player.loss,
+        "ping": ping,
+        "loss": loss,
         "status": player.status,
         "kick_count": player.kick_count,
         "ban_count": player.ban_count,

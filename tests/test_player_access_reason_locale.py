@@ -719,6 +719,72 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["ping"], 42)
         self.assertEqual(rows[0]["loss"], 3)
 
+    async def test_admin_online_player_list_overrides_network_stats_from_access_report(self) -> None:
+        uid = 1000000000030
+        await Player.create(
+            nucleus_id=uid,
+            name="admin-online-player",
+            status="offline",
+            ping=999,
+            loss=99,
+        )
+        server_cache.update_access_report(
+            "119.188.164.105:37015",
+            {
+                "serverIp": "119.188.164.105",
+                "serverPort": 37015,
+                "players": [
+                    {
+                        "uid": str(uid),
+                        "nucleusId": uid,
+                        "playerName": "admin-online-player",
+                        "ping": 42,
+                        "loss": 3,
+                    }
+                ],
+            },
+        )
+
+        rows, total = await admin_management_service.list_players(status="online", page_size=20, offset=0)
+        player_rows, player_total = await player_service.list_players(status="online", page_size=20, offset=0)
+        detail = await admin_management_service.serialize_player_detail(await Player.get(nucleus_id=uid), include_history=False)
+
+        self.assertEqual(total, 1)
+        self.assertEqual(rows[0]["display_status"], "online")
+        self.assertEqual(rows[0]["ping"], 42)
+        self.assertEqual(rows[0]["loss"], 3)
+        self.assertEqual(player_total, 1)
+        self.assertEqual(player_rows[0]["ping"], 42)
+        self.assertEqual(player_rows[0]["loss"], 3)
+        self.assertEqual(detail["ping"], 42)
+        self.assertEqual(detail["loss"], 3)
+
+    async def test_player_network_stats_do_not_fall_back_to_database(self) -> None:
+        uid = 1000000000031
+        player = await Player.create(
+            nucleus_id=uid,
+            name="offline-network-player",
+            status="offline",
+            ping=999,
+            loss=99,
+        )
+
+        player_rows, player_total = await player_service.list_players(status="offline", page_size=20, offset=0)
+        query_rows = await player_service.query_players(str(uid), page_size=20, offset=0)
+        detail = await admin_management_service.serialize_player_detail(player, include_history=False)
+        admin_rows, admin_total = await admin_management_service.list_players(page_size=20, offset=0)
+
+        self.assertEqual(player_total, 1)
+        self.assertEqual(player_rows[0]["ping"], 0)
+        self.assertEqual(player_rows[0]["loss"], 0)
+        self.assertEqual(query_rows[0]["ping"], 0)
+        self.assertEqual(query_rows[0]["loss"], 0)
+        self.assertEqual(detail["ping"], 0)
+        self.assertEqual(detail["loss"], 0)
+        self.assertEqual(admin_total, 1)
+        self.assertEqual(admin_rows[0]["ping"], 0)
+        self.assertEqual(admin_rows[0]["loss"], 0)
+
     async def test_access_report_preserves_player_online_at_between_heartbeats(self) -> None:
         uid = 1000000000022
         server_key = "119.188.164.105:37015"
