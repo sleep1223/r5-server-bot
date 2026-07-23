@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 ACCESS_REPORT_TTL_SECONDS = 120
+ACCESS_REPORT_EMPTY_CONFIRMATIONS = 2
 
 
 def _safe_int(value: object | None, default: int = 0) -> int:
@@ -141,6 +142,13 @@ class ServerCache:
                 "online_at": previous_online_at_by_uid.get(uid_text) or updated_at,
             })
 
+        incoming_players_empty = not players
+        empty_report_count = 0
+        if incoming_players_empty and reuse_previous_online_at and isinstance(previous_players, list) and previous_players:
+            empty_report_count = _safe_int(previous_report.get("empty_report_count"), 0) + 1
+            if empty_report_count < ACCESS_REPORT_EMPTY_CONFIRMATIONS:
+                players = [dict(player) for player in previous_players if isinstance(player, dict)]
+
         server_host = _normalize_server_host(data.get("serverIp")) or None
         server_port = _safe_int(data.get("serverPort"), 0)
         server_name = str(data.get("serverName") or data.get("hostname") or server_key)
@@ -152,9 +160,10 @@ class ServerCache:
             "server_port": server_port,
             "map": data.get("map"),
             "tick": data.get("tick"),
-            "num_players": _safe_int(data.get("numPlayers"), len(players)),
+            "num_players": len(players) if incoming_players_empty and players else _safe_int(data.get("numPlayers"), len(players)),
             "max_players": _safe_int(data.get("maxPlayers"), 0),
             "players": players,
+            "empty_report_count": empty_report_count,
             "updated_at": updated_at,
         }
 

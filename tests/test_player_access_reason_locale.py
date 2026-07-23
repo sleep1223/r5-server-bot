@@ -1144,6 +1144,50 @@ class PlayerAccessReasonLocaleTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listed[0]["players"], [])
         self.assertNotIn("[CN(Missing)] SDK Only", {server["name"] for server in listed})
 
+    async def test_server_list_requires_two_consecutive_empty_access_reports(self) -> None:
+        report = {
+            "serverId": "stable-player-count",
+            "serverIp": "1.2.3.4",
+            "serverPort": 37015,
+            "serverName": "[CN(Test)] Stable Count",
+            "numPlayers": 1,
+            "maxPlayers": 20,
+            "players": [
+                {
+                    "uid": "1000000000099",
+                    "nucleusId": 1000000000099,
+                    "playerName": "stable-player",
+                }
+            ],
+        }
+        server_cache.update_access_report("stable-player-count", report)
+        server_cache.update_raw_response({
+            "servers": [
+                {
+                    "serverId": "raw-stable-player-count",
+                    "ip": "1.2.3.4",
+                    "port": 37015,
+                    "name": "[CN(Test)] Stable Count",
+                    "region": "CN",
+                    "playerCount": 0,
+                    "maxPlayers": 20,
+                }
+            ]
+        })
+
+        first_empty_report = {**report, "numPlayers": 0, "players": []}
+        server_cache.update_access_report("stable-player-count", first_empty_report)
+        listed = await server_service.list_servers(cn_only=True, is_admin=True)
+
+        self.assertEqual(listed[0]["player_count"], 1)
+        self.assertEqual(listed[0]["players"][0]["name"], "stable-player")
+
+        server_cache.update_access_report("stable-player-count", first_empty_report)
+        listed = await server_service.list_servers(cn_only=True, is_admin=True)
+
+        self.assertEqual(listed[0]["player_count"], 0)
+        self.assertEqual(listed[0]["players"], [])
+
     async def test_server_list_matches_sdk_status_by_unique_name_ignoring_case(self) -> None:
         await access_service.process_online_players_report(
             server_id="shared-sdk-config-id",
