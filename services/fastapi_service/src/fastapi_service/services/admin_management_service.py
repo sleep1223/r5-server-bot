@@ -1252,6 +1252,11 @@ async def unban_player(
         player.nucleus_id,
         server_id=access_server_id if scope == "server" else None,
     )
+    released_kick_notice_ids = await _ack_pending_kick_notices_for_ban(
+        player=player,
+        server_scope=scope,
+        server_id=access_server_id,
+    )
 
     if scope == "global":
         await admin_service.record_unban(player.nucleus_id)
@@ -1260,6 +1265,7 @@ async def unban_player(
         await player_access_service.disable_uid_blacklist_rule(player.nucleus_id, server_id=access_server_id)
 
     linked_rule_ids = [rule["rule_id"] for rule in released_rules if rule.get("rule_id")]
+    linked_rule_ids.extend(f"kick_notice:{notice_id}" for notice_id in released_kick_notice_ids)
     result = {
         "player": await serialize_player_detail(player, access_server_id=access_server_id, include_history=False),
         "server_scope": scope,
@@ -1269,6 +1275,7 @@ async def unban_player(
         "remark": remark,
         "execution_mode": "sdk_access",
         "released_rules": released_rules,
+        "released_kick_notice_ids": released_kick_notice_ids,
         "linked_ip_released_count": len([rule for rule in released_rules if rule.get("rule_type") == "ip"]),
     }
     operation = await player_access_service.update_access_operation_result(

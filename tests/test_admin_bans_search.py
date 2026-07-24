@@ -274,6 +274,39 @@ class AdminBansSearchTest(unittest.IsolatedAsyncioTestCase):
         assert unban_data is not None
         self.assertGreaterEqual(len(unban_data["released_rules"]), 1)
 
+    async def test_admin_unban_releases_pending_kick(self) -> None:
+        player = await Player.create(nucleus_id=1009800111082, name="Admin_Unban_Kick_Player")
+
+        kick_data, kick_err = await admin_management_service.apply_access_action(
+            action="kick",
+            target_type="player",
+            target_value=player.nucleus_id,
+            reason="RULES",
+            operator_name="unit-test",
+        )
+        self.assertIsNone(kick_err)
+        assert kick_data is not None
+        notice_id = kick_data["notice"]["id"]
+
+        unban_data, unban_err = await admin_management_service.apply_access_action(
+            action="unban",
+            target_type="player",
+            target_value=player.nucleus_id,
+            reason="RULES",
+            operator_name="unit-test",
+        )
+
+        self.assertIsNone(unban_err)
+        assert unban_data is not None
+        self.assertEqual(unban_data["released_kick_notice_ids"], [notice_id])
+        self.assertIn(f"kick_notice:{notice_id}", unban_data["operation"]["linked_rule_ids"])
+
+        notice = await PlayerAccessNotice.get(id=notice_id)
+        self.assertFalse(notice.requires_ack)
+        self.assertIsNotNone(notice.acknowledged_at)
+        access_after_unban = await player_access_service.get_player_access_state(player=player)
+        self.assertTrue(access_after_unban["allow"])
+
     async def test_whitelisted_player_supports_full_access_action_lifecycle(self) -> None:
         player = await Player.create(nucleus_id=1021977259236, name="Whitelisted_Player")
         allow_rule = await PlayerAccessRule.create(
